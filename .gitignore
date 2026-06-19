@@ -2,3 +2,12 @@ node_modules/
 dist/
 .next/
 .env*.local
+1_billing_core_paypal.md
+2_billing_core_flujo_de_pago.md
+3_billing_core_pagos_extras_addons.md
+docs/
+!docs/
+!docs/billing-roadmap.md
+!docs/billing-development-progress.md
+ROADMAP_DESARROLLO_BILLING_CORE.md
+.agents/

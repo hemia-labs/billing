@@ -1,0 +1,756 @@
+## Fase 01 - Configuracion base del backend
+
+- Estado: completada
+- Referencia roadmap: Fase 01 - Configuracion base del backend
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/config/app.config.ts`
+  - `apps/api/src/config/database.config.ts`
+  - `apps/api/src/config/env.validation.ts`
+  - `apps/api/src/database/database.module.ts`
+  - `apps/api/src/app.module.ts`
+  - `apps/api/src/main.ts`
+  - `apps/api/data-source.ts`
+  - `apps/api/test/app.e2e-spec.ts`
+  - `apps/api/.env.example`
+  - `apps/api/README.md`
+  - `apps/api/package.json`
+- Implementado:
+  - ConfigModule global con configs tipadas `app` y `database`.
+  - Validacion de env con Joi.
+  - DatabaseModule con TypeORM PostgreSQL y `synchronize: false`.
+  - Prefix global `api/v1` desde `APP_GLOBAL_PREFIX`.
+  - CORS por `CORS_ORIGINS` con defaults locales.
+  - Scripts TypeORM de crear, generar, correr y revertir migraciones.
+- Pendiente:
+  - Configurar variables DB reales en `.env` o entorno de despliegue antes de arrancar el API.
+  - Fase 02 - Modulo shared de billing.
+- Migracion requerida: no aplica; no se agrego schema nuevo.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - `data-source.ts` conserva lectura directa de `process.env` por ser entrada CLI de TypeORM.
+
+## Fase 02 - Modulo shared de billing
+
+- Estado: completada
+- Referencia roadmap: Fase 02 - Modulo shared de billing
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/enums/*.enum.ts`
+  - `apps/api/src/modules/billing-shared/enums/index.ts`
+  - `apps/api/src/modules/billing-shared/constants/*.ts`
+  - `apps/api/src/modules/billing-shared/constants/index.ts`
+  - `apps/api/src/modules/billing-shared/errors/*.ts`
+  - `apps/api/src/modules/billing-shared/errors/index.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+  - `apps/api/src/app.module.ts`
+- Implementado:
+  - `BillingModule` registrado en `AppModule`.
+  - Enums compartidos para proveedor, suscripcion, licencia, pago, webhooks, invoice y add-ons.
+  - Constantes compartidas para moneda, intervalos, producto inicial y plan inicial.
+  - Errores de dominio comunes con mensajes centralizados y fallback estable.
+- Pendiente:
+  - Fase 03 - Entidades base del MVP.
+- Migracion requerida: no aplica; no se agrego schema nuevo.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - No se agregaron controllers, services, DTOs, entities ni permisos.
+
+## Fase 03 - Entidades base del MVP
+
+- Estado: completada
+- Referencia roadmap: Fase 03 - Entidades base del MVP
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/billing-shared/entities/*.entity.ts`
+  - `apps/api/src/modules/billing-shared/entities/index.ts`
+  - `apps/api/src/modules/billing-shared/enums/*.enum.ts`
+  - `apps/api/src/modules/billing-shared/enums/index.ts`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - Entidades TypeORM: customer, product, plan, checkout session, subscription, payment, license, webhook event, invoice y audit log.
+  - UUID primary keys, columnas DB en snake_case y propiedades TypeScript en camelCase.
+  - Timestamps, soft delete donde aplica, JSONB para metadata/payload/features y decimal(12,2) para montos.
+  - Relaciones TypeORM con `onDelete: 'RESTRICT'`.
+  - Indices por organization, product/plan code, status, provider y provider ids relevantes.
+  - Unicidad de `provider_event_id`, `provider_subscription_id` parcial y `product.code` parcial.
+  - Referencias legales mínimas en checkout sessions y subscriptions.
+- Pendiente:
+  - Fase 04 - Catalogo de productos, planes y add-ons.
+- Migracion requerida: si, manual para crear tablas de Fase 03.
+- Seeds requeridos: no aplica en Fase 03.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - No se crearon `billing_legal_documents` ni `billing_legal_acceptances`.
+  - No se agregaron controllers, services, DTOs ni endpoints.
+
+## Fase 04 - Catalogo de productos, planes y add-ons
+
+- Estado: completada
+- Referencia roadmap: Fase 04 - Catalogo de productos, planes y add-ons
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/catalog/*`
+  - `apps/api/src/modules/catalog/dtos/*`
+  - `apps/api/src/modules/catalog/mappers/*`
+  - `apps/api/src/modules/billing-shared/entities/billing-addon.entity.ts`
+  - `apps/api/src/modules/billing-shared/enums/billing-addon-type.enum.ts`
+  - `apps/api/src/common/guards/billing-internal-api-key.guard.ts`
+  - `apps/api/src/database/seeds/billing-catalog.seed.ts`
+  - `apps/api/src/config/app.config.ts`
+  - `apps/api/src/config/env.validation.ts`
+  - `apps/api/package.json`
+- Implementado:
+  - `BillingCatalogModule` con lectura publica de catalogo y CRUD interno protegido por API key.
+  - Endpoints publicos: `GET /billing/catalog/plans?product_code=medsync`, `GET /billing/catalog/addons?product_code=medsync`.
+  - Endpoints internos: `POST/PATCH /billing/products`, `POST/PATCH /billing/plans`, `POST/PATCH /billing/addons`.
+  - DTOs de create/update/query/response para products, plans y add-ons.
+  - `BillingCatalogService` con validacion de existencia, duplicados y lectura de activos.
+  - Mapper para no devolver entidades crudas.
+  - `BillingAddonEntity` para `billing_addons`.
+  - Guard interno por header `x-billing-internal-api-key`.
+  - Seed script idempotente `seed:billing-catalog`.
+- Seed:
+  - Producto `medsync`.
+  - Planes mensuales activos: Basico 499 MXN, Profesional 999 MXN, Clinica 1299 MXN.
+  - Add-on `extra_user` 99 MXN mensual.
+- Pendiente:
+  - Generar migracion manual para Fase 03 + `billing_addons`.
+  - Ejecutar seed manual tras aplicar migracion.
+  - Fase 05 - Cliente PayPal y configuracion de proveedor.
+- Migracion requerida: si, manual.
+- Seeds requeridos: si, correr `bun run --cwd apps/api seed:billing-catalog` despues de migrar DB.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - No se ejecuto `test:e2e` por requerir DB real.
+  - No se generaron ni ejecutaron migraciones.
+
+## Fase 05 - Cliente PayPal y configuracion de proveedor
+
+- Estado: completada
+- Referencia roadmap: Fase 05 - Cliente PayPal y configuracion de proveedor
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/config/paypal.config.ts`
+  - `apps/api/src/config/env.validation.ts`
+  - `apps/api/src/app.module.ts`
+  - `apps/api/.env.example`
+  - `apps/api/src/modules/paypal/paypal-client.service.ts`
+  - `apps/api/src/modules/paypal/types/paypal.types.ts`
+  - `apps/api/src/modules/paypal/paypal.module.ts`
+  - `apps/api/src/modules/paypal/index.ts`
+  - `apps/api/src/modules/billing.module.ts`
+- Env vars:
+  - `PAYPAL_ENV` default `sandbox`.
+  - `PAYPAL_CLIENT_ID`.
+  - `PAYPAL_CLIENT_SECRET`.
+  - `PAYPAL_WEBHOOK_ID`.
+  - `PAYPAL_API_BASE_URL` opcional override.
+- Implementado:
+  - Config tipada PayPal con base URL sandbox/live.
+  - `PaypalModule` importado desde `BillingModule`.
+  - `PaypalClientService` con OAuth server-to-server y cache en memoria.
+  - Metodo `createSubscription`.
+  - Metodo `getSubscription`.
+  - Metodo `verifyWebhook`.
+  - Excepcion controlada para errores PayPal con status, endpoint y debug id.
+- Pendiente:
+  - Fase 06 - Checkout de suscripcion.
+- Migracion requerida: no aplica.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - No se guardan secrets ni access tokens en DB.
+  - No se agregaron endpoints.
+  - No se generaron ni ejecutaron migraciones.
+
+## Fase 06 - Checkout de suscripcion
+
+- Estado: completada
+- Referencia roadmap: Fase 06 - Checkout de suscripcion
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/config/hemia-legal.config.ts`
+  - `apps/api/src/config/env.validation.ts`
+  - `apps/api/src/app.module.ts`
+  - `apps/api/.env.example`
+  - `apps/api/src/modules/checkout/*`
+  - `apps/api/src/modules/checkout/dtos/*`
+  - `apps/api/src/modules/checkout/clients/*`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Env vars:
+  - `HEMIA_LEGAL_BASE_URL`.
+  - `HEMIA_LEGAL_API_KEY`.
+- Implementado:
+  - `BillingCheckoutModule` importado desde `BillingModule`.
+  - `CreateCheckoutSessionDto`.
+  - Cliente HTTP `HemiaLegalClientService` para validar aceptacion legal.
+  - `POST /billing/checkout/sessions` protegido con `BillingInternalApiKeyGuard`.
+  - `GET /billing/checkout/sessions/:id/status` para polling.
+  - Flujo de checkout PayPal: producto/plan activos, validacion legal, customer, subscription pending, checkout session created, suscripcion PayPal y checkout URL.
+  - Manejo de fallo PayPal marcando checkout como `failed`.
+- Tablas afectadas:
+  - `billing_customers`.
+  - `billing_subscriptions`.
+  - `billing_checkout_sessions`.
+- Pendiente:
+  - Fase 07 - Webhooks PayPal e idempotencia.
+- Migracion requerida: no aplica si Fase 03 ya fue migrada; si no, requiere migracion Fase 03 previa.
+- Seeds requeridos: no aplica; requiere catalogo/planes con `provider_plan_id` real de PayPal.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+- Notas:
+  - No se activa licencia ni se procesan pagos en esta fase.
+  - No se guardan documentos legales completos.
+  - No se generaron ni ejecutaron migraciones.
+
+## Fase 07 - Webhooks PayPal e idempotencia
+
+- Estado: completada
+- Referencia roadmap: Fase 07 - Webhooks PayPal e idempotencia
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/webhooks/*`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingWebhooksModule` importado desde `BillingModule`.
+  - Endpoint publico `POST /billing/webhooks/paypal` sin guard interno; la seguridad depende de la verificacion de firma PayPal.
+  - Lectura de headers PayPal requeridos: `paypal-transmission-id`, `paypal-transmission-time`, `paypal-cert-url`, `paypal-auth-algo`, `paypal-transmission-sig`.
+  - Verificacion de firma con `PaypalClientService.verifyWebhook` antes de modificar estados criticos.
+  - Registro de eventos en `billing_webhook_events` con `provider_event_id` como llave idempotente.
+  - Eventos duplicados `processed` o `ignored` se devuelven sin reprocesar.
+  - Eventos `failed` pueden reprocesarse y limpian `error_message` si terminan correctamente.
+  - Procesamiento transaccional con lock pesimista sobre el evento existente.
+  - Registro de `error_message` cuando falla verificacion o procesamiento.
+- Eventos soportados:
+  - `BILLING.SUBSCRIPTION.CREATED`: confirma suscripcion local si existe y conserva estado pending.
+  - `BILLING.SUBSCRIPTION.ACTIVATED`: marca suscripcion active y crea/activa licencia.
+  - `PAYMENT.SALE.COMPLETED`: crea pago paid si puede resolver la suscripcion PayPal.
+  - `PAYMENT.SALE.REFUNDED`: marca pago relacionado refunded.
+  - `PAYMENT.SALE.REVERSED`: marca pago relacionado reversed.
+  - `BILLING.SUBSCRIPTION.SUSPENDED`: marca suscripcion suspended y licencia suspended.
+  - `BILLING.SUBSCRIPTION.CANCELLED`: marca suscripcion cancelled y licencia revoked.
+  - `BILLING.SUBSCRIPTION.EXPIRED`: marca suscripcion expired y licencia revoked.
+- Casos ignorados:
+  - Eventos verificados no soportados se guardan como `ignored`.
+  - Eventos de pago sin suscripcion local resoluble no crean `billing_payments`; el webhook queda registrado.
+  - Suscripciones PayPal sin suscripcion local resoluble no crean suscripciones nuevas en esta fase.
+- Pruebas:
+  - Headers faltantes.
+  - Firma fallida sin mutar estados.
+  - Duplicado ya processed.
+  - Reproceso de failed.
+  - Activacion de suscripcion y licencia.
+  - Suspension, cancelacion y expiracion.
+  - Pago completado idempotente por webhook.
+  - Evento desconocido ignorado.
+  - Controller pasa headers/body al service.
+- Errores conocidos:
+  - PayPal Sandbox debe configurar `PAYPAL_WEBHOOK_ID` correcto por ambiente.
+  - Pago sin relacion a suscripcion no puede guardarse porque `billing_payments.organization_id` es requerido.
+- Pendiente:
+  - Probar manualmente con PayPal Sandbox.
+  - Monitorear webhooks fallidos en despliegue real.
+- Migracion requerida: no aplica si Fase 03 ya fue migrada.
+- Seeds requeridos: no aplica.
+
+## Fase 08 - Procesamiento de suscripciones y pagos
+
+- Estado: completada
+- Referencia roadmap: Fase 08 - Procesamiento de suscripciones y pagos
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/webhooks/billing-subscription-payments-processor.service.ts`
+  - `apps/api/src/modules/webhooks/billing-subscription-payments-processor.types.ts`
+  - `apps/api/src/modules/webhooks/billing-webhooks.service.ts`
+  - `apps/api/src/modules/webhooks/billing-webhooks.module.ts`
+- Implementado:
+  - `BillingWebhooksService` conserva verificacion de firma, registro e idempotencia.
+  - `BillingSubscriptionPaymentsProcessorService` procesa suscripciones, pagos, licencias y auditoria.
+  - Confirmacion server-to-server con PayPal para eventos criticos de suscripcion mediante `getSubscription`.
+  - Uso de `billing_info.next_billing_time`, `failed_payments_count`, `last_payment`, `last_failed_payment` y `outstanding_balance` en metadata.
+  - Grace period de 7 dias en `billing_subscriptions.grace_until`.
+  - No se activa licencia por retorno frontend.
+  - No se crean pagos sin suscripcion local resoluble.
+- Handlers:
+  - `BILLING.SUBSCRIPTION.CREATED`: confirma PayPal y conserva suscripcion pending si aplica.
+  - `BILLING.SUBSCRIPTION.ACTIVATED`: confirma PayPal ACTIVE, marca suscripcion active y licencia active.
+  - `BILLING.SUBSCRIPTION.PAYMENT.FAILED`: marca suscripcion past_due, licencia grace y `grace_until`; suspende si PayPal reporta umbral de fallos.
+  - `PAYMENT.SALE.COMPLETED`: crea/actualiza pago paid por ids PayPal y reactiva suscripcion past_due/grace.
+  - `PAYMENT.SALE.REFUNDED`: marca pago refunded sin cambiar suscripcion.
+  - `PAYMENT.SALE.REVERSED`: marca pago reversed, suscripcion past_due y licencia grace.
+  - `BILLING.SUBSCRIPTION.SUSPENDED`: marca suscripcion suspended y licencia suspended.
+  - `BILLING.SUBSCRIPTION.CANCELLED`: marca suscripcion cancelled y licencia revoked.
+  - `BILLING.SUBSCRIPTION.EXPIRED`: marca suscripcion expired y licencia revoked.
+- Transacciones:
+  - Todo evento verificado se procesa dentro de la transaccion abierta por `BillingWebhooksService`.
+  - El evento webhook mantiene lock pesimista para evitar reproceso concurrente.
+  - Cambios de suscripcion, pago, licencia y auditoria se guardan en la misma transaccion.
+- Auditoria:
+  - Se registra `billing.subscription.status_changed`.
+  - Se registra `billing.payment.created`.
+  - Se registra `billing.payment.status_changed`.
+  - Se registra `billing.license.status_changed`.
+  - Metadata incluye `webhookEventId`, `providerEventId`, `eventType`, estado previo y estado nuevo.
+- Reglas de estado:
+  - PayPal `ACTIVE` -> `active`, salvo fallos consecutivos -> `past_due`.
+  - PayPal `SUSPENDED` -> `suspended`.
+  - PayPal `CANCELLED` -> `cancelled`.
+  - PayPal `EXPIRED` -> `expired`.
+  - PayPal `APPROVAL_PENDING` / `APPROVED` -> `pending`.
+  - `PAYMENT.SALE.COMPLETED` reactiva de `past_due` a `active`.
+  - `PAYMENT.SALE.REVERSED` mueve a `past_due` con licencia `grace`.
+- Pruebas:
+  - Suscripcion activa confirmada server-to-server.
+  - Pago completado crea pago paid y reactiva suscripcion past_due.
+  - Pago fallido mueve a past_due y licencia grace.
+  - Suspended/cancelled/expired mapean suscripcion y licencia.
+  - Refunded/reversed actualizan pago.
+  - Pago sin suscripcion resoluble se ignora sin crear filas falsas.
+  - Auditoria emitida para cambios criticos.
+  - Webhook duplicado no reprocesa.
+  - Webhook failed puede reintentarse.
+  - Fallo de PayPal durante confirmacion deja webhook failed con `error_message`.
+- Errores conocidos:
+  - PayPal Sandbox puede no disparar todos los casos de reembolso/reversa; probar manualmente cuando el sandbox lo permita.
+  - El umbral de suspension usa `failed_payments_count >= 3` como default interno.
+- Migracion requerida: no aplica si Fase 03 ya fue migrada.
+- Seeds requeridos: no aplica.
+
+## Fase 09 - Licencias y resolucion de acceso
+
+- Estado: completada
+- Referencia roadmap: Fase 09 - Licencias y resolucion de acceso
+- Fecha: 2026-06-18
+- Archivos:
+  - `apps/api/src/modules/licenses/*`
+  - `apps/api/src/modules/licenses/dtos/*`
+  - `apps/api/src/modules/licenses/mappers/*`
+  - `apps/api/src/modules/webhooks/billing-subscription-payments-processor.service.ts`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingLicensesModule` importado desde `BillingModule`.
+  - Endpoint interno `GET /billing/licenses/resolve?organization_id=:uuid&product_code=:code`.
+  - Endpoint protegido con `BillingInternalApiKeyGuard`.
+  - `BillingLicensesService.resolveLicense` para consumo server-to-server por producto.
+  - `BillingLicenseCalculatorService` compartido para calcular licencias desde subscription + plan.
+  - Refactor de Fase 08 para usar el calculator al crear/actualizar licencias.
+- Formula de licencia:
+  - `valid_until = subscription.graceUntil` cuando status es `grace`.
+  - `valid_until = subscription.nextBillingTime` para otros estados.
+  - `seats_limit = plan.seatsIncluded`.
+  - `usage_limit = null` hasta Fase 13.
+  - `features_json = plan.featuresJson`.
+  - Se conserva `license_key_hash` existente si ya hay licencia.
+- Response DTO:
+  - `active`.
+  - `productCode`.
+  - `planCode`.
+  - `licenseStatus`.
+  - `validUntil`.
+  - `seatsLimit`.
+  - `usageLimit`.
+  - `features`.
+  - `subscriptionId`.
+- Reglas de acceso:
+  - Licencia `active` permite acceso si `valid_until` es null o futuro.
+  - Licencia `grace` permite acceso solo si `valid_until` es futuro.
+  - Licencia `suspended`, `revoked`, vencida o inexistente devuelve `active: false`.
+  - Sin licencia devuelve HTTP 200 con `licenseStatus: revoked`, limites en cero y features vacias.
+  - Si existen varias licencias, se prioriza `active`/`grace`; dentro de esa prioridad gana la mas reciente por `updated_at`.
+- Pruebas:
+  - Resolucion de licencia active con limites y features.
+  - Resolucion de grace vigente como active.
+  - Grace vencida como inactive.
+  - Suspended/revoked como inactive.
+  - Fallback sin licencia.
+  - Priorizacion por status y `updated_at`.
+  - Calculator calcula `validUntil`, `seatsLimit`, `usageLimit` y `featuresJson`.
+  - Processor de Fase 08 sigue creando/actualizando licencias con calculator.
+- Pendiente:
+  - Fase 13 ampliara `GET /billing/licenses/resolve` con entitlements y resumen de billing.
+- Migracion requerida: no aplica si Fase 03 ya fue migrada.
+- Seeds requeridos: no aplica.
+
+## Fase 10 - Auditoria comercial y referencia Legal
+
+- Estado: completada
+- Referencia roadmap: Fase 10 - Auditoria comercial y referencia Legal
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/audit/*`
+  - `apps/api/src/modules/billing-shared/entities/billing-audit-log.entity.ts`
+  - `apps/api/src/modules/checkout/*`
+  - `apps/api/src/modules/webhooks/*`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingAuditModule` y `BillingAuditService` como auditoria comercial interna sin endpoints HTTP.
+  - Referencia legal minima en `billing_audit_logs`: `legal_acceptance_id`, `terms_version`, `privacy_version`, `refund_policy_version`, `accepted_at` y `legal_snapshot_hash`.
+  - Indice por `legal_acceptance_id`.
+  - Sanitizacion de metadata para conservar solo ids comerciales, ids webhook/provider y cambios de estado.
+  - Auditoria de checkout creado, suscripcion creada, suscripcion enlazada a PayPal, checkout PayPal creado y checkout fallido.
+  - Auditoria transaccional desde webhooks para cambios de suscripcion, pago y licencia mediante `BillingAuditService.record`.
+- Eventos auditados:
+  - `billing.checkout.created`
+  - `billing.checkout.paypal_created`
+  - `billing.checkout.failed`
+  - `billing.subscription.created`
+  - `billing.subscription.provider_linked`
+  - `billing.subscription.status_changed`
+  - `billing.payment.created`
+  - `billing.payment.status_changed`
+  - `billing.license.status_changed`
+- Limites de responsabilidad:
+  - Billing Core no guarda documentos legales completos, IP hash, user agent hash, eventos legales completos ni tablas `legal_*`.
+  - Hemia Legal conserva documentos, versiones, aceptaciones, eventos legales y hashes legales completos.
+  - `billing_webhook_events.payload_json` conserva evidencia tecnica PayPal; audit log queda comercial y minimo.
+- Pendiente:
+  - Generar migracion manual para columnas nuevas de `billing_audit_logs`.
+- Migracion requerida: si, manual.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - `BillingAuditService` cubre evento minimo, referencia legal, omision legal y sanitizacion de metadata.
+  - Checkout cubre auditoria con `legal_acceptance_id` y fallo PayPal auditado.
+  - Webhook processor cubre auditoria comercial con referencia legal heredada desde suscripcion y sin payload PayPal completo en metadata.
+
+## Fase 11 - Facturacion fiscal / CFDI
+
+- Estado: completada
+- Referencia roadmap: Fase 11 - Facturacion fiscal / CFDI
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/invoices/*`
+  - `apps/api/src/modules/billing-shared/entities/billing-invoice.entity.ts`
+  - `apps/api/src/modules/audit/billing-audit.service.ts`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingInvoicesModule` interno protegido con `BillingInternalApiKeyGuard`.
+  - `BillingInvoicesService` con flujo on demand para crear CFDI pendiente desde payment pagado.
+  - DTOs, mapper y responses explicitos para invoices.
+  - Adapter futuro `BillingInvoiceIssuerAdapter` y stub `NoopBillingInvoiceIssuerAdapter`; no se llama PAC automatico en esta fase.
+  - `billing_invoices.metadata` para errores PAC futuros, referencias externas y notas internas minimas.
+  - Whitelist de auditoria ampliada con `invoiceId`.
+- Endpoints internos:
+  - `POST /billing/invoices`
+  - `GET /billing/invoices/:id`
+  - `GET /billing/invoices?organization_id=&payment_id=&status=`
+  - `PATCH /billing/invoices/:id/issued`
+  - `PATCH /billing/invoices/:id/failed`
+  - `PATCH /billing/invoices/:id/cancelled`
+- Alcance fiscal:
+  - Guarda RFC, razon social, regimen fiscal, uso CFDI, subtotal, IVA, total, moneda, status, XML/PDF URLs y UUID CFDI.
+  - Solo permite crear invoice para pagos `paid` de la misma organizacion.
+  - Bloquea duplicados activos (`pending` o `issued`) por payment.
+  - `organization_id`, `total` y `currency` salen del payment.
+  - MVP MXN calcula IVA incluido 16%: `subtotal = total / 1.16`, `tax_amount = total - subtotal`, redondeado a 2 decimales.
+- Auditoria:
+  - `billing.invoice.created`
+  - `billing.invoice.issued`
+  - `billing.invoice.failed`
+  - `billing.invoice.cancelled`
+  - Metadata minima: `invoiceId`, `paymentId`, `previousStatus`, `newStatus`.
+- Pendientes PAC:
+  - Timbrado automatico real.
+  - Cancelacion SAT real.
+  - Generacion/almacenamiento binario de XML/PDF.
+  - Configuracion de proveedor PAC/facturador.
+- Migracion requerida: si, manual para `billing_invoices.metadata`.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - Crear invoice pending desde payment paid.
+  - Rechazar payment inexistente, no pagado y duplicado activo.
+  - Calcular subtotal/IVA/total con IVA 16%.
+  - Marcar invoice issued, failed y cancelled.
+  - Listar por filtros.
+  - Controller delega endpoints principales y usa guard interno.
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+
+## Fase 15 - Seguridad, permisos y hardening
+
+- Estado: completada
+- Referencia roadmap: Fase 15 - Seguridad, permisos y hardening
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/config/auth.config.ts`
+  - `apps/api/src/config/env.validation.ts`
+  - `apps/api/src/common/guards/*`
+  - `apps/api/src/common/decorators/permissions.decorator.ts`
+  - `apps/api/src/common/types/authenticated-request.type.ts`
+  - `apps/api/src/main.ts`
+  - `apps/api/src/app.module.ts`
+  - `apps/api/.env.example`
+  - `apps/api/README.md`
+  - `apps/api/package.json`
+- Implementado:
+  - Config `auth` OIDC/JWKS para Identity con `AUTH_ISSUER_URL`, `AUTH_JWKS_URI`, `AUTH_AUDIENCE`, `AUTH_REQUIRED_ISSUER` y `AUTH_LEGACY_API_KEY_ENABLED`.
+  - `SsoBearerGuard` valida Bearer token RS256 contra JWKS, `iss`, `aud` y expiracion, y adjunta principal normalizado al request.
+  - `PermissionsGuard` y `@Permissions(...)` validan scopes exactos, `billing.*` y `*.*`.
+  - `BillingInternalAuthGuard` acepta Bearer `client_credentials` con scopes; `x-billing-internal-api-key` queda como fallback legacy solo con flag.
+  - `BillingInternalApiKeyGuard` usa comparacion timing-safe y queda bloqueado salvo `AUTH_LEGACY_API_KEY_ENABLED=true`.
+  - Bootstrap usa `helmet()` y `ValidationPipe` con whitelist, transform y `forbidNonWhitelisted`.
+  - Validacion Joi bloquea production con CORS wildcard, OIDC incompleto, legacy API key activo y PayPal live apuntando a sandbox.
+  - `IdentityClientPort` y `NoopIdentityClient` quedan listos para futura integracion con `@hemia/auth/SsoClient`; `@hemia/auth` no se instala en esta fase.
+  - Dependencia de validacion JWT agregada: `jsonwebtoken`; JWKS se consume con `fetch` y `crypto.createPublicKey` nativos para evitar dependencias ESM incompatibles con Jest actual.
+- Superficie API:
+  - Publicos: `GET /billing/catalog/plans`, `GET /billing/catalog/addons`.
+  - Webhook publico: `POST /billing/webhooks/paypal`, sin sesion de usuario, con validacion PayPal propia.
+  - Internos server-to-server: checkout, licenses, invoices, add-ons, subscription management y catalog writes con Bearer token emitido por Identity usando `client_credentials`.
+  - Scopes requeridos: `billing.catalog.manage`, `billing.checkout.manage`, `billing.licenses.read`, `billing.invoices.manage`, `billing.addons.manage`, `billing.subscriptions.manage`.
+  - Compatibilidad legacy: `x-billing-internal-api-key` solo si `AUTH_LEGACY_API_KEY_ENABLED=true`; no se permite en production.
+- Revision de secretos/payloads:
+  - Secrets quedan en config/env; no se agregaron responses con secrets.
+  - Payload PayPal completo se conserva solo en `billing_webhook_events.payload_json`.
+  - Audit log conserva sanitizacion de metadata comercial.
+  - En production, webhook real debe exponerse por HTTPS y PayPal live no debe usar base URL sandbox.
+- Migracion requerida: no aplica.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - Token RS256/JWKS valido adjunta principal; token faltante/invalido, issuer/audience incorrectos y expirado devuelven 401.
+  - Scopes exacto, `billing.*` y `*.*`, desde `scope` string o `scopes` array.
+  - Machine token con `client_credentials` y scopes internos.
+  - API key legacy valida, faltante, incorrecta y bloqueada si flag apagado.
+  - Env production inseguro rechazado.
+  - `NoopIdentityClient` falla explicitamente hasta integrar `@hemia/auth`.
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+
+## Fase 12 - Add-ons recurrentes
+
+- Estado: completada
+- Referencia roadmap: Fase 12 - Add-ons recurrentes
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/subscription-addons/*`
+  - `apps/api/src/modules/billing-shared/entities/billing-subscription-addon.entity.ts`
+  - `apps/api/src/modules/billing-shared/entities/billing-entitlement.entity.ts`
+  - `apps/api/src/modules/billing-shared/entities/billing-usage-counter.entity.ts`
+  - `apps/api/src/modules/billing-shared/enums/subscription-addon-status.enum.ts`
+  - `apps/api/src/modules/billing-shared/enums/entitlement-status.enum.ts`
+  - `apps/api/src/modules/audit/billing-audit.service.ts`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingSubscriptionAddonsModule` interno protegido con `BillingInternalApiKeyGuard`.
+  - `BillingSubscriptionAddonEntity` para cantidad contratada por suscripcion/add-on.
+  - `BillingEntitlementEntity` para limites calculados por suscripcion/producto.
+  - `BillingUsageCounterEntity` para validar bajas contra uso actual.
+  - Enums `SubscriptionAddonStatus` y `EntitlementStatus`.
+  - Flujo MVP: alta crea `pending_payment`; activacion por endpoint interno posterior a pago/approval externo.
+  - Recalculo y persistencia de entitlement `max_users` al activar add-ons.
+  - Auditoria comercial de alta pendiente, activacion, baja programada y recalculo de entitlements.
+- Endpoints internos:
+  - `POST /billing/subscriptions/:subscriptionId/addons`
+  - `GET /billing/subscriptions/:subscriptionId/addons`
+  - `POST /billing/subscription-addons/:id/activate`
+  - `POST /billing/subscription-addons/:id/schedule-cancel`
+- Add-ons soportados:
+  - `extra_user`: suma `quantity` a `plan.seats_included` para calcular `max_users`.
+  - Keys futuras preparadas: `max_agents`, `max_conversations_monthly` quedan para Fase 13.
+- Reglas de alta:
+  - Suscripcion debe existir y estar `active` o `past_due`.
+  - Add-on debe existir activo, ser `recurring`, pertenecer al mismo `product_code`, usar misma moneda y mismo intervalo que el plan.
+  - Cantidad minima `1`.
+  - Si ya existe pending del mismo add-on, se actualiza cantidad/snapshot.
+  - Si ya existe active, se permite crear ajuste pending separado.
+- Reglas de baja:
+  - `schedule-cancel` marca `scheduled_cancel` para siguiente ciclo, sin prorrateo ni cambio PayPal.
+  - Si usage counter `max_users` excede el nuevo limite, marca `blocked` con metadata de razon y no agenda baja.
+- Formula de calculo:
+  - `addonsAmount = sum(active.quantity * addon.unit_price)`.
+  - `totalAmount = plan.amount + addonsAmount`.
+  - `max_users = plan.seats_included + sum(active extra_user.quantity)`.
+- Auditoria:
+  - `billing.subscription_addon.pending_created`
+  - `billing.subscription_addon.activated`
+  - `billing.subscription_addon.cancel_scheduled`
+  - `billing.entitlements.recalculated`
+  - Whitelist de metadata ampliada con `subscriptionAddonId`, `addonCode` y `quantity`.
+- Pendiente:
+  - Fase 13 expondra entitlements en `GET /billing/licenses/resolve`.
+  - Integracion PayPal real para add-ons queda fuera de esta fase.
+- Migracion requerida: si, manual para `billing_subscription_addons`, `billing_entitlements`, `billing_usage_counters` y enums nuevos.
+- Seeds requeridos: no aplica; usa `extra_user` existente del catalogo.
+- Pruebas:
+  - Crear add-on `pending_payment`.
+  - Rechazar suscripcion inexistente o status invalido.
+  - Rechazar add-on inexistente/inactivo/mismatch de moneda/intervalo.
+  - Activar pending y recalcular `max_users`.
+  - Calcular base + add-ons + total.
+  - Programar baja sin prorrateo.
+  - Bloquear baja si usage counter excede limite.
+  - Controller delega endpoints principales y usa guard interno.
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+
+## Fase 13 - Entitlements y limites consumibles por producto
+
+- Estado: completada
+- Referencia roadmap: Fase 13 - Entitlements y limites consumibles por producto
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/entitlements/*`
+  - `apps/api/src/modules/licenses/*`
+  - `apps/api/src/modules/subscription-addons/billing-subscription-addons.service.ts`
+  - `apps/api/src/modules/subscription-addons/billing-subscription-addons.module.ts`
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/index.ts`
+- Implementado:
+  - `BillingEntitlementsModule` y `BillingEntitlementsService` como calculadora central reutilizable.
+  - Recalculo sincronico de entitlements al activar add-ons.
+  - `GET /billing/licenses/resolve` ahora incluye `entitlements` y `billing`.
+  - Se mantienen campos legacy: `seatsLimit`, `usageLimit`, `features` y `subscriptionId`.
+  - `markStale(subscriptionId)` preparado para invalidacion/cache futura.
+- Formula de calculo:
+  - `included_users = plan.seats_included`.
+  - `extra_users = sum(active extra_user.quantity)`.
+  - `max_users = included_users + extra_users`.
+  - `max_agents = plan.features_json.max_agents`.
+  - `max_conversations_monthly = plan.features_json.max_conversations_monthly`.
+  - `base_monthly = plan.amount`.
+  - `addons_monthly = sum(active.quantity * addon.unit_price)`.
+  - `total_monthly = base_monthly + addons_monthly`.
+  - `currency = plan.currency`.
+- Keys soportadas:
+  - `max_users`
+  - `included_users`
+  - `extra_users`
+  - `max_agents`
+  - `max_conversations_monthly`
+- Response extendido:
+  - `entitlements.maxUsers`
+  - `entitlements.includedUsers`
+  - `entitlements.extraUsers`
+  - `entitlements.maxAgents`
+  - `entitlements.maxConversationsMonthly`
+  - `billing.baseMonthly`
+  - `billing.addonsMonthly`
+  - `billing.totalMonthly`
+  - `billing.currency`
+- Compatibilidad:
+  - `seatsLimit` refleja `entitlements.maxUsers`.
+  - `usageLimit` refleja `entitlements.maxConversationsMonthly`.
+  - Sin licencia devuelve entitlements en cero/null y billing `0.00` MXN.
+- Migracion requerida: no aplica si Fase 12 ya migro `billing_entitlements`.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - Calculo de users desde plan sin add-ons.
+  - Calculo de `extra_user` activo.
+  - Ignora add-ons no activos.
+  - Lectura de `max_agents` y `max_conversations_monthly` desde `features_json`.
+  - Calculo de billing base/add-ons/total.
+  - Upsert de entitlements persistidos.
+  - Fallback para feature keys ausentes.
+  - Resolve license incluye `entitlements` y `billing`.
+  - Activar add-on usa `BillingEntitlementsService`.
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+
+## Fase 14 - Gestion de suscripcion
+
+- Estado: completada
+- Referencia roadmap: Fase 14 - Gestion de suscripcion
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/subscriptions-management/*`
+  - `apps/api/src/modules/paypal/*`
+  - `apps/api/src/modules/checkout/*`
+  - `apps/api/src/modules/audit/billing-audit.service.ts`
+  - `apps/api/src/modules/billing.module.ts`
+- Implementado:
+  - `BillingSubscriptionsManagementModule` interno protegido con `BillingInternalApiKeyGuard`.
+  - Consulta de suscripcion actual por organizacion/producto con prioridad `active`, `past_due`, `pending`.
+  - Cancelacion de renovacion: llama PayPal cuando existe `providerSubscriptionId`, marca `cancelAtPeriodEnd` y conserva acceso local hasta fin de periodo/webhook terminal.
+  - Cambio de plan MVP: crea nuevo checkout para plan destino, agenda metadata de cambio pendiente y marca la suscripcion actual para no renovar.
+  - Verificacion manual de checkout: consulta PayPal, sincroniza suscripcion/licencia y no guarda payload completo en audit log.
+  - `GET /billing/checkout/sessions/:id/status` queda protegido con guard interno.
+- Endpoints internos:
+  - `GET /billing/subscriptions/current?organization_id=&product_code=`
+  - `POST /billing/subscriptions/:id/cancel`
+  - `POST /billing/subscriptions/:id/change-plan`
+  - `POST /billing/checkout/sessions/:id/verify`
+- Politicas upgrade/downgrade:
+  - Sin prorrateo.
+  - Sin cambio directo de plan PayPal en la suscripcion actual.
+  - El cambio crea nueva suscripcion mediante checkout; la suscripcion anterior queda con cancelacion de renovacion.
+  - La activacion efectiva depende de approval/webhook o verificacion manual.
+- Auditoria:
+  - `billing.subscription.cancel_scheduled`
+  - `billing.subscription.plan_change_requested`
+  - `billing.checkout.manual_verified`
+  - Se reutiliza `billing.subscription.status_changed` y `billing.license.status_changed` al verificar.
+  - Whitelist de metadata ampliada con `targetPlanCode`, `providerSubscriptionId` y `providerStatus`.
+- Limites MVP:
+  - No UI.
+  - No prorrateo.
+  - No cambio directo de plan PayPal.
+  - No creacion de pagos desde verificacion manual si PayPal no provee evidencia suficiente.
+- Migracion requerida: no aplica.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - Consulta suscripcion actual por prioridad de status.
+  - Cancelacion llama PayPal, marca `cancelAtPeriodEnd` y audita.
+  - Cancelacion rechaza suscripcion terminal.
+  - Change-plan valida plan destino y crea checkout nuevo.
+  - Change-plan rechaza moneda incompatible.
+  - Verify sincroniza `ACTIVE` y `CANCELLED` sin payload PayPal completo.
+  - Controller delega endpoints principales y usa guard interno.
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente.
+
+## Fase 16 - Reorganizacion modular y centralizacion de tests
+
+- Estado: completada
+- Referencia roadmap: Fase 16 - Reorganizacion modular y centralizacion de tests
+- Fecha: 2026-06-19
+- Archivos:
+  - `apps/api/src/modules/billing.module.ts`
+  - `apps/api/src/modules/billing-shared/*`
+  - `apps/api/src/modules/{audit,catalog,checkout,entitlements,invoices,licenses,paypal,subscription-addons,subscriptions-management,webhooks}/*`
+  - `apps/api/test/unit/*`
+  - `apps/api/package.json`
+  - `apps/api/README.md`
+  - `docs/billing-roadmap.md`
+  - `docs/billing-development-progress.md`
+- Decision:
+  - Eliminar la carpeta unica `apps/api/src/modules/billing`.
+  - Mantener `BillingModule` como agregador en `apps/api/src/modules/billing.module.ts`.
+  - Mover features billing a nivel directo de `apps/api/src/modules`.
+  - Mover `entities`, `enums`, `constants` y `errors` compartidos a `billing-shared`.
+  - Mover archivos `*.types.ts` a carpetas `types/` dentro del modulo dueño.
+  - Centralizar specs unitarios en `apps/api/test/unit`.
+- Implementado:
+  - Reorganizacion de imports y barrels para nueva estructura.
+  - Jest configurado con `rootDir: "."`, `testRegex` apuntando a `test/.*\\.spec\\.ts$` y `moduleNameMapper` para `src/*`.
+  - README del API actualizado con estructura modular y variables PayPal/Hemia.
+  - Roadmap creado con decisiones de arquitectura y estado de fases.
+- Migracion requerida: no aplica; cambio solo organizacional.
+- Seeds requeridos: no aplica.
+- Pruebas:
+  - `bun run --cwd apps/api build` ejecutado correctamente.
+  - `bun run --cwd apps/api test` ejecutado correctamente: 25 suites, 120 tests.
+  - `bun run --cwd apps/api test:e2e` falla por timeout de bootstrap al conectar con PostgreSQL configurado; requiere DB accesible.
+- Notas:
+  - No se cambiaron rutas HTTP ni contratos publicos.
+  - No queda directorio `apps/api/src/modules/billing`.
+  - No quedan specs unitarios dentro de `apps/api/src`.

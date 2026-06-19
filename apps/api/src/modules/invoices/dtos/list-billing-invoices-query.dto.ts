@@ -1,0 +1,16 @@
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { InvoiceStatus } from '../../billing-shared';
+
+export class ListBillingInvoicesQueryDto {
+  @IsOptional()
+  @IsUUID()
+  organization_id?: string;
+
+  @IsOptional()
+  @IsUUID()
+  payment_id?: string;
+
+  @IsOptional()
+  @IsEnum(InvoiceStatus)
+  status?: InvoiceStatus;
+}
