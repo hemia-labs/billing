@@ -12,12 +12,12 @@ import {
 import { BillingCheckoutSessionStatus, BillingProvider } from '../enums';
 import { BillingPlanEntity } from './billing-plan.entity';
 
-@Entity('billing_checkout_sessions')
-@Index('IDX_billing_checkout_sessions_organization_id', ['organizationId'])
-@Index('IDX_billing_checkout_sessions_product_code', ['productCode'])
-@Index('IDX_billing_checkout_sessions_plan_id', ['planId'])
-@Index('IDX_billing_checkout_sessions_provider', ['provider'])
-@Index('IDX_billing_checkout_sessions_status', ['status'])
+@Entity('checkout_sessions')
+@Index('IDX_checkout_sessions_organization_id', ['organizationId'])
+@Index('IDX_checkout_sessions_product_code', ['productCode'])
+@Index('IDX_checkout_sessions_plan_id', ['planId'])
+@Index('IDX_checkout_sessions_provider', ['provider'])
+@Index('IDX_checkout_sessions_status', ['status'])
 export class BillingCheckoutSessionEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

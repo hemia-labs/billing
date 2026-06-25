@@ -17,5 +17,4 @@ export class CheckoutSessionStatusResponseDto {
   checkoutStatus: BillingCheckoutSessionStatus;
   subscriptionStatus: SubscriptionStatus;
   provider: BillingProvider;
-  providerCheckoutUrl: string | null;
 }

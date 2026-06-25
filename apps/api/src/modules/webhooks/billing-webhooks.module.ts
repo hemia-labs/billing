@@ -11,7 +11,9 @@ import {
 import { BillingAuditModule } from '../audit';
 import { BillingLicensesModule } from '../licenses';
 import { PaypalModule } from '../paypal';
+import { BillingSubscriptionAddonsModule } from '../subscription-addons';
 import { BillingSubscriptionPaymentsProcessorService } from './billing-subscription-payments-processor.service';
+import { BillingWebhooksConsoleController } from './billing-webhooks-console.controller';
 import { BillingWebhooksController } from './billing-webhooks.controller';
 import { BillingWebhooksService } from './billing-webhooks.service';
 
@@ -28,8 +30,9 @@ import { BillingWebhooksService } from './billing-webhooks.service';
     BillingAuditModule,
     BillingLicensesModule,
     PaypalModule,
+    BillingSubscriptionAddonsModule,
   ],
-  controllers: [BillingWebhooksController],
+  controllers: [BillingWebhooksController, BillingWebhooksConsoleController],
   providers: [
     BillingWebhooksService,
     BillingSubscriptionPaymentsProcessorService,

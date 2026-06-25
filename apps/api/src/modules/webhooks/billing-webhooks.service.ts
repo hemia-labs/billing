@@ -1,12 +1,20 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
-import { BillingWebhookEventEntity } from '../billing-shared';
+import { DataSource, EntityManager, MoreThanOrEqual, Repository } from 'typeorm';
+import { BillingAuditService } from '../audit';
+import { BillingAuditLogEntity, BillingWebhookEventEntity } from '../billing-shared';
 import {
   BillingProvider,
   WebhookProcessingStatus,
   WebhookVerificationStatus,
 } from '../billing-shared';
+import { CatalogPageDto } from '../catalog/dtos';
 import { PaypalClientService } from '../paypal';
 import { BillingSubscriptionPaymentsProcessorService } from './billing-subscription-payments-processor.service';
 import { PaypalEventResource } from './types';
@@ -14,6 +22,15 @@ import {
   BillingWebhookProcessResult,
   PaypalWebhookHeaders,
 } from './types';
+import {
+  ConsoleWebhookDetailResponseDto,
+  ConsoleWebhookResponseDto,
+  ListConsoleWebhooksQueryDto,
+} from './dtos';
+
+const RETRY_ACTION = 'billing.webhook.manual_retry';
+const RETRY_LIMIT = 3;
+const RETRY_WINDOW_MINUTES = 15;
 
 @Injectable()
 export class BillingWebhooksService {
@@ -21,9 +38,126 @@ export class BillingWebhooksService {
     private readonly dataSource: DataSource,
     private readonly paypal: PaypalClientService,
     private readonly processor: BillingSubscriptionPaymentsProcessorService,
+    private readonly audit: BillingAuditService,
     @InjectRepository(BillingWebhookEventEntity)
     private readonly webhookEvents: Repository<BillingWebhookEventEntity>,
+    @InjectRepository(BillingAuditLogEntity)
+    private readonly auditLogs: Repository<BillingAuditLogEntity>,
   ) {}
+
+  async listConsoleWebhooks(
+    query: ListConsoleWebhooksQueryDto,
+  ): Promise<CatalogPageDto<ConsoleWebhookResponseDto>> {
+    const builder = this.webhookEvents.createQueryBuilder('webhook');
+    if (query.provider)
+      builder.andWhere('webhook.provider = :provider', { provider: query.provider });
+    if (query.event_type)
+      builder.andWhere('webhook.eventType = :eventType', {
+        eventType: query.event_type,
+      });
+    if (query.processing_status)
+      builder.andWhere('webhook.processingStatus = :processingStatus', {
+        processingStatus: query.processing_status,
+      });
+    if (query.verification_status)
+      builder.andWhere('webhook.verificationStatus = :verificationStatus', {
+        verificationStatus: query.verification_status,
+      });
+    if (query.provider_event_id)
+      builder.andWhere('webhook.providerEventId = :providerEventId', {
+        providerEventId: query.provider_event_id,
+      });
+    if (query.resource_id)
+      builder.andWhere('webhook.resourceId = :resourceId', {
+        resourceId: query.resource_id,
+      });
+    if (query.received_from)
+      builder.andWhere('webhook.receivedAt >= :receivedFrom', {
+        receivedFrom: query.received_from,
+      });
+    if (query.received_to)
+      builder.andWhere('webhook.receivedAt <= :receivedTo', {
+        receivedTo: query.received_to,
+      });
+
+    const [items, total] = await builder
+      .orderBy('webhook.receivedAt', 'DESC')
+      .addOrderBy('webhook.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getManyAndCount();
+
+    return {
+      items: items.map(this.toConsoleWebhook),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
+  }
+
+  async getConsoleWebhook(id: string): Promise<ConsoleWebhookDetailResponseDto> {
+    const event = await this.findWebhook(id);
+    return this.toConsoleWebhookDetail(event);
+  }
+
+  async retryWebhook(
+    id: string,
+    reason: string,
+    actorUserId: string,
+  ): Promise<ConsoleWebhookDetailResponseDto> {
+    return this.dataSource.transaction(async (manager) => {
+      const events = manager.getRepository(BillingWebhookEventEntity);
+      const event = await events.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!event) throw new NotFoundException('Billing webhook event not found');
+      if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
+        throw new BadRequestException('Only verified webhooks can be retried');
+      }
+      if (event.processingStatus !== WebhookProcessingStatus.Failed) {
+        throw new BadRequestException('Only failed webhooks can be retried');
+      }
+
+      const retryAttempt = await this.nextRetryAttempt(manager, event.id);
+      event.processingStatus = WebhookProcessingStatus.Pending;
+      event.errorMessage = null;
+
+      try {
+        const result = await this.processor.process(manager, {
+          eventId: event.id,
+          providerEventId: event.providerEventId,
+          eventType: event.eventType,
+          resource: this.getResource(event.payloadJson),
+        });
+        event.processingStatus = result.processingStatus;
+        event.errorMessage = result.note ?? null;
+      } catch (error) {
+        event.processingStatus = WebhookProcessingStatus.Failed;
+        event.errorMessage = this.getErrorMessage(error);
+      }
+
+      event.processedAt = new Date();
+      const saved = await events.save(event);
+      await this.audit.record({
+        manager,
+        actorUserId,
+        action: RETRY_ACTION,
+        resourceType: 'billing_webhook_event',
+        resourceId: saved.id,
+        provider: saved.provider,
+        metadata: {
+          webhookEventId: saved.id,
+          providerEventId: saved.providerEventId,
+          eventType: saved.eventType,
+          retryReason: reason,
+          retryAttempt,
+          newStatus: saved.processingStatus,
+        },
+      });
+      return this.toConsoleWebhookDetail(saved);
+    });
+  }
 
   async processPaypalWebhook(
     headers: PaypalWebhookHeaders,
@@ -153,6 +287,33 @@ export class BillingWebhooksService {
     return this.webhookEvents.save(event);
   }
 
+  private async findWebhook(id: string): Promise<BillingWebhookEventEntity> {
+    const event = await this.webhookEvents.findOne({ where: { id } });
+    if (!event) throw new NotFoundException('Billing webhook event not found');
+    return event;
+  }
+
+  private async nextRetryAttempt(
+    manager: EntityManager,
+    webhookEventId: string,
+  ): Promise<number> {
+    const since = new Date(Date.now() - RETRY_WINDOW_MINUTES * 60 * 1000);
+    const recentRetries = await manager.getRepository(BillingAuditLogEntity).count({
+      where: {
+        action: RETRY_ACTION,
+        resourceId: webhookEventId,
+        createdAt: MoreThanOrEqual(since),
+      },
+    });
+    if (recentRetries >= RETRY_LIMIT) {
+      throw new HttpException(
+        'Webhook retry rate limit exceeded',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    return recentRetries + 1;
+  }
+
   private async getOrCreateLockedEvent(
     manager: EntityManager,
     input: {
@@ -233,5 +394,41 @@ export class BillingWebhooksService {
       processingStatus: event.processingStatus,
       duplicate,
     };
+  }
+
+  private toConsoleWebhook(
+    event: BillingWebhookEventEntity,
+  ): ConsoleWebhookResponseDto {
+    return {
+      id: event.id,
+      provider: event.provider,
+      providerEventId: event.providerEventId,
+      eventType: event.eventType,
+      resourceId: event.resourceId,
+      verificationStatus: event.verificationStatus,
+      processingStatus: event.processingStatus,
+      errorMessage: event.errorMessage,
+      receivedAt: event.receivedAt,
+      processedAt: event.processedAt,
+    };
+  }
+
+  private toConsoleWebhookDetail(
+    event: BillingWebhookEventEntity,
+  ): ConsoleWebhookDetailResponseDto {
+    return {
+      ...this.toConsoleWebhook(event),
+      transmissionId: event.transmissionId,
+      references: this.references(event),
+    };
+  }
+
+  private references(event: BillingWebhookEventEntity): Record<string, string> {
+    const resource = this.asRecord(event.payloadJson.resource) ?? {};
+    return Object.fromEntries(
+      ['id', 'custom_id', 'billing_agreement_id', 'subscription_id']
+        .map((key) => [key, resource[key]])
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
   }
 }

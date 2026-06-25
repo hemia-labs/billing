@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { BillingAuditService } from '../audit';
 import { DEFAULT_BILLING_CURRENCY } from '../billing-shared';
 import {
@@ -8,15 +8,18 @@ import {
   BillingSubscriptionAddonEntity,
   BillingSubscriptionEntity,
 } from '../billing-shared';
-import { EntitlementStatus, SubscriptionAddonStatus } from '../billing-shared';
+import {
+  BillingAddonPricingModel,
+  EntitlementStatus,
+  SubscriptionAddonStatus,
+} from '../billing-shared';
 import {
   BillingAmountsSummary,
   BillingEntitlementsResolution,
   BillingEntitlementsSummary,
 } from './types';
 
-const EXTRA_USER_ADDON_CODE = 'extra_user';
-const ENTITLEMENT_KEYS = [
+const CORE_ENTITLEMENT_KEYS = [
   'max_users',
   'included_users',
   'extra_users',
@@ -66,17 +69,20 @@ export class BillingEntitlementsService {
     const persisted = await this.entitlements.find({
       where: {
         subscriptionId,
-        key: In(ENTITLEMENT_KEYS),
         status: EntitlementStatus.Active,
       },
     });
 
-    if (persisted.length < ENTITLEMENT_KEYS.length) {
+    if (
+      CORE_ENTITLEMENT_KEYS.some(
+        (key) => !persisted.some((entitlement) => entitlement.key === key),
+      )
+    ) {
       return this.recalculate(subscriptionId);
     }
 
     return {
-      entitlements: this.toEntitlementsSummary(persisted),
+      entitlements: this.toEntitlementsSummary(persisted, activeAddons),
       billing: this.calculateBilling(subscription, activeAddons),
     };
   }
@@ -104,6 +110,8 @@ export class BillingEntitlementsService {
         extraUsers: 0,
         maxAgents: 0,
         maxConversationsMonthly: null,
+        additional: {},
+        featureFlags: {},
       },
       billing: {
         baseMonthly: '0.00',
@@ -121,22 +129,48 @@ export class BillingEntitlementsService {
     const eligibleAddons = activeAddons.filter(
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
-    const includedUsers = subscription.plan.seatsIncluded;
-    const extraUsers = eligibleAddons
-      .filter((addon) => addon.addonCode === EXTRA_USER_ADDON_CODE)
-      .reduce((sum, addon) => sum + addon.quantity, 0);
-    const maxAgents = this.numberFromFeature(subscription.plan.featuresJson.max_agents, 0);
-    const maxConversationsMonthly = this.nullableNumberFromFeature(
-      subscription.plan.featuresJson.max_conversations_monthly,
+    const numeric: Record<string, number> = {
+      max_users: subscription.plan.seatsIncluded,
+      included_users: subscription.plan.seatsIncluded,
+      max_agents: this.numberFromFeature(subscription.plan.featuresJson.max_agents, 0),
+      max_conversations_monthly: this.numberFromFeature(
+        subscription.plan.featuresJson.max_conversations_monthly,
+        0,
+      ),
+    };
+    const featureFlags: Record<string, boolean> = {};
+
+    for (const addon of eligibleAddons) {
+      const multiplier =
+        addon.pricingModel === BillingAddonPricingModel.PerUnit
+          ? addon.quantity
+          : 1;
+      for (const [key, value] of Object.entries(
+        addon.entitlementEffects?.numeric ?? {},
+      )) {
+        numeric[key] = (numeric[key] ?? 0) + value * multiplier;
+      }
+      Object.assign(featureFlags, addon.entitlementEffects?.features ?? {});
+    }
+
+    const coreKeys = new Set(CORE_ENTITLEMENT_KEYS);
+    const additional = Object.fromEntries(
+      Object.entries(numeric).filter(([key]) => !coreKeys.has(key)),
     );
 
     return {
       entitlements: {
-        maxUsers: includedUsers + extraUsers,
-        includedUsers,
-        extraUsers,
-        maxAgents,
-        maxConversationsMonthly,
+        maxUsers: numeric.max_users,
+        includedUsers: numeric.included_users,
+        extraUsers: numeric.max_users - numeric.included_users,
+        maxAgents: numeric.max_agents,
+        maxConversationsMonthly: this.nullableNumberFromFeature(
+          subscription.plan.featuresJson.max_conversations_monthly,
+        ) === null && numeric.max_conversations_monthly === 0
+          ? null
+          : numeric.max_conversations_monthly,
+        additional,
+        featureFlags,
       },
       billing: this.calculateBilling(subscription, eligibleAddons),
     };
@@ -170,6 +204,7 @@ export class BillingEntitlementsService {
       ['extra_users', summary.extraUsers],
       ['max_agents', summary.maxAgents],
       ['max_conversations_monthly', summary.maxConversationsMonthly],
+      ...Object.entries(summary.additional),
     ]);
 
     await Promise.all(
@@ -197,9 +232,23 @@ export class BillingEntitlementsService {
 
   private toEntitlementsSummary(
     entitlements: BillingEntitlementEntity[],
+    activeAddons: BillingSubscriptionAddonEntity[],
   ): BillingEntitlementsSummary {
     const values = new Map(entitlements.map((item) => [item.key, item]));
     const conversations = values.get('max_conversations_monthly');
+
+    const featureFlags = activeAddons.reduce<Record<string, boolean>>(
+      (flags, addon) => ({
+        ...flags,
+        ...(addon.entitlementEffects?.features ?? {}),
+      }),
+      {},
+    );
+    const additional = Object.fromEntries(
+      entitlements
+        .filter((item) => !CORE_ENTITLEMENT_KEYS.includes(item.key))
+        .map((item) => [item.key, item.value]),
+    );
 
     return {
       maxUsers: values.get('max_users')?.value ?? 0,
@@ -209,6 +258,8 @@ export class BillingEntitlementsService {
       maxConversationsMonthly: conversations?.metadata?.nullable
         ? null
         : conversations?.value ?? null,
+      additional,
+      featureFlags,
     };
   }
 

@@ -12,13 +12,13 @@ import { BillingProvider, PaymentStatus } from '../enums';
 import { BillingSubscriptionEntity } from './billing-subscription.entity';
 import { BillingWebhookEventEntity } from './billing-webhook-event.entity';
 
-@Entity('billing_payments')
-@Index('IDX_billing_payments_organization_id', ['organizationId'])
-@Index('IDX_billing_payments_subscription_id', ['subscriptionId'])
-@Index('IDX_billing_payments_provider', ['provider'])
-@Index('IDX_billing_payments_provider_payment_id', ['providerPaymentId'])
-@Index('IDX_billing_payments_provider_capture_id', ['providerCaptureId'])
-@Index('IDX_billing_payments_status', ['status'])
+@Entity('payments')
+@Index('IDX_payments_organization_id', ['organizationId'])
+@Index('IDX_payments_subscription_id', ['subscriptionId'])
+@Index('IDX_payments_provider', ['provider'])
+@Index('IDX_payments_provider_payment_id', ['providerPaymentId'])
+@Index('IDX_payments_provider_capture_id', ['providerCaptureId'])
+@Index('IDX_payments_status', ['status'])
 export class BillingPaymentEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -36,10 +36,20 @@ export class BillingPaymentEntity {
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
 
-  @Column({ name: 'provider_payment_id', length: 180, nullable: true })
+  @Column({
+    name: 'provider_payment_id',
+    type: 'varchar',
+    length: 180,
+    nullable: true,
+  })
   providerPaymentId: string | null;
 
-  @Column({ name: 'provider_capture_id', length: 180, nullable: true })
+  @Column({
+    name: 'provider_capture_id',
+    type: 'varchar',
+    length: 180,
+    nullable: true,
+  })
   providerCaptureId: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2 })

@@ -17,6 +17,7 @@ import {
 } from '../billing-shared';
 import { BillingLicenseCalculatorService } from '../licenses';
 import { PaypalClientService } from '../paypal';
+import { BillingSubscriptionAddonPaymentsProcessorService } from '../subscription-addons';
 import {
   BillingWebhookProcessorInput,
   BillingWebhookProcessorResult,
@@ -43,12 +44,15 @@ export class BillingSubscriptionPaymentsProcessorService {
     private readonly paypal: PaypalClientService,
     private readonly licenseCalculator: BillingLicenseCalculatorService,
     private readonly audit: BillingAuditService,
+    private readonly addonProcessor?: BillingSubscriptionAddonPaymentsProcessorService,
   ) {}
 
   async process(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
   ): Promise<BillingWebhookProcessorResult> {
+    const addonResult = await this.addonProcessor?.process(manager, input);
+    if (addonResult) return addonResult;
     if (!SUPPORTED_EVENTS.has(input.eventType)) {
       return { processingStatus: WebhookProcessingStatus.Ignored };
     }

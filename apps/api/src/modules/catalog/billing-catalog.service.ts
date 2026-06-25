@@ -5,19 +5,30 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, In, Repository } from 'typeorm';
 import {
   BillingAddonEntity,
   BillingPlanEntity,
   BillingProductEntity,
+  BillingSubscriptionAddonEntity,
+  BillingSubscriptionEntity,
 } from '../billing-shared';
 import {
   AddonStatus,
+  BillingAddonPricingModel,
   BillingPlanStatus,
   BillingProductStatus,
+  SubscriptionAddonStatus,
+  SubscriptionStatus,
 } from '../billing-shared';
+import type { AddonEntitlementEffects } from '../billing-shared';
 import {
+  BillingActiveProductResponseDto,
   BillingAddonResponseDto,
+  CatalogPageDto,
+  ListBillingAddonsQueryDto,
+  ListBillingPlansQueryDto,
+  ListBillingProductsQueryDto,
   BillingPlanResponseDto,
   BillingProductResponseDto,
   CreateBillingAddonDto,
@@ -38,7 +49,87 @@ export class BillingCatalogService {
     private readonly plans: Repository<BillingPlanEntity>,
     @InjectRepository(BillingAddonEntity)
     private readonly addons: Repository<BillingAddonEntity>,
+    @InjectRepository(BillingSubscriptionEntity)
+    private readonly subscriptions: Repository<BillingSubscriptionEntity>,
+    @InjectRepository(BillingSubscriptionAddonEntity)
+    private readonly subscriptionAddons: Repository<BillingSubscriptionAddonEntity>,
   ) {}
+
+  async listActiveProducts(): Promise<BillingActiveProductResponseDto[]> {
+    const products = await this.products.find({
+      where: { status: BillingProductStatus.Active },
+      order: { createdAt: 'DESC', id: 'DESC' },
+    });
+
+    return products.map(BillingCatalogMapper.toActiveProductDto);
+  }
+
+  async listProducts(
+    query: ListBillingProductsQueryDto,
+  ): Promise<CatalogPageDto<BillingProductResponseDto>> {
+    const where: FindOptionsWhere<BillingProductEntity> = {};
+    if (query.status) where.status = query.status;
+    const [items, total] = await this.products.findAndCount({
+      where,
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    });
+
+    return this.page(items.map(BillingCatalogMapper.toProductDto), total, query);
+  }
+
+  async listPlans(
+    query: ListBillingPlansQueryDto,
+  ): Promise<CatalogPageDto<BillingPlanResponseDto>> {
+    const where: FindOptionsWhere<BillingPlanEntity> = {};
+    if (query.product_id) where.productId = query.product_id;
+    if (query.status) where.status = query.status;
+    if (query.provider) where.provider = query.provider;
+    if (query.currency) where.currency = query.currency;
+    if (query.billing_interval) where.billingInterval = query.billing_interval;
+    const [items, total] = await this.plans.findAndCount({
+      where,
+      relations: { product: true },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    });
+
+    return this.page(items.map(BillingCatalogMapper.toPlanDto), total, query);
+  }
+
+  async listAddons(
+    query: ListBillingAddonsQueryDto,
+  ): Promise<CatalogPageDto<BillingAddonResponseDto>> {
+    const where: FindOptionsWhere<BillingAddonEntity> = {};
+    if (query.product_id) where.productId = query.product_id;
+    if (query.status) where.status = query.status;
+    if (query.provider) where.provider = query.provider;
+    if (query.currency) where.currency = query.currency;
+    if (query.billing_interval) where.billingInterval = query.billing_interval;
+    const [items, total] = await this.addons.findAndCount({
+      where,
+      relations: { product: true },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    });
+
+    return this.page(items.map(BillingCatalogMapper.toAddonDto), total, query);
+  }
+
+  async getProduct(id: string): Promise<BillingProductResponseDto> {
+    return BillingCatalogMapper.toProductDto(await this.findProductById(id));
+  }
+
+  async getPlan(id: string): Promise<BillingPlanResponseDto> {
+    return BillingCatalogMapper.toPlanDto(await this.findPlanById(id));
+  }
+
+  async getAddon(id: string): Promise<BillingAddonResponseDto> {
+    return BillingCatalogMapper.toAddonDto(await this.findAddonById(id));
+  }
 
   async listActivePlansByProduct(
     productCode: string,
@@ -132,6 +223,9 @@ export class BillingCatalogService {
     dto: UpdateBillingPlanDto,
   ): Promise<BillingPlanResponseDto> {
     const plan = await this.findPlanById(id);
+    if (this.changesPlanCommercialTerms(plan, dto)) {
+      await this.ensurePlanHasNoLiveContracts(plan.id);
+    }
     const product =
       dto.productId || dto.productCode
         ? await this.resolveProduct(dto.productId, dto.productCode)
@@ -187,9 +281,23 @@ export class BillingCatalogService {
       currency: dto.currency,
       billingInterval: dto.billingInterval,
       type: dto.type,
+      pricingModel: dto.pricingModel,
+      minQuantity:
+        dto.pricingModel === BillingAddonPricingModel.Flat
+          ? 1
+          : (dto.minQuantity ?? 1),
+      maxQuantity:
+        dto.pricingModel === BillingAddonPricingModel.Flat
+          ? 1
+          : (dto.maxQuantity ?? null),
+      provider: dto.provider,
+      providerPlanId: dto.providerPlanId ?? null,
+      entitlementEffects: this.normalizeEntitlementEffects(dto.entitlementEffects),
       status: dto.status ?? AddonStatus.Active,
       metadata: dto.metadata ?? {},
     });
+
+    this.validateAddonPricing(addon);
 
     return BillingCatalogMapper.toAddonDto(await this.addons.save(addon));
   }
@@ -199,6 +307,9 @@ export class BillingCatalogService {
     dto: UpdateBillingAddonDto,
   ): Promise<BillingAddonResponseDto> {
     const addon = await this.findAddonById(id);
+    if (this.changesAddonCommercialTerms(addon, dto)) {
+      await this.ensureAddonHasNoLiveContracts(addon.id);
+    }
     const product =
       dto.productId || dto.productCode
         ? await this.resolveProduct(dto.productId, dto.productCode)
@@ -231,8 +342,27 @@ export class BillingCatalogService {
       addon.billingInterval = dto.billingInterval;
     }
     if (dto.type !== undefined) addon.type = dto.type;
+    if (dto.pricingModel !== undefined) addon.pricingModel = dto.pricingModel;
+    if (dto.minQuantity !== undefined) addon.minQuantity = dto.minQuantity;
+    if (dto.maxQuantity !== undefined) addon.maxQuantity = dto.maxQuantity;
+    if (dto.provider !== undefined) addon.provider = dto.provider;
+    if (dto.providerPlanId !== undefined) {
+      addon.providerPlanId = dto.providerPlanId;
+    }
+    if (dto.entitlementEffects !== undefined) {
+      addon.entitlementEffects = this.normalizeEntitlementEffects(
+        dto.entitlementEffects,
+      );
+    }
     if (dto.status !== undefined) addon.status = dto.status;
     if (dto.metadata !== undefined) addon.metadata = dto.metadata;
+
+    if (addon.pricingModel === BillingAddonPricingModel.Flat) {
+      addon.minQuantity = 1;
+      addon.maxQuantity = 1;
+    }
+
+    this.validateAddonPricing(addon);
 
     return BillingCatalogMapper.toAddonDto(await this.addons.save(addon));
   }
@@ -254,6 +384,79 @@ export class BillingCatalogService {
     }
 
     return product;
+  }
+
+  private page<T>(
+    items: T[],
+    total: number,
+    query: { page: number; limit: number },
+  ): CatalogPageDto<T> {
+    return { items, total, page: query.page, limit: query.limit };
+  }
+
+  private changesPlanCommercialTerms(
+    plan: BillingPlanEntity,
+    dto: UpdateBillingPlanDto,
+  ): boolean {
+    return (
+      (dto.amount !== undefined && dto.amount !== plan.amount) ||
+      (dto.billingInterval !== undefined &&
+        dto.billingInterval !== plan.billingInterval) ||
+      (dto.currency !== undefined && dto.currency !== plan.currency) ||
+      (dto.provider !== undefined && dto.provider !== plan.provider) ||
+      (dto.providerPlanId !== undefined &&
+        dto.providerPlanId !== plan.providerPlanId)
+    );
+  }
+
+  private changesAddonCommercialTerms(
+    addon: BillingAddonEntity,
+    dto: UpdateBillingAddonDto,
+  ): boolean {
+    return (
+      (dto.unitPrice !== undefined && dto.unitPrice !== addon.unitPrice) ||
+      (dto.billingInterval !== undefined &&
+        dto.billingInterval !== addon.billingInterval) ||
+      (dto.currency !== undefined && dto.currency !== addon.currency) ||
+      (dto.provider !== undefined && dto.provider !== addon.provider) ||
+      (dto.providerPlanId !== undefined &&
+        dto.providerPlanId !== addon.providerPlanId)
+    );
+  }
+
+  private async ensurePlanHasNoLiveContracts(planId: string): Promise<void> {
+    const subscription = await this.subscriptions.findOne({
+      where: {
+        planId,
+        status: In([
+          SubscriptionStatus.Pending,
+          SubscriptionStatus.Active,
+          SubscriptionStatus.PastDue,
+          SubscriptionStatus.Suspended,
+        ]),
+      },
+    });
+
+    if (subscription) {
+      throw new ConflictException('Billing plan has live subscriptions');
+    }
+  }
+
+  private async ensureAddonHasNoLiveContracts(addonId: string): Promise<void> {
+    const subscriptionAddon = await this.subscriptionAddons.findOne({
+      where: {
+        addonId,
+        status: In([
+          SubscriptionAddonStatus.PendingPayment,
+          SubscriptionAddonStatus.Active,
+          SubscriptionAddonStatus.ScheduledCancel,
+        ]),
+      },
+    });
+
+    if (subscriptionAddon) {
+      throw new ConflictException('Billing add-on has live subscriptions');
+    }
   }
 
   private async findActiveProductByCode(
@@ -321,5 +524,50 @@ export class BillingCatalogService {
     if (existing && existing.id !== ignoreId) {
       throw new ConflictException('Billing addon code exists');
     }
+  }
+
+  private validateAddonPricing(addon: BillingAddonEntity): void {
+    if (
+      addon.maxQuantity !== null &&
+      addon.maxQuantity < addon.minQuantity
+    ) {
+      throw new BadRequestException('maxQuantity cannot be less than minQuantity');
+    }
+
+    if (
+      addon.pricingModel === BillingAddonPricingModel.Flat &&
+      (addon.minQuantity !== 1 || addon.maxQuantity !== 1)
+    ) {
+      throw new BadRequestException('Flat add-ons require quantity 1');
+    }
+  }
+
+  private normalizeEntitlementEffects(
+    value: AddonEntitlementEffects,
+  ): AddonEntitlementEffects {
+    const numeric = value?.numeric ?? {};
+    const features = value?.features ?? {};
+
+    if (
+      !this.isRecord(numeric) ||
+      !Object.values(numeric).every(
+        (item) => typeof item === 'number' && Number.isFinite(item) && item >= 0,
+      )
+    ) {
+      throw new BadRequestException('Invalid numeric entitlement effects');
+    }
+
+    if (
+      !this.isRecord(features) ||
+      !Object.values(features).every((item) => typeof item === 'boolean')
+    ) {
+      throw new BadRequestException('Invalid feature entitlement effects');
+    }
+
+    return { numeric, features };
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 }

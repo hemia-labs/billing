@@ -13,19 +13,18 @@ import { BillingProvider, SubscriptionStatus } from '../enums';
 import { BillingCustomerEntity } from './billing-customer.entity';
 import { BillingPlanEntity } from './billing-plan.entity';
 
-@Entity('billing_subscriptions')
-@Index('IDX_billing_subscriptions_organization_id', ['organizationId'])
-@Index('IDX_billing_subscriptions_product_code', ['productCode'])
-@Index('IDX_billing_subscriptions_plan_code', ['planCode'])
-@Index('IDX_billing_subscriptions_provider', ['provider'])
-@Index('IDX_billing_subscriptions_status', ['status'])
+@Entity('subscriptions')
+@Index('IDX_subscriptions_organization_id', ['organizationId'])
+@Index('IDX_subscriptions_product_code', ['productCode'])
+@Index('IDX_subscriptions_plan_code', ['planCode'])
+@Index('IDX_subscriptions_provider', ['provider'])
+@Index('IDX_subscriptions_status', ['status'])
 @Index(
-  'IDX_billing_subscriptions_provider_subscription_id_unique',
+  'IDX_subscriptions_provider_subscription_id_unique',
   ['providerSubscriptionId'],
   {
     unique: true,
-    where:
-      '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
+    where: '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
   },
 )
 export class BillingSubscriptionEntity {
@@ -58,7 +57,12 @@ export class BillingSubscriptionEntity {
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
 
-  @Column({ name: 'provider_subscription_id', length: 150, nullable: true })
+  @Column({
+    name: 'provider_subscription_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   providerSubscriptionId: string | null;
 
   @Column({

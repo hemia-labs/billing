@@ -38,13 +38,6 @@ export class BillingSubscriptionAddonsController {
     return this.service.getSummary(subscriptionId);
   }
 
-  @Post('subscription-addons/:id/activate')
-  activateAddon(
-    @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<SubscriptionAddonResponseDto> {
-    return this.service.activateAddon(id);
-  }
-
   @Post('subscription-addons/:id/schedule-cancel')
   scheduleCancel(
     @Param('id', ParseUUIDPipe) id: string,

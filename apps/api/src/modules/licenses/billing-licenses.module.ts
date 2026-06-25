@@ -13,6 +13,6 @@ import { BillingLicensesService } from './billing-licenses.service';
   ],
   controllers: [BillingLicensesController],
   providers: [BillingLicenseCalculatorService, BillingLicensesService],
-  exports: [BillingLicenseCalculatorService],
+  exports: [BillingLicenseCalculatorService, BillingLicensesService],
 })
 export class BillingLicensesModule {}

@@ -1,5 +1,6 @@
 export * from './addon-status.enum';
 export * from './billing-addon-type.enum';
+export * from './billing-addon-pricing-model.enum';
 export * from './billing-checkout-session-status.enum';
 export * from './billing-customer-status.enum';
 export * from './billing-plan-status.enum';

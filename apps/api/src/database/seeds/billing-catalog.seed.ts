@@ -5,6 +5,7 @@ import {
 } from '../../modules/billing-shared/constants';
 import {
   AddonStatus,
+  BillingAddonPricingModel,
   BillingAddonType,
   BillingPlanStatus,
   BillingProductStatus,
@@ -99,6 +100,15 @@ async function upsertAddon(product: BillingProductEntity): Promise<void> {
   addon.currency = DEFAULT_BILLING_CURRENCY;
   addon.billingInterval = BillingInterval.Monthly;
   addon.type = BillingAddonType.Recurring;
+  addon.pricingModel = BillingAddonPricingModel.PerUnit;
+  addon.minQuantity = 1;
+  addon.maxQuantity = null;
+  addon.provider = BillingProvider.Paypal;
+  addon.providerPlanId = null;
+  addon.entitlementEffects = {
+    numeric: { max_users: 1 },
+    features: {},
+  };
   addon.status = AddonStatus.Active;
   addon.metadata = {};
 

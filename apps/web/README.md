@@ -24,11 +24,11 @@ apps/web/
       layout.tsx                 # layout raíz
       page.tsx                   # home
       globals.css                # tokens Tailwind v4 + tema shadcn
-      [section]/page.tsx         # ruta dinámica de ejemplo
     components/
       app-sidebar.tsx, app-topbar.tsx, stat-card.tsx
       ui/                        # primitivos shadcn (button, input, badge, table)
     lib/
+      api/                       # cliente HTTP mínimo y sesión
       nav.ts, utils.ts           # navegación y helper cn()
 ```
 
@@ -38,8 +38,18 @@ Aliases: `@/components`, `@/components/ui`, `@/lib`, `@/lib/utils`, `@/hooks`.
 
 ```bash
 bun install
-bun run --cwd apps/web dev      # http://localhost:3000
+bun run --cwd apps/web dev      # http://localhost:5175
 ```
+
+Configurar API:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:3015/api/v1
+```
+
+El cliente HTTP vive en `src/lib/api` y usa cookies con
+`credentials: "include"`. Los permisos en UI son best-effort cuando
+`/auth/session` devuelve `scopes`; el backend sigue autorizando cada acción.
 
 ## Scripts
 

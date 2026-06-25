@@ -1,5 +1,6 @@
 export * from './billing-catalog-response.dto';
 export * from './catalog-product-query.dto';
+export * from './catalog-pagination.dto';
 export * from './create-billing-addon.dto';
 export * from './create-billing-plan.dto';
 export * from './create-billing-product.dto';

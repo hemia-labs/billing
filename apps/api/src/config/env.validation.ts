@@ -7,10 +7,10 @@ export const envVarsSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),
-  PORT: Joi.number().port().default(3001),
+  PORT: Joi.number().port().default(3015),
   APP_GLOBAL_PREFIX: Joi.string().default('api/v1'),
   CORS_ORIGINS: Joi.string().default(
-    'http://localhost:3000,http://localhost:3001',
+    'http://localhost:5175,http://localhost:3015',
   ),
   BILLING_INTERNAL_API_KEY: Joi.string().allow('').default(''),
   AUTH_ISSUER_URL: Joi.string().uri().allow('').default(''),
@@ -18,6 +18,22 @@ export const envVarsSchema = Joi.object({
   AUTH_AUDIENCE: Joi.string().allow('').default(''),
   AUTH_REQUIRED_ISSUER: Joi.string().uri().allow('').default(''),
   AUTH_LEGACY_API_KEY_ENABLED: Joi.boolean().default(false),
+  REDIS_HOST: Joi.string().hostname().optional(),
+  REDIS_PASSWORD: Joi.string().allow('').optional(),
+  REDIS_DB: Joi.number().integer().min(0).optional(),
+  SSO_ISSUER: Joi.string().uri().optional(),
+  SSO_CLIENT_ID: Joi.string().optional(),
+  SSO_CLIENT_SECRET: Joi.string().allow('').optional(),
+  SSO_AUDIENCE: Joi.string().optional(),
+  SSO_JWKS_URL: Joi.string().uri().allow('').optional(),
+  SSO_AUTHORIZATION_URL: Joi.string().uri().allow('').optional(),
+  SSO_TOKEN_URL: Joi.string().uri().allow('').optional(),
+  SSO_REVOCATION_URL: Joi.string().uri().allow('').optional(),
+  SSO_LOGOUT_URL: Joi.string().uri().allow('').optional(),
+  SSO_REDIRECT_URI: Joi.string().uri().optional(),
+  SSO_FRONTEND_URL: Joi.string().uri().optional(),
+  SSO_SCOPE: Joi.string().optional(),
+  SSO_COOKIE_NAME: Joi.string().optional(),
   PAYPAL_ENV: Joi.string().valid('sandbox', 'live').default('sandbox'),
   PAYPAL_CLIENT_ID: Joi.string().allow('').default(''),
   PAYPAL_CLIENT_SECRET: Joi.string().allow('').default(''),
@@ -25,6 +41,13 @@ export const envVarsSchema = Joi.object({
   PAYPAL_API_BASE_URL: Joi.string().uri().optional(),
   HEMIA_LEGAL_BASE_URL: Joi.string().uri().allow('').default(''),
   HEMIA_LEGAL_API_KEY: Joi.string().allow('').default(''),
+  BILLING_FISCAL_PROVIDER: Joi.string().default('noop'),
+  BILLING_FISCAL_API_BASE_URL: Joi.string().uri().allow('').default(''),
+  BILLING_FISCAL_API_KEY: Joi.string().allow('').default(''),
+  BILLING_FISCAL_STORAGE_ENDPOINT: Joi.string().uri().allow('').default(''),
+  BILLING_FISCAL_STORAGE_BUCKET: Joi.string().allow('').default(''),
+  BILLING_FISCAL_STORAGE_ACCESS_KEY_ID: Joi.string().allow('').default(''),
+  BILLING_FISCAL_STORAGE_SECRET_ACCESS_KEY: Joi.string().allow('').default(''),
   DB_HOST: Joi.string().required(),
   DB_PORT: Joi.number().port().default(5432),
   DB_USERNAME: Joi.string().required(),
@@ -68,6 +91,22 @@ export const envVarsSchema = Joi.object({
     if (legacyApiKeyEnabled) {
       return helpers.error('any.invalid', {
         message: 'AUTH_LEGACY_API_KEY_ENABLED cannot be true in production',
+      });
+    }
+
+    if (
+      !hasValue(env.REDIS_HOST as string) ||
+      !hasValue(env.REDIS_PASSWORD as string) ||
+      env.REDIS_DB === undefined ||
+      !hasValue(env.SSO_ISSUER as string) ||
+      !hasValue(env.SSO_CLIENT_ID as string) ||
+      !hasValue(env.SSO_AUDIENCE as string) ||
+      !hasValue(env.SSO_REDIRECT_URI as string) ||
+      !hasValue(env.SSO_FRONTEND_URL as string)
+    ) {
+      return helpers.error('any.invalid', {
+        message:
+          'REDIS_HOST, REDIS_PASSWORD, REDIS_DB, SSO_ISSUER, SSO_CLIENT_ID, SSO_AUDIENCE, SSO_REDIRECT_URI and SSO_FRONTEND_URL are required in production',
       });
     }
   }

@@ -14,12 +14,12 @@ import type { BillingCurrency } from '../constants';
 import { BillingPlanStatus, BillingProvider } from '../enums';
 import { BillingProductEntity } from './billing-product.entity';
 
-@Entity('billing_plans')
-@Index('IDX_billing_plans_product_id', ['productId'])
-@Index('IDX_billing_plans_code', ['code'])
-@Index('IDX_billing_plans_provider', ['provider'])
-@Index('IDX_billing_plans_provider_plan_id', ['providerPlanId'])
-@Index('IDX_billing_plans_status', ['status'])
+@Entity('plans')
+@Index('IDX_plans_product_id', ['productId'])
+@Index('IDX_plans_code', ['code'])
+@Index('IDX_plans_provider', ['provider'])
+@Index('IDX_plans_provider_plan_id', ['providerPlanId'])
+@Index('IDX_plans_status', ['status'])
 export class BillingPlanEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -37,7 +37,12 @@ export class BillingPlanEntity {
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
 
-  @Column({ name: 'provider_plan_id', length: 150, nullable: true })
+  @Column({
+    name: 'provider_plan_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   providerPlanId: string | null;
 
   @Column({ length: 120 })

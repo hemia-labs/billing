@@ -6,10 +6,12 @@ import { BillingCheckoutModule } from './checkout';
 import { BillingEntitlementsModule } from './entitlements';
 import { BillingInvoicesModule } from './invoices';
 import { BillingLicensesModule } from './licenses';
+import { BillingIntegrationsModule } from './integrations';
 import { BillingSubscriptionsManagementModule } from './subscriptions-management';
 import { BillingSubscriptionAddonsModule } from './subscription-addons';
 import { BillingWebhooksModule } from './webhooks';
 import { PaypalModule } from './paypal';
+import { BillingOperationsModule } from './operations';
 import {
   BillingAddonEntity,
   BillingAuditLogEntity,
@@ -51,6 +53,8 @@ import {
     BillingEntitlementsModule,
     BillingInvoicesModule,
     BillingLicensesModule,
+    BillingIntegrationsModule,
+    BillingOperationsModule,
     BillingSubscriptionsManagementModule,
     BillingSubscriptionAddonsModule,
     BillingWebhooksModule,

@@ -9,10 +9,10 @@ import {
 } from 'typeorm';
 import { BillingCustomerStatus, BillingProvider } from '../enums';
 
-@Entity('billing_customers')
-@Index('IDX_billing_customers_organization_id', ['organizationId'])
-@Index('IDX_billing_customers_provider', ['provider'])
-@Index('IDX_billing_customers_provider_payer_id', ['providerPayerId'])
+@Entity('customers')
+@Index('IDX_customers_organization_id', ['organizationId'])
+@Index('IDX_customers_provider', ['provider'])
+@Index('IDX_customers_provider_payer_id', ['providerPayerId'])
 export class BillingCustomerEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -23,16 +23,26 @@ export class BillingCustomerEntity {
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
 
-  @Column({ name: 'provider_payer_id', length: 150, nullable: true })
+  @Column({
+    name: 'provider_payer_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   providerPayerId: string | null;
 
-  @Column({ name: 'payer_email', length: 255, nullable: true })
+  @Column({ name: 'payer_email', type: 'varchar', length: 255, nullable: true })
   payerEmail: string | null;
 
-  @Column({ name: 'billing_email', length: 255, nullable: true })
+  @Column({
+    name: 'billing_email',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   billingEmail: string | null;
 
-  @Column({ length: 2, nullable: true })
+  @Column({ type: 'varchar', length: 2, nullable: true })
   country: string | null;
 
   @Column({

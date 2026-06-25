@@ -12,13 +12,13 @@ import {
 import { EntitlementStatus } from '../enums';
 import { BillingSubscriptionEntity } from './billing-subscription.entity';
 
-@Entity('billing_entitlements')
-@Index('IDX_billing_entitlements_subscription_id', ['subscriptionId'])
-@Index('IDX_billing_entitlements_organization_product', [
+@Entity('entitlements')
+@Index('IDX_entitlements_subscription_id', ['subscriptionId'])
+@Index('IDX_entitlements_organization_product', [
   'organizationId',
   'productCode',
 ])
-@Index('IDX_billing_entitlements_subscription_key_unique', ['subscriptionId', 'key'], {
+@Index('IDX_entitlements_subscription_key_unique', ['subscriptionId', 'key'], {
   unique: true,
   where: '"deleted_at" IS NULL',
 })

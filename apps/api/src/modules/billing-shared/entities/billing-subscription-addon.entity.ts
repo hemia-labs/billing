@@ -11,16 +11,29 @@ import {
 } from 'typeorm';
 import { BillingInterval } from '../constants';
 import type { BillingCurrency } from '../constants';
-import { SubscriptionAddonStatus } from '../enums';
+import {
+  BillingAddonPricingModel,
+  BillingProvider,
+  SubscriptionAddonStatus,
+} from '../enums';
 import { BillingAddonEntity } from './billing-addon.entity';
 import { BillingSubscriptionEntity } from './billing-subscription.entity';
+import type { AddonEntitlementEffects } from '../types';
 
-@Entity('billing_subscription_addons')
-@Index('IDX_billing_subscription_addons_subscription_id', ['subscriptionId'])
-@Index('IDX_billing_subscription_addons_addon_id', ['addonId'])
-@Index('IDX_billing_subscription_addons_status', ['status'])
+@Entity('subscription_addons')
+@Index('IDX_subscription_addons_subscription_id', ['subscriptionId'])
+@Index('IDX_subscription_addons_addon_id', ['addonId'])
+@Index('IDX_subscription_addons_status', ['status'])
+@Index('IDX_subscription_addons_provider_subscription_id', ['providerSubscriptionId'], {
+  unique: true,
+  where: '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
+})
+@Index('IDX_subscription_addons_subscription_idempotency_key', ['subscriptionId', 'idempotencyKey'], {
+  unique: true,
+  where: '"idempotency_key" IS NOT NULL AND "deleted_at" IS NULL',
+})
 @Index(
-  'IDX_billing_subscription_addons_subscription_addon_status_unique',
+  'IDX_subscription_addons_subscription_addon_status_unique',
   ['subscriptionId', 'addonId', 'status'],
   {
     unique: true,
@@ -67,6 +80,34 @@ export class BillingSubscriptionAddonEntity {
 
   @Column({ name: 'billing_interval', type: 'enum', enum: BillingInterval })
   billingInterval: BillingInterval;
+
+  @Column({ name: 'pricing_model', type: 'enum', enum: BillingAddonPricingModel })
+  pricingModel: BillingAddonPricingModel;
+
+  @Column({ name: 'entitlement_effects', type: 'jsonb' })
+  entitlementEffects: AddonEntitlementEffects;
+
+  @Column({ type: 'enum', enum: BillingProvider })
+  provider: BillingProvider;
+
+  @Column({
+    name: 'provider_reference_id',
+    type: 'varchar',
+    length: 180,
+    nullable: true,
+  })
+  providerReferenceId: string | null;
+
+  @Column({
+    name: 'provider_subscription_id',
+    type: 'varchar',
+    length: 180,
+    nullable: true,
+  })
+  providerSubscriptionId: string | null;
+
+  @Column({ name: 'idempotency_key', type: 'varchar', length: 120, nullable: true })
+  idempotencyKey: string | null;
 
   @Column({
     name: 'pending_effective_at',

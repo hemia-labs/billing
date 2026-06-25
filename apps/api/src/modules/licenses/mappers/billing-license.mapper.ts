@@ -12,6 +12,8 @@ const EMPTY_ENTITLEMENTS: BillingEntitlementsSummary = {
   extraUsers: 0,
   maxAgents: 0,
   maxConversationsMonthly: null,
+  additional: {},
+  featureFlags: {},
 };
 
 const EMPTY_BILLING: BillingAmountsSummary = {
@@ -61,7 +63,7 @@ export class BillingLicenseMapper {
       validUntil: license.validUntil?.toISOString() ?? null,
       seatsLimit: entitlements.maxUsers,
       usageLimit: entitlements.maxConversationsMonthly,
-      features: license.featuresJson,
+      features: { ...license.featuresJson, ...entitlements.featureFlags },
       subscriptionId: license.subscriptionId,
       entitlements,
       billing: calculated?.billing ?? EMPTY_BILLING,

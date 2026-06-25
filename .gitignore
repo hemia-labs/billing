@@ -11,3 +11,5 @@ docs/
 !docs/billing-development-progress.md
 ROADMAP_DESARROLLO_BILLING_CORE.md
 .agents/
+billing-integrations-v1.md
+docs/

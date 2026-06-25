@@ -6,6 +6,8 @@ export type BillingEntitlementsSummary = {
   extraUsers: number;
   maxAgents: number;
   maxConversationsMonthly: number | null;
+  additional: Record<string, number>;
+  featureFlags: Record<string, boolean>;
 };
 
 export type BillingAmountsSummary = {

@@ -7,6 +7,7 @@ import {
   NoopBillingInvoiceIssuerAdapter,
 } from './adapters';
 import { BillingInvoicesController } from './billing-invoices.controller';
+import { BillingInvoicesConsoleController } from './billing-invoices-console.controller';
 import { BillingInvoicesService } from './billing-invoices.service';
 
 @Module({
@@ -14,7 +15,7 @@ import { BillingInvoicesService } from './billing-invoices.service';
     TypeOrmModule.forFeature([BillingInvoiceEntity, BillingPaymentEntity]),
     BillingAuditModule,
   ],
-  controllers: [BillingInvoicesController],
+  controllers: [BillingInvoicesController, BillingInvoicesConsoleController],
   providers: [
     BillingInvoicesService,
     NoopBillingInvoiceIssuerAdapter,

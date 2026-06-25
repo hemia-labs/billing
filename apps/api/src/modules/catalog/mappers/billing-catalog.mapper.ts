@@ -4,6 +4,7 @@ import {
   BillingProductEntity,
 } from '../../billing-shared';
 import {
+  BillingActiveProductResponseDto,
   BillingAddonResponseDto,
   BillingPlanResponseDto,
   BillingProductResponseDto,
@@ -18,6 +19,12 @@ export class BillingCatalogMapper {
       description: entity.description,
       status: entity.status,
     };
+  }
+
+  static toActiveProductDto(
+    entity: BillingProductEntity,
+  ): BillingActiveProductResponseDto {
+    return { id: entity.id, code: entity.code, name: entity.name };
   }
 
   static toPlanDto(entity: BillingPlanEntity): BillingPlanResponseDto {
@@ -50,8 +57,13 @@ export class BillingCatalogMapper {
       currency: entity.currency,
       billingInterval: entity.billingInterval,
       type: entity.type,
+      pricingModel: entity.pricingModel,
+      minQuantity: entity.minQuantity,
+      maxQuantity: entity.maxQuantity,
+      provider: entity.provider,
+      providerPlanId: entity.providerPlanId,
+      entitlementEffects: entity.entitlementEffects,
       status: entity.status,
-      metadata: entity.metadata,
     };
   }
 }

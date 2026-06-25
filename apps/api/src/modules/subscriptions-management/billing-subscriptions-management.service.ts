@@ -239,6 +239,7 @@ export class BillingSubscriptionsManagementService {
 
   async verifyCheckoutSession(
     checkoutId: string,
+    actorUserId?: string,
   ): Promise<VerifyCheckoutSessionResponseDto> {
     const checkoutSession = await this.checkoutSessions.findOne({
       where: { id: checkoutId },
@@ -323,7 +324,7 @@ export class BillingSubscriptionsManagementService {
       await this.audit.record({
         manager,
         organizationId: subscription.organizationId,
-        actorUserId: checkoutSession.userId,
+        actorUserId: actorUserId ?? checkoutSession.userId,
         action: 'billing.checkout.manual_verified',
         resourceType: 'billing_checkout_session',
         resourceId: checkoutSession.id,

@@ -264,9 +264,10 @@ export class BillingCheckoutService {
 
   async getCheckoutStatus(
     checkoutId: string,
+    organizationId?: string,
   ): Promise<CheckoutSessionStatusResponseDto> {
     const checkoutSession = await this.checkoutSessions.findOne({
-      where: { id: checkoutId },
+      where: { id: checkoutId, ...(organizationId ? { organizationId } : {}) },
     });
 
     if (!checkoutSession) {
@@ -290,7 +291,6 @@ export class BillingCheckoutService {
       checkoutStatus: checkoutSession.status,
       subscriptionStatus: subscription.status,
       provider: checkoutSession.provider,
-      providerCheckoutUrl: checkoutSession.providerCheckoutUrl,
     };
   }
 

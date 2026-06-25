@@ -1,7 +1,8 @@
 import { BillingInterval } from '../../billing-shared';
-import type { BillingCurrency } from '../../billing-shared';
+import type { AddonEntitlementEffects, BillingCurrency } from '../../billing-shared';
 import {
   AddonStatus,
+  BillingAddonPricingModel,
   BillingAddonType,
   BillingPlanStatus,
   BillingProductStatus,
@@ -14,6 +15,12 @@ export class BillingProductResponseDto {
   name: string;
   description: string | null;
   status: BillingProductStatus;
+}
+
+export class BillingActiveProductResponseDto {
+  id: string;
+  code: string;
+  name: string;
 }
 
 export class BillingPlanResponseDto {
@@ -43,6 +50,11 @@ export class BillingAddonResponseDto {
   currency: BillingCurrency;
   billingInterval: BillingInterval;
   type: BillingAddonType;
+  pricingModel: BillingAddonPricingModel;
+  minQuantity: number;
+  maxQuantity: number | null;
+  provider: BillingProvider;
+  providerPlanId: string | null;
+  entitlementEffects: AddonEntitlementEffects;
   status: AddonStatus;
-  metadata: Record<string, unknown>;
 }

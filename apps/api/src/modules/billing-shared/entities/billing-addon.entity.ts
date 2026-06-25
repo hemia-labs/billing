@@ -11,15 +11,21 @@ import {
 } from 'typeorm';
 import { BillingInterval } from '../constants';
 import type { BillingCurrency } from '../constants';
-import { AddonStatus, BillingAddonType } from '../enums';
+import {
+  AddonStatus,
+  BillingAddonPricingModel,
+  BillingAddonType,
+  BillingProvider,
+} from '../enums';
 import { BillingProductEntity } from './billing-product.entity';
+import type { AddonEntitlementEffects } from '../types';
 
-@Entity('billing_addons')
-@Index('IDX_billing_addons_product_id', ['productId'])
-@Index('IDX_billing_addons_product_code', ['productCode'])
-@Index('IDX_billing_addons_code', ['code'])
-@Index('IDX_billing_addons_status', ['status'])
-@Index('IDX_billing_addons_product_code_code_active_unique', ['productCode', 'code'], {
+@Entity('addons')
+@Index('IDX_addons_product_id', ['productId'])
+@Index('IDX_addons_product_code', ['productCode'])
+@Index('IDX_addons_code', ['code'])
+@Index('IDX_addons_status', ['status'])
+@Index('IDX_addons_product_code_code_active_unique', ['productCode', 'code'], {
   unique: true,
   where: '"deleted_at" IS NULL',
 })
@@ -57,6 +63,33 @@ export class BillingAddonEntity {
 
   @Column({ type: 'enum', enum: BillingAddonType })
   type: BillingAddonType;
+
+  @Column({ name: 'pricing_model', type: 'enum', enum: BillingAddonPricingModel })
+  pricingModel: BillingAddonPricingModel;
+
+  @Column({ name: 'min_quantity', type: 'int', default: 1 })
+  minQuantity: number;
+
+  @Column({ name: 'max_quantity', type: 'int', nullable: true })
+  maxQuantity: number | null;
+
+  @Column({ type: 'enum', enum: BillingProvider })
+  provider: BillingProvider;
+
+  @Column({
+    name: 'provider_plan_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
+  providerPlanId: string | null;
+
+  @Column({
+    name: 'entitlement_effects',
+    type: 'jsonb',
+    default: () => "'{\"numeric\":{},\"features\":{}}'::jsonb",
+  })
+  entitlementEffects: AddonEntitlementEffects;
 
   @Column({
     type: 'enum',

@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { InvoiceStatus } from '../../billing-shared';
 
 export class ListBillingInvoicesQueryDto {
@@ -13,4 +13,20 @@ export class ListBillingInvoicesQueryDto {
   @IsOptional()
   @IsEnum(InvoiceStatus)
   status?: InvoiceStatus;
+
+  @IsOptional()
+  @IsDateString()
+  created_from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  created_to?: string;
+
+  @IsOptional()
+  @IsDateString()
+  issued_from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  issued_to?: string;
 }

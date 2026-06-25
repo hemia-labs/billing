@@ -1,15 +1,22 @@
 import {
   IsEnum,
+  IsInt,
   IsIn,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { BILLING_CURRENCIES, BillingInterval } from '../../billing-shared';
-import type { BillingCurrency } from '../../billing-shared';
-import { AddonStatus, BillingAddonType } from '../../billing-shared';
+import type { AddonEntitlementEffects, BillingCurrency } from '../../billing-shared';
+import {
+  AddonStatus,
+  BillingAddonPricingModel,
+  BillingAddonType,
+  BillingProvider,
+} from '../../billing-shared';
 
 export class UpdateBillingAddonDto {
   @IsOptional()
@@ -50,6 +57,33 @@ export class UpdateBillingAddonDto {
   @IsOptional()
   @IsEnum(BillingAddonType)
   type?: BillingAddonType;
+
+  @IsOptional()
+  @IsEnum(BillingAddonPricingModel)
+  pricingModel?: BillingAddonPricingModel;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  minQuantity?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxQuantity?: number | null;
+
+  @IsOptional()
+  @IsEnum(BillingProvider)
+  provider?: BillingProvider;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  providerPlanId?: string | null;
+
+  @IsOptional()
+  @IsObject()
+  entitlementEffects?: AddonEntitlementEffects;
 
   @IsOptional()
   @IsEnum(AddonStatus)

@@ -6,8 +6,8 @@ Monorepo con **Next.js** (frontend) y **NestJS** (backend), gestionado con **bun
 
 | App | Stack | Puerto | README |
 |-----|-------|--------|--------|
-| [`apps/web`](apps/web) | Next.js 16, React 19, Tailwind v4, shadcn | 3000 | [ver](apps/web/README.md) |
-| [`apps/api`](apps/api) | NestJS 11, TypeORM, PostgreSQL | 3001 | [ver](apps/api/README.md) |
+| [`apps/web`](apps/web) | Next.js 16, React 19, Tailwind v4, shadcn | 5175 | [ver](apps/web/README.md) |
+| [`apps/api`](apps/api) | NestJS 11, TypeORM, PostgreSQL | 3015 | [ver](apps/api/README.md) |
 
 > La base de datos del backend viene **desactivada** hasta configurarla. Detalles en el README de `apps/api`.
 
@@ -22,8 +22,8 @@ Monorepo con **Next.js** (frontend) y **NestJS** (backend), gestionado con **bun
 bun install
 
 bun run dev        # levanta web + api en paralelo
-bun run dev:web    # solo frontend (http://localhost:3000)
-bun run dev:api    # solo backend  (http://localhost:3001)
+bun run dev:web    # solo frontend (http://localhost:5175)
+bun run dev:api    # solo backend  (http://localhost:3015)
 ```
 
 ## Build

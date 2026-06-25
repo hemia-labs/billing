@@ -1,16 +1,31 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, Repository } from 'typeorm';
+import {
+  Between,
+  FindOperator,
+  FindOptionsWhere,
+  In,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { BillingAuditService } from '../audit';
 import { BillingInvoiceEntity, BillingPaymentEntity } from '../billing-shared';
 import { InvoiceStatus, PaymentStatus } from '../billing-shared';
+import { BILLING_INVOICE_ISSUER_ADAPTER } from './adapters';
+import type {
+  BillingInvoiceIssuerAdapter,
+  BillingInvoiceIssuerResult,
+} from './adapters';
 import {
   BillingInvoiceResponseDto,
+  ConsoleBillingInvoiceResponseDto,
   CreateBillingInvoiceDto,
   ListBillingInvoicesQueryDto,
   MarkBillingInvoiceFailedDto,
@@ -28,6 +43,8 @@ export class BillingInvoicesService {
     @InjectRepository(BillingPaymentEntity)
     private readonly payments: Repository<BillingPaymentEntity>,
     private readonly audit: BillingAuditService,
+    @Inject(BILLING_INVOICE_ISSUER_ADAPTER)
+    private readonly issuer: BillingInvoiceIssuerAdapter,
   ) {}
 
   async createInvoice(
@@ -83,10 +100,7 @@ export class BillingInvoicesService {
   async listInvoices(
     query: ListBillingInvoicesQueryDto,
   ): Promise<BillingInvoiceResponseDto[]> {
-    const where: FindOptionsWhere<BillingInvoiceEntity> = {};
-    if (query.organization_id) where.organizationId = query.organization_id;
-    if (query.payment_id) where.paymentId = query.payment_id;
-    if (query.status) where.status = query.status;
+    const where = this.buildInvoiceWhere(query);
 
     const invoices = await this.invoices.find({
       where,
@@ -94,6 +108,95 @@ export class BillingInvoicesService {
     });
 
     return invoices.map(BillingInvoiceMapper.toDto);
+  }
+
+  async listConsoleInvoices(
+    query: ListBillingInvoicesQueryDto,
+  ): Promise<ConsoleBillingInvoiceResponseDto[]> {
+    const invoices = await this.listInvoices(query);
+    return invoices.map(this.toConsoleDto);
+  }
+
+  async getConsoleInvoice(id: string): Promise<ConsoleBillingInvoiceResponseDto> {
+    return this.toConsoleDto(await this.getInvoice(id));
+  }
+
+  async issueInvoice(id: string): Promise<ConsoleBillingInvoiceResponseDto> {
+    const invoice = await this.findInvoice(id);
+    if (invoice.status !== InvoiceStatus.Pending) {
+      throw new BadRequestException('Only pending invoices can be issued');
+    }
+
+    const previousStatus = invoice.status;
+
+    let issued: BillingInvoiceIssuerResult;
+    try {
+      issued = await this.issuer.issue(invoice);
+    } catch (error) {
+      invoice.status = InvoiceStatus.Failed;
+      invoice.metadata = {
+        ...invoice.metadata,
+        failureReason: this.cleanError(error),
+      };
+      const saved = await this.invoices.save(invoice);
+      await this.auditInvoice(saved, 'billing.invoice.failed', previousStatus, {
+        error: this.cleanError(error),
+      });
+      throw error;
+    }
+
+    invoice.cfdiUuid = issued.cfdiUuid;
+    invoice.xmlUrl = issued.xmlUrl;
+    invoice.pdfUrl = issued.pdfUrl;
+    invoice.issuedAt = issued.issuedAt;
+    invoice.status = InvoiceStatus.Issued;
+    invoice.metadata = {
+      ...invoice.metadata,
+      provider: issued.provider,
+      providerReference: issued.providerReference,
+    };
+
+    const saved = await this.invoices.save(invoice);
+    await this.auditInvoice(saved, 'billing.invoice.issued', previousStatus, {
+      provider: issued.provider,
+      providerReference: issued.providerReference,
+    });
+    return this.toConsoleDto(BillingInvoiceMapper.toDto(saved));
+  }
+
+  async cancelInvoice(id: string): Promise<ConsoleBillingInvoiceResponseDto> {
+    const invoice = await this.findInvoice(id);
+    if (invoice.status !== InvoiceStatus.Issued) {
+      throw new BadRequestException('Only issued invoices can be cancelled');
+    }
+
+    const previousStatus = invoice.status;
+    const cancelled = await this.issuer.cancel(invoice);
+    invoice.status = InvoiceStatus.Cancelled;
+    invoice.metadata = {
+      ...invoice.metadata,
+      providerReference: cancelled?.providerReference,
+    };
+
+    const saved = await this.invoices.save(invoice);
+    await this.auditInvoice(saved, 'billing.invoice.cancelled', previousStatus, {
+      providerReference: cancelled?.providerReference,
+    });
+    return this.toConsoleDto(BillingInvoiceMapper.toDto(saved));
+  }
+
+  private buildInvoiceWhere(
+    query: ListBillingInvoicesQueryDto,
+  ): FindOptionsWhere<BillingInvoiceEntity> {
+    const where: FindOptionsWhere<BillingInvoiceEntity> = {};
+    if (query.organization_id) where.organizationId = query.organization_id;
+    if (query.payment_id) where.paymentId = query.payment_id;
+    if (query.status) where.status = query.status;
+    where.createdAt = this.dateRange(query.created_from, query.created_to);
+    where.issuedAt = this.dateRange(query.issued_from, query.issued_to);
+    return Object.fromEntries(
+      Object.entries(where).filter(([, value]) => value !== undefined),
+    ) as FindOptionsWhere<BillingInvoiceEntity>;
   }
 
   async getInvoice(id: string): Promise<BillingInvoiceResponseDto> {
@@ -180,6 +283,7 @@ export class BillingInvoicesService {
     invoice: BillingInvoiceEntity,
     action: string,
     previousStatus: InvoiceStatus | null,
+    extraMetadata: Record<string, unknown> = {},
   ): Promise<void> {
     await this.audit.record({
       organizationId: invoice.organizationId,
@@ -191,7 +295,29 @@ export class BillingInvoicesService {
         paymentId: invoice.paymentId,
         previousStatus,
         newStatus: invoice.status,
+        ...extraMetadata,
       },
     });
+  }
+
+  private dateRange(
+    from?: string,
+    to?: string,
+  ): FindOperator<Date> | undefined {
+    if (from && to) return Between(new Date(from), new Date(to));
+    if (from) return MoreThanOrEqual(new Date(from));
+    if (to) return LessThanOrEqual(new Date(to));
+    return undefined;
+  }
+
+  private toConsoleDto(
+    invoice: BillingInvoiceResponseDto,
+  ): ConsoleBillingInvoiceResponseDto {
+    const { metadata: _metadata, ...safeInvoice } = invoice;
+    return safeInvoice;
+  }
+
+  private cleanError(error: unknown): string {
+    return error instanceof Error ? error.message : 'Invoice issuer failed';
   }
 }

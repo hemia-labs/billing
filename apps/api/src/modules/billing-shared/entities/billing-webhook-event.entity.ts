@@ -1,23 +1,22 @@
-import {
-  Column,
-  Entity,
-  Index,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import {
   BillingProvider,
   WebhookProcessingStatus,
   WebhookVerificationStatus,
 } from '../enums';
 
-@Entity('billing_webhook_events')
-@Index('IDX_billing_webhook_events_provider_event_id_unique', ['providerEventId'], {
-  unique: true,
-})
-@Index('IDX_billing_webhook_events_provider', ['provider'])
-@Index('IDX_billing_webhook_events_event_type', ['eventType'])
-@Index('IDX_billing_webhook_events_resource_id', ['resourceId'])
-@Index('IDX_billing_webhook_events_processing_status', ['processingStatus'])
+@Entity('webhook_events')
+@Index(
+  'IDX_webhook_events_provider_event_id_unique',
+  ['providerEventId'],
+  {
+    unique: true,
+  },
+)
+@Index('IDX_webhook_events_provider', ['provider'])
+@Index('IDX_webhook_events_event_type', ['eventType'])
+@Index('IDX_webhook_events_resource_id', ['resourceId'])
+@Index('IDX_webhook_events_processing_status', ['processingStatus'])
 export class BillingWebhookEventEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -31,10 +30,15 @@ export class BillingWebhookEventEntity {
   @Column({ name: 'event_type', length: 180 })
   eventType: string;
 
-  @Column({ name: 'resource_id', length: 180, nullable: true })
+  @Column({ name: 'resource_id', type: 'varchar', length: 180, nullable: true })
   resourceId: string | null;
 
-  @Column({ name: 'transmission_id', length: 180, nullable: true })
+  @Column({
+    name: 'transmission_id',
+    type: 'varchar',
+    length: 180,
+    nullable: true,
+  })
   transmissionId: string | null;
 
   @Column({

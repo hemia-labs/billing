@@ -60,6 +60,8 @@ export class PaypalClientService {
       },
     };
 
+    if (input.quantity) payload.quantity = String(input.quantity);
+
     if (input.subscriberEmail) {
       payload.subscriber = {
         email_address: input.subscriberEmail,
@@ -70,6 +72,9 @@ export class PaypalClientService {
       '/v1/billing/subscriptions',
       {
         method: 'POST',
+        headers: input.requestId
+          ? { 'PayPal-Request-Id': input.requestId }
+          : undefined,
         body: JSON.stringify(payload),
       },
     );
@@ -96,6 +101,7 @@ export class PaypalClientService {
       planId: typeof raw.plan_id === 'string' ? raw.plan_id : undefined,
       billingInfo: this.asRecord(raw.billing_info),
       subscriber: this.asRecord(raw.subscriber),
+      approvalUrl: this.findApprovalUrl(raw),
       raw,
     };
   }

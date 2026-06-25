@@ -13,11 +13,11 @@ import type { BillingCurrency } from '../constants';
 import { InvoiceStatus } from '../enums';
 import { BillingPaymentEntity } from './billing-payment.entity';
 
-@Entity('billing_invoices')
-@Index('IDX_billing_invoices_organization_id', ['organizationId'])
-@Index('IDX_billing_invoices_payment_id', ['paymentId'])
-@Index('IDX_billing_invoices_cfdi_uuid', ['cfdiUuid'])
-@Index('IDX_billing_invoices_status', ['status'])
+@Entity('invoices')
+@Index('IDX_invoices_organization_id', ['organizationId'])
+@Index('IDX_invoices_payment_id', ['paymentId'])
+@Index('IDX_invoices_cfdi_uuid', ['cfdiUuid'])
+@Index('IDX_invoices_status', ['status'])
 export class BillingInvoiceEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -32,7 +32,7 @@ export class BillingInvoiceEntity {
   @JoinColumn({ name: 'payment_id' })
   payment: BillingPaymentEntity;
 
-  @Column({ name: 'cfdi_uuid', length: 120, nullable: true })
+  @Column({ name: 'cfdi_uuid', type: 'varchar', length: 120, nullable: true })
   cfdiUuid: string | null;
 
   @Column({ length: 13 })

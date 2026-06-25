@@ -1,61 +1,58 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { nav } from "@/lib/nav";
 
 export function AppSidebar() {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <aside
-      className={cn(
-        "hidden shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out md:flex",
-        collapsed ? "w-sidebar-collapsed" : "w-sidebar"
-      )}
-    >
-      <div className="flex h-topbar items-center gap-2 px-4">
-        {!collapsed && <span className="flex-1 truncate text-lg font-bold">Nextjs Template</span>}
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          aria-label={collapsed ? "Expandir menú" : "Colapsar menú"}
-          aria-expanded={!collapsed}
-          className="grid size-12 shrink-0 place-items-center rounded-md text-blue-50/95 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          {collapsed ? <PanelLeftOpen className="size-6" /> : <PanelLeftClose className="size-6" />}
-        </button>
-      </div>
-      <nav className="flex flex-1 flex-col gap-1 px-4 py-2">
-        {nav.map(({ href, label, icon: Icon }) => {
-          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              title={collapsed ? label : undefined}
-              className={cn(
-                "flex min-h-12 items-center gap-3 rounded-md text-sm font-medium transition-colors",
-                collapsed ? "justify-center px-0" : "px-3",
-                active
-                  ? "bg-primary text-primary-foreground shadow-lg shadow-blue-950/25"
-                  : "text-blue-50/95 hover:bg-white/10 hover:text-white"
-              )}
-            >
-              <Icon className="size-5 shrink-0" />
-              <span className={cn(collapsed && "sr-only")}>{label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-      <div className="m-4 flex items-center gap-2 rounded-lg bg-white/5 p-3 text-xs">
-        <span className="size-2 shrink-0 rounded-full bg-emerald-400" />
-        {!collapsed && <span className="truncate text-blue-50/95">Sistema operativo</span>}
-      </div>
-    </aside>
+    <Sidebar collapsible="icon" className="border-r-0">
+      <SidebarHeader className="p-4 group-data-[collapsible=icon]:px-2">
+        <div className="flex h-12 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-lg font-bold group-data-[collapsible=icon]:hidden">
+            Hemia Billing
+          </span>
+          <SidebarTrigger
+            aria-label="Colapsar navegación"
+            className="hidden size-12 text-blue-50 hover:bg-white/10 hover:text-white [&_svg]:size-5! group-data-[collapsible=icon]:mx-auto md:inline-flex"
+          />
+        </div>
+      </SidebarHeader>
+      <SidebarContent className="px-4 py-2 group-data-[collapsible=icon]:px-2">
+        <SidebarGroup className="p-0">
+          <SidebarMenu className="gap-1">
+            {nav.map(({ href, label, icon: Icon }) => {
+              const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+              return (
+                <SidebarMenuItem key={href}>
+                  <SidebarMenuButton
+                    render={<Link href={href} />}
+                    isActive={active}
+                    size="lg"
+                    tooltip={label}
+                    className="text-blue-50/95 hover:bg-white/10 hover:text-white [&_svg]:size-5! data-active:bg-primary data-active:text-primary-foreground data-active:shadow-lg data-active:shadow-blue-950/25 group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:w-12! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0!"
+                  >
+                    <Icon className="size-5" />
+                    <span className="group-data-[collapsible=icon]:hidden">{label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
+    </Sidebar>
   );
 }

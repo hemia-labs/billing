@@ -1,4 +1,10 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { AuthenticatedRequest } from '../types/authenticated-request.type';
 import { BillingInternalApiKeyGuard } from './billing-internal-api-key.guard';
 import { SsoBearerGuard } from './sso-bearer.guard';
 
@@ -14,7 +20,17 @@ export class BillingInternalAuthGuard implements CanActivate {
     const authorization = request.header('authorization');
 
     if (authorization?.startsWith('Bearer ')) {
-      return this.ssoBearerGuard.canActivate(context);
+      await this.ssoBearerGuard.canActivate(context);
+
+      const authenticatedRequest = context
+        .switchToHttp()
+        .getRequest<AuthenticatedRequest>();
+
+      if (!authenticatedRequest.principal?.isMachine) {
+        throw new UnauthorizedException('User credentials cannot access integrations');
+      }
+
+      return true;
     }
 
     const allowedByApiKey = this.apiKeyGuard.canActivate(context);

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from '../audit';
 import { BillingEntitlementsModule } from '../entitlements';
+import { PaypalModule } from '../paypal';
 import {
   BillingAddonEntity,
   BillingSubscriptionAddonEntity,
@@ -9,7 +10,10 @@ import {
   BillingUsageCounterEntity,
 } from '../billing-shared';
 import { BillingSubscriptionAddonsController } from './billing-subscription-addons.controller';
+import { BillingSubscriptionAddonsConsoleController } from './billing-subscription-addons-console.controller';
+import { BillingSubscriptionAddonPaymentsProcessorService } from './billing-subscription-addon-payments-processor.service';
 import { BillingSubscriptionAddonsService } from './billing-subscription-addons.service';
+import { BillingSubscriptionAddonsWorker } from './billing-subscription-addons.worker';
 
 @Module({
   imports: [
@@ -21,9 +25,20 @@ import { BillingSubscriptionAddonsService } from './billing-subscription-addons.
     ]),
     BillingAuditModule,
     BillingEntitlementsModule,
+    PaypalModule,
   ],
-  controllers: [BillingSubscriptionAddonsController],
-  providers: [BillingSubscriptionAddonsService],
-  exports: [BillingSubscriptionAddonsService],
+  controllers: [
+    BillingSubscriptionAddonsController,
+    BillingSubscriptionAddonsConsoleController,
+  ],
+  providers: [
+    BillingSubscriptionAddonsService,
+    BillingSubscriptionAddonPaymentsProcessorService,
+    BillingSubscriptionAddonsWorker,
+  ],
+  exports: [
+    BillingSubscriptionAddonsService,
+    BillingSubscriptionAddonPaymentsProcessorService,
+  ],
 })
 export class BillingSubscriptionAddonsModule {}

@@ -13,11 +13,11 @@ import { LicenseStatus } from '../enums';
 import { BillingProductEntity } from './billing-product.entity';
 import { BillingSubscriptionEntity } from './billing-subscription.entity';
 
-@Entity('billing_licenses')
-@Index('IDX_billing_licenses_organization_id', ['organizationId'])
-@Index('IDX_billing_licenses_product_code', ['productCode'])
-@Index('IDX_billing_licenses_subscription_id', ['subscriptionId'])
-@Index('IDX_billing_licenses_status', ['status'])
+@Entity('licenses')
+@Index('IDX_licenses_organization_id', ['organizationId'])
+@Index('IDX_licenses_product_code', ['productCode'])
+@Index('IDX_licenses_subscription_id', ['subscriptionId'])
+@Index('IDX_licenses_status', ['status'])
 export class BillingLicenseEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -45,7 +45,12 @@ export class BillingLicenseEntity {
   @Column({ name: 'plan_code', length: 100 })
   planCode: string;
 
-  @Column({ name: 'license_key_hash', length: 255, nullable: true })
+  @Column({
+    name: 'license_key_hash',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   licenseKeyHash: string | null;
 
   @Column({

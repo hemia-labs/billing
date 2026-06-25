@@ -9,8 +9,8 @@ import {
 } from 'typeorm';
 import { BillingProductStatus } from '../enums';
 
-@Entity('billing_products')
-@Index('IDX_billing_products_code_active_unique', ['code'], {
+@Entity('products')
+@Index('IDX_products_code_active_unique', ['code'], {
   unique: true,
   where: '"deleted_at" IS NULL',
 })

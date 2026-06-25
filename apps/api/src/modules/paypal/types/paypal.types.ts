@@ -5,6 +5,8 @@ export interface CreatePaypalSubscriptionInput {
   customId: string;
   returnUrl: string;
   cancelUrl: string;
+  quantity?: number;
+  requestId?: string;
   subscriberEmail?: string;
 }
 
@@ -21,6 +23,7 @@ export interface PaypalSubscriptionDetails {
   planId?: string;
   billingInfo?: Record<string, unknown>;
   subscriber?: Record<string, unknown>;
+  approvalUrl?: string;
   raw: Record<string, unknown>;
 }
 

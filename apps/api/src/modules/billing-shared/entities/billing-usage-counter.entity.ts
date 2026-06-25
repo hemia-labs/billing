@@ -8,8 +8,8 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-@Entity('billing_usage_counters')
-@Index('IDX_billing_usage_counters_organization_product_key_unique', [
+@Entity('usage_counters')
+@Index('IDX_usage_counters_organization_product_key_unique', [
   'organizationId',
   'productCode',
   'key',

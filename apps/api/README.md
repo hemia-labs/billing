@@ -53,9 +53,9 @@ Copia `.env.example` a `.env` y completa los valores:
 
 ```
 NODE_ENV=development
-PORT=3001
+PORT=3015
 APP_GLOBAL_PREFIX=api/v1
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+CORS_ORIGINS=http://localhost:5175,http://localhost:3015
 BILLING_INTERNAL_API_KEY=
 AUTH_ISSUER_URL=
 AUTH_JWKS_URI=
@@ -80,17 +80,36 @@ DB_DATABASE=
 DB_LOGGING=false
 ```
 
-`PORT` default `3001`. `APP_GLOBAL_PREFIX` default `api/v1`.
+`PORT` default `3015`. `APP_GLOBAL_PREFIX` default `api/v1`.
 
 ## Seguridad
 
 - Endpoints publicos: `GET /billing/catalog/plans` y `GET /billing/catalog/addons`.
 - Webhook publico: `POST /billing/webhooks/paypal`; no usa sesion, JWT ni API key, depende de la verificacion de firma PayPal.
-- Endpoints internos de billing usan Bearer token emitido por Identity con grant `client_credentials` y scopes de billing.
+- Integraciones de producto usan sólo Bearer emitido por Identity con grant
+  `client_credentials` y scopes de billing; los Bearer de usuario se rechazan.
+- `GET /billing/catalog/products` es el catálogo mínimo para integraciones y
+  requiere `billing.integration.catalog.read`. Los `POST/PATCH /billing/*`
+  de catálogo conservan compatibilidad machine-only con `billing.catalog.manage`.
+- La futura consola usa sólo Bearer SSO de usuario mediante
+  `BillingConsoleAuthGuard`; rechaza `client_credentials` y API keys. Sus rutas
+  de catálogo son `billing/console/catalog/*`, con `billing.catalog.read` para
+  consultas y `billing.catalog.manage` para escritura.
 - `x-billing-internal-api-key` queda como compatibilidad legacy solo si `AUTH_LEGACY_API_KEY_ENABLED=true`; no se permite en production.
-- Guards OIDC/permisos disponibles: `SsoBearerGuard`, `BillingInternalAuthGuard`, `PermissionsGuard` y `@Permissions(...)`.
+- Guards OIDC/permisos disponibles: `SsoBearerGuard`, `BillingInternalAuthGuard`, `BillingConsoleAuthGuard`, `PermissionsGuard` y `@Permissions(...)`.
 - Token esperado: `Authorization: Bearer <access_token>` firmado RS256 y verificable por `AUTH_JWKS_URI`.
 - Scopes soportan exacto, `billing.*` y `*.*`; pueden venir como `scope` string OAuth o `scopes` array.
+- Scopes de consola a registrar/asignar en Identity: `billing.dashboard.read`,
+  `billing.catalog.read`, `billing.catalog.manage`, `billing.subscriptions.read`,
+  `billing.subscriptions.manage`, `billing.licenses.read`, `billing.addons.read`,
+  `billing.addons.manage`, `billing.invoices.read`, `billing.invoices.manage`,
+  `billing.webhooks.read`, `billing.webhooks.retry` y `billing.audit.read`.
+- Los responses de consola futuros no expondrán secrets, payloads/headers de
+  PayPal, metadata no saneada, referencias legales completas ni URLs de
+  aprobación. La URL de aprobación sólo se devuelve al crear un checkout de
+  integración; el endpoint de estado no la repite.
+- Los listados de catálogo de consola usan `page` y `limit` (máximo 100), con
+  filtros de producto, estado, proveedor, moneda e intervalo donde aplica.
 - `@hemia/auth` no esta instalado en esta fase. `IdentityClientPort` queda listo para una futura implementacion con `@hemia/auth/SsoClient` contra `/external/*`.
 - En `production`, usa HTTPS para webhooks, `CORS_ORIGINS` explicito, OIDC/JWKS completo y PayPal live sin URL sandbox.
 
@@ -108,10 +127,12 @@ El servidor requiere variables `DB_*` válidas para inicializar TypeORM.
 
 ```bash
 bun run --cwd apps/api migration:create src/database/migrations/<Nombre>
-bun run --cwd apps/api migration:generate src/database/migrations/<Nombre>
+bun run --cwd apps/api migration:generate
 bun run --cwd apps/api migration:run
 bun run --cwd apps/api migration:revert
 ```
+
+`migration:generate` crea `src/database/migrations/<timestamp>-migration.ts`.
 
 `synchronize` está en `false`: todo cambio de schema requiere migración.
 
