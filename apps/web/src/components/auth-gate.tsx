@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { ApiError, redirectToLogin } from "@/lib/api";
 import { getSession, logout, type Session } from "@/lib/api/session";
 
@@ -22,13 +23,29 @@ export function AuthGate({ children }: Readonly<{ children: React.ReactNode }>) 
       });
   }, []);
 
-  if (!session) {
+  if (session === undefined) {
     return (
       <main className="grid min-h-screen place-items-center bg-background p-6" aria-label="Validando sesión">
         <div className="w-full max-w-xs space-y-3">
           <Skeleton className="h-6 w-2/3" />
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-4/5" />
+        </div>
+      </main>
+    );
+  }
+
+  if (session === null) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background p-6">
+        <div className="w-full max-w-xs space-y-4 rounded-lg border border-border bg-card p-5 shadow-sm">
+          <div>
+            <h1 className="text-lg font-semibold text-foreground">Sesión cerrada</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Inicia sesión para volver a Billing.</p>
+          </div>
+          <Button className="w-full" onClick={() => redirectToLogin()}>
+            Iniciar sesión
+          </Button>
         </div>
       </main>
     );

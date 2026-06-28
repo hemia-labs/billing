@@ -11,6 +11,8 @@ import {
 } from 'typeorm';
 import { BillingCheckoutSessionStatus, BillingProvider } from '../enums';
 import { BillingPlanEntity } from './billing-plan.entity';
+import { BillingPlanPriceEntity } from './billing-plan-price.entity';
+import { BillingProviderPriceEntity } from './billing-provider-price.entity';
 
 @Entity('checkout_sessions')
 @Index('IDX_checkout_sessions_organization_id', ['organizationId'])
@@ -37,6 +39,23 @@ export class BillingCheckoutSessionEntity {
   @ManyToOne(() => BillingPlanEntity, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'plan_id' })
   plan: BillingPlanEntity;
+
+  @Column({ name: 'plan_price_id', type: 'uuid', nullable: true })
+  planPriceId: string | null;
+
+  @ManyToOne(() => BillingPlanPriceEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'plan_price_id' })
+  planPrice: BillingPlanPriceEntity | null;
+
+  @Column({ name: 'provider_price_id', type: 'uuid', nullable: true })
+  providerPriceId: string | null;
+
+  @ManyToOne(() => BillingProviderPriceEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'provider_price_id' })
+  providerPrice: BillingProviderPriceEntity | null;
+
+  @Column({ name: 'plan_price_code', type: 'varchar', length: 100, nullable: true })
+  planPriceCode: string | null;
 
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;

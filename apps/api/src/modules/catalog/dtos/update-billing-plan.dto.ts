@@ -1,17 +1,18 @@
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsEnum,
-  IsIn,
-  IsInt,
-  IsObject,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
-  Min,
+  ValidateNested,
 } from 'class-validator';
-import { BILLING_CURRENCIES, BillingInterval } from '../../billing-shared';
-import type { BillingCurrency } from '../../billing-shared';
-import { BillingPlanStatus, BillingProvider } from '../../billing-shared';
+import { BillingPlanStatus } from '../../billing-shared';
+import {
+  CreateFeatureDefinitionDto,
+  CreatePlanVersionDto,
+} from './create-billing-plan.dto';
 
 export class UpdateBillingPlanDto {
   @IsOptional()
@@ -29,41 +30,26 @@ export class UpdateBillingPlanDto {
   code?: string;
 
   @IsOptional()
-  @IsEnum(BillingProvider)
-  provider?: BillingProvider;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  providerPlanId?: string | null;
-
-  @IsOptional()
   @IsString()
   @MaxLength(120)
   name?: string;
 
   @IsOptional()
-  @IsEnum(BillingInterval)
-  billingInterval?: BillingInterval;
-
-  @IsOptional()
-  @IsIn(BILLING_CURRENCIES)
-  currency?: BillingCurrency;
-
-  @IsOptional()
   @IsString()
-  amount?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  seatsIncluded?: number;
-
-  @IsOptional()
-  @IsObject()
-  featuresJson?: Record<string, unknown>;
+  description?: string | null;
 
   @IsOptional()
   @IsEnum(BillingPlanStatus)
   status?: BillingPlanStatus;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateFeatureDefinitionDto)
+  features?: CreateFeatureDefinitionDto[];
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatePlanVersionDto)
+  version?: CreatePlanVersionDto;
 }

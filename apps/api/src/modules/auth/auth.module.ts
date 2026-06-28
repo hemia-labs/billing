@@ -19,6 +19,7 @@ import { RedisSessionStore } from './redis-session-store';
     }),
   ],
   providers: [AuthLogoutMiddleware],
+  exports: [SsoModule],
 })
 export class AuthModule {
   configure(consumer: MiddlewareConsumer) {

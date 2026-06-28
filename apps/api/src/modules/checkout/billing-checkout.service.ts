@@ -21,6 +21,7 @@ import {
   BillingProvider,
   SubscriptionStatus,
 } from '../billing-shared';
+import { BillingPlanCatalogResolver } from '../catalog';
 import { PaypalClientService } from '../paypal';
 import { HemiaLegalClientService } from './clients';
 import {
@@ -45,6 +46,7 @@ export class BillingCheckoutService {
     private readonly products: Repository<BillingProductEntity>,
     @InjectRepository(BillingSubscriptionEntity)
     private readonly subscriptions: Repository<BillingSubscriptionEntity>,
+    private readonly planResolver: BillingPlanCatalogResolver,
   ) {}
 
   async createCheckoutSession(
@@ -55,9 +57,10 @@ export class BillingCheckoutService {
     }
 
     const product = await this.findActiveProduct(dto.productCode);
-    const plan = await this.findActivePlan(product.id, dto.planCode, dto.provider);
+    const plan = await this.findActivePlan(product.id, dto.planCode);
+    const resolved = this.planResolver.resolve(plan, dto.provider, dto.planPriceCode);
 
-    if (!plan.providerPlanId) {
+    if (!resolved.providerPrice.providerPriceId) {
       throw new BadRequestException('PayPal plan id is required for checkout');
     }
 
@@ -105,6 +108,11 @@ export class BillingCheckoutService {
             billingCustomer: customer,
             planId: plan.id,
             plan,
+            planPriceId: resolved.price.id,
+            planPrice: resolved.price,
+            providerPriceId: resolved.providerPrice.id,
+            providerPrice: resolved.providerPrice,
+            planPriceCode: resolved.price.code,
             productCode: product.code,
             planCode: plan.code,
             provider: dto.provider,
@@ -132,6 +140,11 @@ export class BillingCheckoutService {
             productCode: product.code,
             planId: plan.id,
             plan,
+            planPriceId: resolved.price.id,
+            planPrice: resolved.price,
+            providerPriceId: resolved.providerPrice.id,
+            providerPrice: resolved.providerPrice,
+            planPriceCode: resolved.price.code,
             provider: dto.provider,
             providerCheckoutUrl: null,
             status: BillingCheckoutSessionStatus.Created,
@@ -190,7 +203,7 @@ export class BillingCheckoutService {
 
     try {
       const paypalSubscription = await this.paypal.createSubscription({
-        providerPlanId: plan.providerPlanId,
+        providerPlanId: resolved.providerPrice.providerPriceId,
         customId: checkoutSession.id,
         returnUrl: dto.successUrl,
         cancelUrl: dto.cancelUrl,
@@ -311,16 +324,20 @@ export class BillingCheckoutService {
   private async findActivePlan(
     productId: string,
     planCode: string,
-    provider: BillingProvider,
   ): Promise<BillingPlanEntity> {
     const plan = await this.plans.findOne({
       where: {
         productId,
         code: planCode,
-        provider,
         status: BillingPlanStatus.Active,
       },
-      relations: { product: true },
+      relations: {
+        product: true,
+        versions: {
+          prices: { providerPrices: true },
+          entitlements: { feature: true },
+        },
+      },
     });
 
     if (!plan) {

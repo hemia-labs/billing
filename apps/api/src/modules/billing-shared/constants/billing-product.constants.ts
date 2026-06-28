@@ -3,5 +3,5 @@ export enum BillingProductCode {
 }
 
 export enum BillingPlanCode {
-  MedsyncProMonthly = 'medsync_pro_monthly',
+  MedsyncPro = 'medsync_pro',
 }

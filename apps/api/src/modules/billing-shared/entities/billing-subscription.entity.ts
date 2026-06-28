@@ -12,6 +12,8 @@ import {
 import { BillingProvider, SubscriptionStatus } from '../enums';
 import { BillingCustomerEntity } from './billing-customer.entity';
 import { BillingPlanEntity } from './billing-plan.entity';
+import { BillingPlanPriceEntity } from './billing-plan-price.entity';
+import { BillingProviderPriceEntity } from './billing-provider-price.entity';
 
 @Entity('subscriptions')
 @Index('IDX_subscriptions_organization_id', ['organizationId'])
@@ -53,6 +55,23 @@ export class BillingSubscriptionEntity {
 
   @Column({ name: 'plan_code', length: 100 })
   planCode: string;
+
+  @Column({ name: 'plan_price_id', type: 'uuid', nullable: true })
+  planPriceId: string | null;
+
+  @ManyToOne(() => BillingPlanPriceEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'plan_price_id' })
+  planPrice: BillingPlanPriceEntity | null;
+
+  @Column({ name: 'provider_price_id', type: 'uuid', nullable: true })
+  providerPriceId: string | null;
+
+  @ManyToOne(() => BillingProviderPriceEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'provider_price_id' })
+  providerPrice: BillingProviderPriceEntity | null;
+
+  @Column({ name: 'plan_price_code', type: 'varchar', length: 100, nullable: true })
+  planPriceCode: string | null;
 
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;

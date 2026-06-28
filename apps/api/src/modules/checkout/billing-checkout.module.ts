@@ -5,9 +5,11 @@ import {
   BillingCustomerEntity,
   BillingPlanEntity,
   BillingProductEntity,
+  BillingProviderPriceEntity,
   BillingSubscriptionEntity,
 } from '../billing-shared';
 import { BillingAuditModule } from '../audit';
+import { BillingCatalogModule } from '../catalog';
 import { PaypalModule } from '../paypal';
 import { BillingCheckoutController } from './billing-checkout.controller';
 import { BillingCheckoutService } from './billing-checkout.service';
@@ -20,9 +22,11 @@ import { HemiaLegalClientService } from './clients';
       BillingCustomerEntity,
       BillingPlanEntity,
       BillingProductEntity,
+      BillingProviderPriceEntity,
       BillingSubscriptionEntity,
     ]),
     BillingAuditModule,
+    BillingCatalogModule,
     PaypalModule,
   ],
   controllers: [BillingCheckoutController],

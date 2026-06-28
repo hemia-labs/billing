@@ -6,19 +6,21 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { BillingInterval } from '../constants';
-import type { BillingCurrency } from '../constants';
-import { BillingPlanStatus, BillingProvider } from '../enums';
+import { BillingPlanStatus } from '../enums';
+import { BillingPlanVersionEntity } from './billing-plan-version.entity';
 import { BillingProductEntity } from './billing-product.entity';
 
 @Entity('plans')
 @Index('IDX_plans_product_id', ['productId'])
 @Index('IDX_plans_code', ['code'])
-@Index('IDX_plans_provider', ['provider'])
-@Index('IDX_plans_provider_plan_id', ['providerPlanId'])
+@Index('IDX_plans_product_code_unique', ['productId', 'code'], {
+  unique: true,
+  where: '"deleted_at" IS NULL',
+})
 @Index('IDX_plans_status', ['status'])
 export class BillingPlanEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -34,38 +36,11 @@ export class BillingPlanEntity {
   @Column({ length: 100 })
   code: string;
 
-  @Column({ type: 'enum', enum: BillingProvider })
-  provider: BillingProvider;
-
-  @Column({
-    name: 'provider_plan_id',
-    type: 'varchar',
-    length: 150,
-    nullable: true,
-  })
-  providerPlanId: string | null;
-
   @Column({ length: 120 })
   name: string;
 
-  @Column({ name: 'billing_interval', type: 'enum', enum: BillingInterval })
-  billingInterval: BillingInterval;
-
-  @Column({ length: 3 })
-  currency: BillingCurrency;
-
-  @Column({ type: 'decimal', precision: 12, scale: 2 })
-  amount: string;
-
-  @Column({ name: 'seats_included', type: 'int', default: 0 })
-  seatsIncluded: number;
-
-  @Column({
-    name: 'features_json',
-    type: 'jsonb',
-    default: () => "'{}'::jsonb",
-  })
-  featuresJson: Record<string, unknown>;
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
 
   @Column({
     type: 'enum',
@@ -82,4 +57,7 @@ export class BillingPlanEntity {
 
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp with time zone' })
   deletedAt?: Date | null;
+
+  @OneToMany(() => BillingPlanVersionEntity, (version) => version.plan)
+  versions?: BillingPlanVersionEntity[];
 }

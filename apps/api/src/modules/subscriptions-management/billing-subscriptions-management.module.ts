@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from '../audit';
 import { BillingCheckoutModule } from '../checkout';
+import { BillingCatalogModule } from '../catalog';
 import { BillingEntitlementsModule } from '../entitlements';
 import {
   BillingCheckoutSessionEntity,
@@ -25,6 +26,7 @@ import { BillingSubscriptionsManagementService } from './billing-subscriptions-m
       BillingSubscriptionEntity,
     ]),
     BillingAuditModule,
+    BillingCatalogModule,
     BillingCheckoutModule,
     BillingEntitlementsModule,
     BillingLicensesModule,

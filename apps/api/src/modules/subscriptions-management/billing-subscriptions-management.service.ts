@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { BillingAuditService } from '../audit';
+import { BillingPlanCatalogResolver } from '../catalog';
 import { BillingCheckoutService } from '../checkout';
 import { BillingEntitlementsService } from '../entitlements';
 import {
@@ -53,6 +54,7 @@ export class BillingSubscriptionsManagementService {
     private readonly paypal: PaypalClientService,
     private readonly licenseCalculator: BillingLicenseCalculatorService,
     private readonly audit: BillingAuditService,
+    private readonly planResolver: BillingPlanCatalogResolver,
     @InjectRepository(BillingSubscriptionEntity)
     private readonly subscriptions: Repository<BillingSubscriptionEntity>,
     @InjectRepository(BillingPlanEntity)
@@ -71,7 +73,16 @@ export class BillingSubscriptionsManagementService {
         productCode,
         status: In(CURRENT_STATUS_PRIORITY),
       },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+        planPrice: true,
+        providerPrice: true,
+      },
       order: { updatedAt: 'DESC' },
     });
 
@@ -160,12 +171,17 @@ export class BillingSubscriptionsManagementService {
       throw new BadRequestException('Billing subscription is already terminal');
     }
 
-    const targetPlan = await this.findTargetPlan(subscription, dto.targetPlanCode);
+    const targetPlan = await this.findTargetPlan(
+      subscription,
+      dto.targetPlanCode,
+      dto.targetPlanPriceCode,
+    );
     const checkout = await this.checkout.createCheckoutSession({
       organizationId: subscription.organizationId,
       userId: dto.actorUserId ?? subscription.organizationId,
       productCode: subscription.productCode,
       planCode: targetPlan.code,
+      planPriceCode: dto.targetPlanPriceCode,
       provider: subscription.provider,
       legalAcceptanceId: dto.legalAcceptanceId,
       successUrl: dto.successUrl,
@@ -197,6 +213,7 @@ export class BillingSubscriptionsManagementService {
         pendingPlanChange: {
           checkoutSessionId: checkout.checkoutId,
           targetPlanCode: targetPlan.code,
+          targetPlanPriceCode: dto.targetPlanPriceCode,
           newSubscriptionId: checkout.subscriptionId,
           requestedAt: new Date().toISOString(),
         },
@@ -221,6 +238,7 @@ export class BillingSubscriptionsManagementService {
           previousStatus,
           newStatus: savedSubscription.status,
           targetPlanCode: targetPlan.code,
+          targetPlanPriceCode: dto.targetPlanPriceCode,
           providerSubscriptionId: savedSubscription.providerSubscriptionId,
         },
       });
@@ -417,7 +435,16 @@ export class BillingSubscriptionsManagementService {
   ): Promise<BillingSubscriptionEntity> {
     const subscription = await this.subscriptions.findOne({
       where: { id: subscriptionId },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+        planPrice: true,
+        providerPrice: true,
+      },
     });
     if (!subscription) {
       throw new NotFoundException('Billing subscription not found');
@@ -428,27 +455,43 @@ export class BillingSubscriptionsManagementService {
   private async findTargetPlan(
     subscription: BillingSubscriptionEntity,
     targetPlanCode: string,
+    targetPlanPriceCode: string,
   ): Promise<BillingPlanEntity> {
     const targetPlan = await this.plans.findOne({
       where: {
         productId: subscription.plan.productId,
         code: targetPlanCode,
-        provider: subscription.provider,
         status: BillingPlanStatus.Active,
+      },
+      relations: {
+        versions: {
+          prices: { providerPrices: true },
+          entitlements: { feature: true },
+        },
       },
     });
 
     if (!targetPlan) throw new NotFoundException('Target billing plan not found');
+    const current = this.planResolver.resolve(
+      subscription.plan,
+      subscription.provider,
+      subscription.planPriceCode ?? undefined,
+    );
+    const target = this.planResolver.resolve(
+      targetPlan,
+      subscription.provider,
+      targetPlanPriceCode,
+    );
     if (targetPlan.code === subscription.planCode) {
       throw new BadRequestException('Target plan must be different');
     }
-    if (targetPlan.currency !== subscription.plan.currency) {
+    if (target.price.currency !== current.price.currency) {
       throw new BadRequestException('Target plan currency must match');
     }
-    if (targetPlan.billingInterval !== subscription.plan.billingInterval) {
+    if (target.price.billingInterval !== current.price.billingInterval) {
       throw new BadRequestException('Target plan billing interval must match');
     }
-    if (!targetPlan.providerPlanId) {
+    if (!target.providerPrice.providerPriceId) {
       throw new BadRequestException('Target PayPal plan id is required');
     }
 

@@ -12,7 +12,7 @@ import {
 
 export const nav = [
   { href: "/", label: "Resumen", icon: LayoutDashboard },
-  { href: "/catalog", label: "Catálogo", icon: Boxes },
+  { href: "/products", label: "Productos", icon: Boxes },
   { href: "/operations", label: "Operación", icon: Activity },
   { href: "/addons", label: "Add-ons", icon: Puzzle },
   { href: "/invoices", label: "Facturas", icon: ReceiptText },

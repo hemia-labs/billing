@@ -24,6 +24,10 @@ export class CreateCheckoutSessionDto {
   @MaxLength(100)
   planCode: string;
 
+  @IsString()
+  @MaxLength(100)
+  planPriceCode: string;
+
   @IsEnum(BillingProvider)
   provider: BillingProvider;
 

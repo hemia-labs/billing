@@ -33,6 +33,10 @@ export class ChangePlanDto {
   targetPlanCode: string;
 
   @IsString()
+  @MaxLength(100)
+  targetPlanPriceCode: string;
+
+  @IsString()
   @MaxLength(150)
   legalAcceptanceId: string;
 

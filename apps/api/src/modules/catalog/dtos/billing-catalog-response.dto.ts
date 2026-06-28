@@ -7,6 +7,13 @@ import {
   BillingPlanStatus,
   BillingProductStatus,
   BillingProvider,
+  FeatureAggregationStrategy,
+  FeatureDefinitionStatus,
+  FeatureValueType,
+  PlanPriceBillingInterval,
+  PlanPriceStatus,
+  PlanVersionStatus,
+  ProviderPriceStatus,
 } from '../../billing-shared';
 
 export class BillingProductResponseDto {
@@ -23,20 +30,65 @@ export class BillingActiveProductResponseDto {
   name: string;
 }
 
+export class BillingProviderPriceResponseDto {
+  id: string;
+  provider: BillingProvider;
+  providerProductId: string | null;
+  providerPriceId: string | null;
+  providerMetadata: Record<string, unknown>;
+  status: ProviderPriceStatus;
+}
+
+export class BillingPlanPriceResponseDto {
+  id: string;
+  code: string;
+  billingInterval: PlanPriceBillingInterval;
+  billingIntervalCount: number;
+  currency: BillingCurrency;
+  amount: string;
+  status: PlanPriceStatus;
+  providerPrices: BillingProviderPriceResponseDto[];
+}
+
+export class BillingFeatureDefinitionResponseDto {
+  id: string;
+  productId: string;
+  code: string;
+  name: string;
+  description: string | null;
+  valueType: FeatureValueType;
+  unit: string | null;
+  aggregationStrategy: FeatureAggregationStrategy;
+  isMetered: boolean;
+  status: FeatureDefinitionStatus;
+}
+
+export class BillingPlanEntitlementResponseDto {
+  id: string;
+  feature: BillingFeatureDefinitionResponseDto;
+  valueJson: unknown;
+}
+
+export class BillingPlanVersionResponseDto {
+  id: string;
+  version: number;
+  status: PlanVersionStatus;
+  effectiveFrom: Date | null;
+  effectiveUntil: Date | null;
+  prices: BillingPlanPriceResponseDto[];
+  entitlements: BillingPlanEntitlementResponseDto[];
+}
+
 export class BillingPlanResponseDto {
   id: string;
   productId: string;
   productCode?: string;
+  product?: BillingProductResponseDto;
   code: string;
-  provider: BillingProvider;
-  providerPlanId: string | null;
   name: string;
-  billingInterval: BillingInterval;
-  currency: BillingCurrency;
-  amount: string;
-  seatsIncluded: number;
-  featuresJson: Record<string, unknown>;
+  description: string | null;
   status: BillingPlanStatus;
+  versions: BillingPlanVersionResponseDto[];
 }
 
 export class BillingAddonResponseDto {

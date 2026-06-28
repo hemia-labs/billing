@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/api";
+import { apiBaseUrl, apiFetch } from "@/lib/api";
 
 export type SessionUser = {
   ssoUserId: string;
@@ -16,8 +16,24 @@ export function getSession(): Promise<Session> {
   return apiFetch<Session>("/auth/session");
 }
 
-export function logout(): void {
-  apiFetch<{ logoutUrl?: string }>("/auth/logout", { method: "POST" })
-    .then(({ logoutUrl }) => window.location.assign(logoutUrl ?? "/"))
-    .catch(() => window.location.assign("/"));
+type LogoutResponse = {
+  logoutUrl?: string;
+};
+
+export async function logout(): Promise<void> {
+  try {
+    const out = (await fetch(`${apiBaseUrl}/auth/logout`, {
+      credentials: "include",
+      method: "POST",
+    }).then((response) => response.json())) as LogoutResponse;
+
+    if (out.logoutUrl) {
+      await fetch(out.logoutUrl, {
+        credentials: "include",
+        method: "POST",
+      });
+    }
+  } finally {
+    window.location.assign("/");
+  }
 }

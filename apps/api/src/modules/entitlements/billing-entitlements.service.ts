@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BillingAuditService } from '../audit';
+import { BillingPlanCatalogResolver } from '../catalog';
 import { DEFAULT_BILLING_CURRENCY } from '../billing-shared';
 import {
   BillingEntitlementEntity,
@@ -11,6 +12,7 @@ import {
 import {
   BillingAddonPricingModel,
   EntitlementStatus,
+  FeatureAggregationStrategy,
   SubscriptionAddonStatus,
 } from '../billing-shared';
 import {
@@ -37,6 +39,7 @@ export class BillingEntitlementsService {
     @InjectRepository(BillingEntitlementEntity)
     private readonly entitlements: Repository<BillingEntitlementEntity>,
     private readonly audit: BillingAuditService,
+    private readonly planResolver: BillingPlanCatalogResolver,
   ) {}
 
   async recalculate(
@@ -129,16 +132,24 @@ export class BillingEntitlementsService {
     const eligibleAddons = activeAddons.filter(
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
+    const version = this.planResolver.publishedVersion(subscription.plan);
+    const price = subscription.planPrice ?? this.planResolver.activePrice(version, subscription.planPriceCode ?? undefined);
+    const planEntitlements = this.planResolver.entitlements(version);
     const numeric: Record<string, number> = {
-      max_users: subscription.plan.seatsIncluded,
-      included_users: subscription.plan.seatsIncluded,
-      max_agents: this.numberFromFeature(subscription.plan.featuresJson.max_agents, 0),
+      included_users: this.numberFromFeature(planEntitlements['users.included'], 0),
+      max_users: this.numberFromFeature(
+        planEntitlements['users.max'],
+        this.numberFromFeature(planEntitlements['users.included'], 0),
+      ),
+      max_agents: this.numberFromFeature(planEntitlements['ai_agents.max'], 0),
       max_conversations_monthly: this.numberFromFeature(
-        subscription.plan.featuresJson.max_conversations_monthly,
+        planEntitlements['conversations.monthly'],
         0,
       ),
     };
-    const featureFlags: Record<string, boolean> = {};
+    const featureFlags: Record<string, boolean> = Object.fromEntries(
+      Object.entries(planEntitlements).filter(([, value]) => typeof value === 'boolean'),
+    ) as Record<string, boolean>;
 
     for (const addon of eligibleAddons) {
       const multiplier =
@@ -148,7 +159,12 @@ export class BillingEntitlementsService {
       for (const [key, value] of Object.entries(
         addon.entitlementEffects?.numeric ?? {},
       )) {
-        numeric[key] = (numeric[key] ?? 0) + value * multiplier;
+        this.planResolver.aggregate(
+          numeric,
+          key,
+          value * multiplier,
+          FeatureAggregationStrategy.Sum,
+        );
       }
       Object.assign(featureFlags, addon.entitlementEffects?.features ?? {});
     }
@@ -165,22 +181,26 @@ export class BillingEntitlementsService {
         extraUsers: numeric.max_users - numeric.included_users,
         maxAgents: numeric.max_agents,
         maxConversationsMonthly: this.nullableNumberFromFeature(
-          subscription.plan.featuresJson.max_conversations_monthly,
+          planEntitlements['conversations.monthly'],
         ) === null && numeric.max_conversations_monthly === 0
           ? null
           : numeric.max_conversations_monthly,
         additional,
         featureFlags,
       },
-      billing: this.calculateBilling(subscription, eligibleAddons),
+      billing: this.calculateBilling(subscription, eligibleAddons, price),
     };
   }
 
   private calculateBilling(
     subscription: BillingSubscriptionEntity,
     activeAddons: BillingSubscriptionAddonEntity[],
+    price = subscription.planPrice ?? this.planResolver.activePrice(
+      this.planResolver.publishedVersion(subscription.plan),
+      subscription.planPriceCode ?? undefined,
+    ),
   ): BillingAmountsSummary {
-    const baseCents = this.toCents(subscription.plan.amount);
+    const baseCents = this.toCents(price.amount);
     const addonsCents = activeAddons.reduce(
       (sum, addon) => sum + this.toCents(addon.unitPrice) * addon.quantity,
       0,
@@ -190,7 +210,7 @@ export class BillingEntitlementsService {
       baseMonthly: this.centsToDecimal(baseCents),
       addonsMonthly: this.centsToDecimal(addonsCents),
       totalMonthly: this.centsToDecimal(baseCents + addonsCents),
-      currency: subscription.plan.currency,
+      currency: price.currency,
     };
   }
 
@@ -268,7 +288,16 @@ export class BillingEntitlementsService {
   ): Promise<BillingSubscriptionEntity> {
     const subscription = await this.subscriptions.findOne({
       where: { id: subscriptionId },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+        planPrice: true,
+        providerPrice: true,
+      },
     });
 
     if (!subscription) throw new NotFoundException('Billing subscription not found');

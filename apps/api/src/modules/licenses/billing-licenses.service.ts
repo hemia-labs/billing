@@ -30,7 +30,17 @@ export class BillingLicensesService {
         productCode,
         status: In(ACCESSIBLE_LICENSE_STATUSES),
       },
-      relations: { product: true, subscription: { plan: true } },
+      relations: {
+        product: true,
+        subscription: {
+          plan: {
+            versions: {
+              prices: { providerPrices: true },
+              entitlements: { feature: true },
+            },
+          },
+        },
+      },
       order: { updatedAt: 'DESC' },
     });
 
@@ -38,7 +48,17 @@ export class BillingLicensesService {
       prioritizedLicense ??
       (await this.licenses.findOne({
         where: { organizationId, productCode },
-        relations: { product: true, subscription: { plan: true } },
+        relations: {
+          product: true,
+          subscription: {
+            plan: {
+              versions: {
+                prices: { providerPrices: true },
+                entitlements: { feature: true },
+              },
+            },
+          },
+        },
         order: { updatedAt: 'DESC' },
       }));
 

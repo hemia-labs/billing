@@ -320,7 +320,14 @@ export class BillingSubscriptionPaymentsProcessorService {
     const subscriptions = manager.getRepository(BillingSubscriptionEntity);
     const subscription = await subscriptions.findOne({
       where: { provider: BillingProvider.Paypal, providerSubscriptionId },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+      },
     });
 
     if (!subscription) return null;
@@ -533,7 +540,14 @@ export class BillingSubscriptionPaymentsProcessorService {
 
     return manager.getRepository(BillingSubscriptionEntity).findOne({
       where: { provider: BillingProvider.Paypal, providerSubscriptionId },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+      },
     });
   }
 

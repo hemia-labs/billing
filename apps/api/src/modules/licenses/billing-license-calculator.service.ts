@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import { BillingPlanCatalogResolver } from '../catalog';
 import {
   BillingLicenseEntity,
-  BillingPlanEntity,
   BillingProductEntity,
   BillingSubscriptionEntity,
 } from '../billing-shared';
@@ -30,10 +30,19 @@ export interface BillingLicenseCalculationResult {
 
 @Injectable()
 export class BillingLicenseCalculatorService {
+  constructor(private readonly planResolver: BillingPlanCatalogResolver) {}
+
   calculate(
     input: BillingLicenseCalculationInput,
   ): BillingLicenseCalculationResult {
-    const plan = input.subscription.plan as BillingPlanEntity | undefined;
+    const version = input.subscription.plan
+      ? this.planResolver.publishedVersion(input.subscription.plan)
+      : null;
+    const featuresJson = version ? this.planResolver.entitlements(version) : {};
+    const seatsLimit =
+      this.numberFeature(featuresJson['users.included']) ??
+      this.numberFeature(featuresJson['users.max']) ??
+      0;
 
     return {
       organizationId: input.subscription.organizationId,
@@ -43,13 +52,17 @@ export class BillingLicenseCalculatorService {
       planCode: input.subscription.planCode,
       licenseKeyHash: input.license?.licenseKeyHash ?? null,
       status: input.status,
-      seatsLimit: plan?.seatsIncluded ?? 0,
+      seatsLimit,
       usageLimit: null,
-      featuresJson: plan?.featuresJson ?? {},
+      featuresJson,
       validUntil:
         input.status === LicenseStatus.Grace
           ? input.subscription.graceUntil
           : input.subscription.nextBillingTime,
     };
+  }
+
+  private numberFeature(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 }

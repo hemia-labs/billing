@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { BillingAuditService } from '../audit';
+import { BillingPlanCatalogResolver } from '../catalog';
 import {
   BillingAddonEntity,
   BillingSubscriptionAddonEntity,
@@ -51,6 +52,7 @@ export class BillingSubscriptionAddonsService {
     private readonly paypal: PaypalClientService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly planResolver: BillingPlanCatalogResolver,
   ) {}
 
   async createPendingAddon(
@@ -63,7 +65,19 @@ export class BillingSubscriptionAddonsService {
     const existingByKey = dto.idempotencyKey
       ? await this.subscriptionAddons.findOne({
           where: { subscriptionId: subscription.id, idempotencyKey: dto.idempotencyKey },
-          relations: { addon: true, subscription: { plan: true } },
+          relations: {
+            addon: true,
+            subscription: {
+              plan: {
+                versions: {
+                  prices: { providerPrices: true },
+                  entitlements: { feature: true },
+                },
+              },
+              planPrice: true,
+              providerPrice: true,
+            },
+          },
         })
       : null;
     if (existingByKey) return SubscriptionAddonMapper.toDto(existingByKey);
@@ -274,13 +288,29 @@ export class BillingSubscriptionAddonsService {
     const subscription = await this.findSubscription(subscriptionId);
     const addons = await this.subscriptionAddons.find({
       where: { subscriptionId },
-      relations: { addon: true, subscription: { plan: true } },
+      relations: {
+        addon: true,
+        subscription: {
+          plan: {
+            versions: {
+              prices: { providerPrices: true },
+              entitlements: { feature: true },
+            },
+          },
+          planPrice: true,
+          providerPrice: true,
+        },
+      },
       order: { createdAt: 'ASC' },
     });
     const activeAddons = addons.filter(
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
-    const baseAmount = subscription.plan.amount;
+    const planPrice = subscription.planPrice ?? this.planResolver.activePrice(
+      this.planResolver.publishedVersion(subscription.plan),
+      subscription.planPriceCode ?? undefined,
+    );
+    const baseAmount = planPrice.amount;
     const addonsAmount = this.centsToDecimal(
       activeAddons.reduce(
         (sum, addon) => sum + this.toCents(addon.unitPrice) * addon.quantity,
@@ -297,7 +327,7 @@ export class BillingSubscriptionAddonsService {
       baseAmount,
       addonsAmount,
       totalAmount,
-      currency: subscription.plan.currency,
+      currency: planPrice.currency,
       addons,
     });
   }
@@ -359,14 +389,13 @@ export class BillingSubscriptionAddonsService {
         status: SubscriptionAddonStatus.Active,
       },
     });
+    const features = this.planResolver.entitlements(
+      this.planResolver.publishedVersion(subscription.plan),
+    );
     const limits: Record<string, number> = {
-      max_users: subscription.plan.seatsIncluded,
-      max_agents: this.numberFromFeature(
-        subscription.plan.featuresJson?.max_agents,
-      ),
-      max_conversations_monthly: this.numberFromFeature(
-        subscription.plan.featuresJson?.max_conversations_monthly,
-      ),
+      max_users: this.numberFromFeature(features['users.max']) || this.numberFromFeature(features['users.included']),
+      max_agents: this.numberFromFeature(features['ai_agents.max']),
+      max_conversations_monthly: this.numberFromFeature(features['conversations.monthly']),
     };
 
     for (const key of Object.keys(
@@ -409,7 +438,16 @@ export class BillingSubscriptionAddonsService {
   ): Promise<BillingSubscriptionEntity> {
     const subscription = await this.subscriptions.findOne({
       where: { id: subscriptionId },
-      relations: { plan: true },
+      relations: {
+        plan: {
+          versions: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        },
+        planPrice: true,
+        providerPrice: true,
+      },
     });
 
     if (!subscription) throw new NotFoundException('Billing subscription not found');
@@ -432,10 +470,14 @@ export class BillingSubscriptionAddonsService {
     if (addon.type !== BillingAddonType.Recurring) {
       throw new BadRequestException('Only recurring add-ons are supported');
     }
-    if (addon.currency !== subscription.plan.currency) {
+    const planPrice = subscription.planPrice ?? this.planResolver.activePrice(
+      this.planResolver.publishedVersion(subscription.plan),
+      subscription.planPriceCode ?? undefined,
+    );
+    if (addon.currency !== planPrice.currency) {
       throw new BadRequestException('Addon currency does not match plan currency');
     }
-    if (addon.billingInterval !== subscription.plan.billingInterval) {
+    if (addon.billingInterval !== this.planResolver.toLegacyInterval(planPrice.billingInterval)) {
       throw new BadRequestException('Addon billing interval does not match plan');
     }
     if (addon.provider !== subscription.provider) {
@@ -454,7 +496,17 @@ export class BillingSubscriptionAddonsService {
   ): Promise<BillingSubscriptionAddonEntity> {
     const entity = await this.subscriptionAddons.findOne({
       where: { id },
-      relations: { addon: true, subscription: { plan: true } },
+      relations: {
+        addon: true,
+        subscription: {
+          plan: {
+            versions: {
+              prices: { providerPrices: true },
+              entitlements: { feature: true },
+            },
+          },
+        },
+      },
     });
 
     if (!entity) throw new NotFoundException('Billing subscription add-on not found');

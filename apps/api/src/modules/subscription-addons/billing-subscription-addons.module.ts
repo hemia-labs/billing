@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from '../audit';
+import { BillingCatalogModule } from '../catalog';
 import { BillingEntitlementsModule } from '../entitlements';
 import { PaypalModule } from '../paypal';
 import {
@@ -24,6 +25,7 @@ import { BillingSubscriptionAddonsWorker } from './billing-subscription-addons.w
       BillingUsageCounterEntity,
     ]),
     BillingAuditModule,
+    BillingCatalogModule,
     BillingEntitlementsModule,
     PaypalModule,
   ],

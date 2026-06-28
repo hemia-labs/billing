@@ -5,13 +5,14 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { AuthenticatedUser } from '@hemia/auth';
+import { SsoAuthGuard } from '@hemia/auth/nestjs';
 import { AuthenticatedRequest } from '../types/authenticated-request.type';
-import { SsoBearerGuard } from './sso-bearer.guard';
 
 @Injectable()
 export class BillingConsoleAuthGuard implements CanActivate {
   constructor(
-    private readonly ssoBearerGuard: SsoBearerGuard,
+    private readonly ssoAuthGuard: SsoAuthGuard,
     private readonly reflector: Reflector,
   ) {}
 
@@ -22,13 +23,23 @@ export class BillingConsoleAuthGuard implements CanActivate {
     );
     if (skipAuth) return true;
 
-    await this.ssoBearerGuard.canActivate(context);
+    await this.ssoAuthGuard.canActivate(context);
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const user = request.user as unknown as AuthenticatedUser | undefined;
 
-    if (!request.principal || request.principal.isMachine) {
-      throw new UnauthorizedException('Machine credentials cannot access console');
+    if (!user?.ssoUserId) {
+      throw new UnauthorizedException('Missing session');
     }
+
+    request.principal = {
+      sub: user.internalUserId ?? user.ssoUserId,
+      email: user.email || undefined,
+      organizationId: user.organizationId || undefined,
+      scopes: user.permissions,
+      isMachine: false,
+    };
+    request.user = request.principal;
 
     return true;
   }

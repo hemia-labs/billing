@@ -15,12 +15,16 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { BillingCatalogService } from './billing-catalog.service';
 import {
   BillingAddonResponseDto,
+  BillingFeatureDefinitionResponseDto,
   BillingPlanResponseDto,
+  BillingPlanVersionResponseDto,
   BillingProductResponseDto,
   CatalogPageDto,
   CreateBillingAddonDto,
+  CreateFeatureDefinitionDto,
   CreateBillingPlanDto,
   CreateBillingProductDto,
+  CreatePlanVersionDto,
   ListBillingAddonsQueryDto,
   ListBillingPlansQueryDto,
   ListBillingProductsQueryDto,
@@ -88,6 +92,65 @@ export class BillingCatalogConsoleController {
     @Body() dto: UpdateBillingPlanDto,
   ): Promise<BillingPlanResponseDto> {
     return this.service.updatePlan(id, dto);
+  }
+
+  @Get('features')
+  @Permissions('billing.catalog.read')
+  listFeatures(
+    @Query() query: ListBillingProductsQueryDto,
+  ): Promise<CatalogPageDto<BillingFeatureDefinitionResponseDto>> {
+    return this.service.listFeatures(query);
+  }
+
+  @Post('features')
+  @Permissions('billing.catalog.manage')
+  createFeature(
+    @Body() dto: CreateFeatureDefinitionDto & { productId?: string; productCode?: string },
+  ): Promise<BillingFeatureDefinitionResponseDto> {
+    return this.service.createFeature(dto);
+  }
+
+  @Patch('features/:id')
+  @Permissions('billing.catalog.manage')
+  updateFeature(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: Partial<CreateFeatureDefinitionDto>,
+  ): Promise<BillingFeatureDefinitionResponseDto> {
+    return this.service.updateFeature(id, dto);
+  }
+
+  @Get('plans/:id/versions')
+  @Permissions('billing.catalog.read')
+  listPlanVersions(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingPlanVersionResponseDto[]> {
+    return this.service.listPlanVersions(id);
+  }
+
+  @Post('plans/:id/versions')
+  @Permissions('billing.catalog.manage')
+  createPlanVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreatePlanVersionDto,
+  ): Promise<BillingPlanVersionResponseDto[]> {
+    return this.service.createVersion(id, dto);
+  }
+
+  @Patch('plan-versions/:id')
+  @Permissions('billing.catalog.manage')
+  updatePlanVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: Partial<CreatePlanVersionDto>,
+  ): Promise<BillingPlanVersionResponseDto> {
+    return this.service.updateVersion(id, dto);
+  }
+
+  @Post('plan-versions/:id/publish')
+  @Permissions('billing.catalog.manage')
+  publishPlanVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingPlanVersionResponseDto> {
+    return this.service.publishVersion(id);
   }
 
   @Get('addons')

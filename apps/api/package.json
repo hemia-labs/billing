@@ -23,10 +23,10 @@
     "migration:generate": "bun run typeorm migration:generate src/database/migrations/migration",
     "migration:run": "bun run typeorm migration:run",
     "migration:revert": "bun run typeorm migration:revert",
-    "seed:billing-catalog": "ts-node -r tsconfig-paths/register src/database/seeds/billing-catalog.seed.ts"
+    "seed:run": "ts-node -r tsconfig-paths/register src/database/seeds/billing-catalog.seed.ts"
   },
   "dependencies": {
-    "@hemia/auth": "0.0.5",
+    "@hemia/auth": "0.0.6",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
