@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { BrandWordmark } from "@/components/brand-wordmark";
 import { usePathname } from "next/navigation";
 import { ChevronsUpDown, LogOut, Moon, Sun } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/zuno/avatar";
@@ -80,13 +81,7 @@ export function AppSidebar() {
               <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--hemia-navy)] dark:bg-transparent group-data-[collapsible=icon]:size-8">
                 <Image src="/logo.png" alt="" width={96} height={66} className="h-auto w-9 group-data-[collapsible=icon]:w-8" />
               </span>
-              <Image
-                src="/wordmark.png"
-                alt=""
-                width={318}
-                height={49}
-                className="h-auto w-[174px] max-w-full brightness-0 dark:invert group-data-[collapsible=icon]:hidden"
-              />
+              <BrandWordmark className="group-data-[collapsible=icon]:hidden" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

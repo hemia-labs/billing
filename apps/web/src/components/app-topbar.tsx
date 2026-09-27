@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { BrandWordmark } from "@/components/brand-wordmark";
 import { useEffect, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
@@ -68,7 +69,7 @@ export function AppTopbar() {
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[var(--hemia-navy)] dark:bg-transparent">
           <Image src="/logo.png" alt="" width={96} height={66} className="h-auto w-8" />
         </span>
-        <Image src="/wordmark.png" alt="" width={318} height={49} className="h-auto w-36 brightness-0 dark:invert" />
+        <BrandWordmark compact />
       </Link>
       <Breadcrumb aria-label="Ruta actual" className="hidden md:block">
         <BreadcrumbList>
