@@ -49,7 +49,11 @@ export class BillingEntitlementsService {
     const activeAddons = await this.findActiveAddons(subscriptionId);
     const resolution = this.calculate(subscription, activeAddons);
 
-    await this.upsertEntitlements(subscription, resolution.entitlements);
+    await this.upsertEntitlements(
+      subscription,
+      resolution.entitlements,
+      this.planResolver.contractVersion(subscription).id,
+    );
     await this.audit.record({
       organizationId: subscription.organizationId,
       action: 'billing.entitlements.recalculated',
@@ -69,6 +73,7 @@ export class BillingEntitlementsService {
   ): Promise<BillingEntitlementsResolution> {
     const subscription = await this.findSubscription(subscriptionId);
     const activeAddons = await this.findActiveAddons(subscriptionId);
+    const version = this.planResolver.contractVersion(subscription);
     const persisted = await this.entitlements.find({
       where: {
         subscriptionId,
@@ -79,13 +84,20 @@ export class BillingEntitlementsService {
     if (
       CORE_ENTITLEMENT_KEYS.some(
         (key) => !persisted.some((entitlement) => entitlement.key === key),
+      ) ||
+      persisted.some(
+        (entitlement) => entitlement.metadata?.planVersionId !== version.id,
       )
     ) {
       return this.recalculate(subscriptionId);
     }
 
     return {
-      entitlements: this.toEntitlementsSummary(persisted, activeAddons),
+      entitlements: this.toEntitlementsSummary(
+        persisted,
+        activeAddons,
+        this.planResolver.entitlements(version),
+      ),
       billing: this.calculateBilling(subscription, activeAddons),
     };
   }
@@ -132,8 +144,13 @@ export class BillingEntitlementsService {
     const eligibleAddons = activeAddons.filter(
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
-    const version = this.planResolver.publishedVersion(subscription.plan);
-    const price = subscription.planPrice ?? this.planResolver.activePrice(version, subscription.planPriceCode ?? undefined);
+    const version = this.planResolver.contractVersion(subscription);
+    const price =
+      subscription.planPrice ??
+      this.planResolver.activePrice(
+        version,
+        subscription.planPriceCode ?? undefined,
+      );
     const planEntitlements = this.planResolver.entitlements(version);
     const numeric: Record<string, number> = {
       included_users: this.numberFromFeature(planEntitlements['users.included'], 0),
@@ -196,7 +213,7 @@ export class BillingEntitlementsService {
     subscription: BillingSubscriptionEntity,
     activeAddons: BillingSubscriptionAddonEntity[],
     price = subscription.planPrice ?? this.planResolver.activePrice(
-      this.planResolver.publishedVersion(subscription.plan),
+      this.planResolver.contractVersion(subscription),
       subscription.planPriceCode ?? undefined,
     ),
   ): BillingAmountsSummary {
@@ -217,6 +234,7 @@ export class BillingEntitlementsService {
   private async upsertEntitlements(
     subscription: BillingSubscriptionEntity,
     summary: BillingEntitlementsSummary,
+    planVersionId: string,
   ): Promise<void> {
     const values = new Map<string, number | null>([
       ['max_users', summary.maxUsers],
@@ -244,7 +262,7 @@ export class BillingEntitlementsService {
 
         entitlement.value = rawValue ?? 0;
         entitlement.status = EntitlementStatus.Active;
-        entitlement.metadata = { nullable: rawValue === null };
+        entitlement.metadata = { nullable: rawValue === null, planVersionId };
         await this.entitlements.save(entitlement);
       }),
     );
@@ -253,17 +271,18 @@ export class BillingEntitlementsService {
   private toEntitlementsSummary(
     entitlements: BillingEntitlementEntity[],
     activeAddons: BillingSubscriptionAddonEntity[],
+    planEntitlements: Record<string, unknown>,
   ): BillingEntitlementsSummary {
     const values = new Map(entitlements.map((item) => [item.key, item]));
     const conversations = values.get('max_conversations_monthly');
 
-    const featureFlags = activeAddons.reduce<Record<string, boolean>>(
-      (flags, addon) => ({
-        ...flags,
-        ...(addon.entitlementEffects?.features ?? {}),
-      }),
-      {},
-    );
+    const featureFlags: Record<string, boolean> = {};
+    for (const [code, value] of Object.entries(planEntitlements)) {
+      if (typeof value === 'boolean') featureFlags[code] = value;
+    }
+    for (const addon of activeAddons) {
+      Object.assign(featureFlags, addon.entitlementEffects?.features ?? {});
+    }
     const additional = Object.fromEntries(
       entitlements
         .filter((item) => !CORE_ENTITLEMENT_KEYS.includes(item.key))

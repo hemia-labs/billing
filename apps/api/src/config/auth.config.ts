@@ -10,5 +10,4 @@ export default registerAs('auth', () => ({
   jwksUri: optionalString(process.env.AUTH_JWKS_URI),
   audience: optionalString(process.env.AUTH_AUDIENCE),
   requiredIssuer: optionalString(process.env.AUTH_REQUIRED_ISSUER),
-  legacyApiKeyEnabled: process.env.AUTH_LEGACY_API_KEY_ENABLED === 'true',
 }));

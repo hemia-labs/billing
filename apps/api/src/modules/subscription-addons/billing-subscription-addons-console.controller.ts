@@ -1,3 +1,4 @@
+import { BillingResource } from '../../common/decorators/billing-resource.decorator';
 import {
   Body,
   Controller,
@@ -26,7 +27,8 @@ export class BillingSubscriptionAddonsConsoleController {
   constructor(private readonly service: BillingSubscriptionAddonsService) {}
 
   @Post('subscriptions/:subscriptionId/addons')
-  @Permissions('billing.addons.manage')
+  @Permissions('billing.addons.create')
+  @BillingResource('subscriptions', 'subscriptionId')
   async create(
     @Param('subscriptionId', ParseUUIDPipe) subscriptionId: string,
     @Body() dto: CreateConsoleSubscriptionAddonDto,
@@ -37,20 +39,28 @@ export class BillingSubscriptionAddonsConsoleController {
       dto,
       request.principal!.sub,
     );
-    return { addon: this.toAddon(result.addon), approvalUrl: result.approvalUrl };
+    return {
+      addon: this.toAddon(result.addon),
+      approvalUrl: result.approvalUrl,
+    };
   }
 
   @Get('subscriptions/:subscriptionId/addons')
   @Permissions('billing.addons.read')
+  @BillingResource('subscriptions', 'subscriptionId')
   async summary(
     @Param('subscriptionId', ParseUUIDPipe) subscriptionId: string,
   ): Promise<ConsoleSubscriptionAddonSummaryDto> {
     const summary = await this.service.getSummary(subscriptionId);
-    return { ...summary, addons: summary.addons.map((addon) => this.toAddon(addon)) };
+    return {
+      ...summary,
+      addons: summary.addons.map((addon) => this.toAddon(addon)),
+    };
   }
 
   @Post('subscription-addons/:id/schedule-cancel')
-  @Permissions('billing.addons.manage')
+  @Permissions('billing.addons.cancel')
+  @BillingResource('subscription_addons', 'id')
   async scheduleCancel(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() request: AuthenticatedRequest,

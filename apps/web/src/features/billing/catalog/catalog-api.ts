@@ -193,6 +193,7 @@ export type CatalogAddonPayload = {
 };
 
 export type CatalogFilters = {
+  q?: string;
   product_id?: string;
   status?: CatalogStatus;
   provider?: BillingProvider;
@@ -205,6 +206,7 @@ export type CatalogFilters = {
 export function listCatalogProducts(filters: CatalogFilters) {
   return apiFetch<CatalogPage<CatalogProduct>>(
     `/billing/console/catalog/products${toQueryString({
+      q: filters.q,
       status: filters.status,
       page: filters.page,
       limit: filters.limit,
@@ -291,4 +293,8 @@ export function primaryPrice(plan: CatalogPlan) {
 
 export function primaryProviderPrice(plan: CatalogPlan) {
   return primaryPrice(plan)?.providerPrices.find((price) => price.status === "active");
+}
+
+export function publishCatalogVersion(id: string) {
+  return apiFetch(`/billing/console/catalog/plan-versions/${id}/publish`, { method: "POST" });
 }

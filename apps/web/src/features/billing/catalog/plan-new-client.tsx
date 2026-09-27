@@ -1,12 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
 import { hasPermission, useSession } from "@/components/auth-gate";
 import { PageHeading } from "@/components/page-heading";
-import { Button } from "@/components/ui/button";
 import { ApiError, apiErrorMessage, redirectToLogin } from "@/lib/api";
 import {
   type CatalogPlanPayload,
@@ -54,8 +51,8 @@ export function PlanNewClient() {
 
   const create = async (payload: CatalogPlanPayload) => {
     try {
-      await createCatalogPlan(payload);
-      router.push(`/products/${payload.productId}?tab=plans`);
+      const plan = await createCatalogPlan(payload);
+      router.push(`/products/plans/${plan.id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         redirectToLogin();
@@ -67,39 +64,37 @@ export function PlanNewClient() {
 
   if (!canManage) {
     return (
-      <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
+      <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
         No tienes permiso para administrar planes.
       </div>
     );
   }
 
   if (loading) {
-    return <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando producto...</div>;
+    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando producto...</div>;
   }
 
   if (message) {
-    return <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message}</div>;
+    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message}</div>;
   }
 
   return (
-    <>
+    <div className="mx-auto w-full max-w-5xl">
       <PageHeading
-        breadcrumbItems={[
-          { href: "/", label: "Hemia" },
-          { href: "/products", label: "Productos" },
-          ...(lockedProduct ? [{ href: `/products/${lockedProduct.id}?tab=plans`, label: lockedProduct.name }] : []),
-          { label: "Nuevo plan" },
-        ]}
-        description={lockedProduct ? "Crea una definición comercial de plan para este producto." : "Crea una definición comercial de plan para un producto."}
+        description={lockedProduct
+          ? `Para ${lockedProduct.name}. La primera versión se guardará como borrador.`
+          : "La primera versión se guardará como borrador."}
         title="Nuevo plan"
-        titlePrefix={
-          <Button aria-label="Volver a producto" className="size-12 shrink-0 rounded-lg" render={<Link href={lockedProduct ? `/products/${lockedProduct.id}?tab=plans` : "/products"} />} size="icon" variant="outline">
-            <ArrowLeft className="size-5" />
-          </Button>
-        }
       />
-      <PlanForm defaultProductId={productId} lockedProduct={lockedProduct} onSubmit={create} products={products} submitLabel="Crear plan" />
-    </>
+      <PlanForm
+        cancelHref={lockedProduct ? `/products/${lockedProduct.id}?tab=plans` : "/products"}
+        defaultProductId={productId}
+        lockedProduct={lockedProduct}
+        onSubmit={create}
+        products={products}
+        submitLabel="Crear borrador"
+      />
+    </div>
   );
 }
 

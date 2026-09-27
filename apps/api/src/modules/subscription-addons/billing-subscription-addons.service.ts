@@ -307,7 +307,7 @@ export class BillingSubscriptionAddonsService {
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
     const planPrice = subscription.planPrice ?? this.planResolver.activePrice(
-      this.planResolver.publishedVersion(subscription.plan),
+      this.planResolver.contractVersion(subscription),
       subscription.planPriceCode ?? undefined,
     );
     const baseAmount = planPrice.amount;
@@ -390,7 +390,7 @@ export class BillingSubscriptionAddonsService {
       },
     });
     const features = this.planResolver.entitlements(
-      this.planResolver.publishedVersion(subscription.plan),
+      this.planResolver.contractVersion(subscription),
     );
     const limits: Record<string, number> = {
       max_users: this.numberFromFeature(features['users.max']) || this.numberFromFeature(features['users.included']),
@@ -471,7 +471,7 @@ export class BillingSubscriptionAddonsService {
       throw new BadRequestException('Only recurring add-ons are supported');
     }
     const planPrice = subscription.planPrice ?? this.planResolver.activePrice(
-      this.planResolver.publishedVersion(subscription.plan),
+      this.planResolver.contractVersion(subscription),
       subscription.planPriceCode ?? undefined,
     );
     if (addon.currency !== planPrice.currency) {

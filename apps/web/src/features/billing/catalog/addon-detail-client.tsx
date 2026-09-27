@@ -64,24 +64,24 @@ export function AddonDetailClient({ id }: { id: string }) {
 
   if (!canRead) {
     return (
-      <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
+      <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
         No tienes permiso para consultar add-ons.
       </div>
     );
   }
 
   if (loading) {
-    return <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando add-on...</div>;
+    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando add-on...</div>;
   }
 
   if (!addon) {
-    return <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message || "Add-on no encontrado."}</div>;
+    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message || "Add-on no encontrado."}</div>;
   }
 
   return (
     <div className="space-y-4">
-      {message ? <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium shadow-sm">{message}</div> : null}
-      {!canManage ? <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Vista de sólo lectura.</div> : null}
+      {message ? <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium shadow-sm">{message}</div> : null}
+      {!canManage ? <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Vista de sólo lectura.</div> : null}
       <AddonForm initialAddon={addon} onSubmit={update} products={products} readOnly={!canManage} submitLabel="Guardar add-on" />
     </div>
   );

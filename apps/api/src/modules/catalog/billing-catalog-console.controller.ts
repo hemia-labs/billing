@@ -48,13 +48,17 @@ export class BillingCatalogConsoleController {
 
   @Get('products/:id')
   @Permissions('billing.catalog.read')
-  getProduct(@Param('id', ParseUUIDPipe) id: string): Promise<BillingProductResponseDto> {
+  getProduct(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingProductResponseDto> {
     return this.service.getProduct(id);
   }
 
   @Post('products')
   @Permissions('billing.catalog.manage')
-  createProduct(@Body() dto: CreateBillingProductDto): Promise<BillingProductResponseDto> {
+  createProduct(
+    @Body() dto: CreateBillingProductDto,
+  ): Promise<BillingProductResponseDto> {
     return this.service.createProduct(dto);
   }
 
@@ -69,19 +73,25 @@ export class BillingCatalogConsoleController {
 
   @Get('plans')
   @Permissions('billing.catalog.read')
-  listPlans(@Query() query: ListBillingPlansQueryDto): Promise<CatalogPageDto<BillingPlanResponseDto>> {
+  listPlans(
+    @Query() query: ListBillingPlansQueryDto,
+  ): Promise<CatalogPageDto<BillingPlanResponseDto>> {
     return this.service.listPlans(query);
   }
 
   @Get('plans/:id')
   @Permissions('billing.catalog.read')
-  getPlan(@Param('id', ParseUUIDPipe) id: string): Promise<BillingPlanResponseDto> {
+  getPlan(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingPlanResponseDto> {
     return this.service.getPlan(id);
   }
 
   @Post('plans')
   @Permissions('billing.catalog.manage')
-  createPlan(@Body() dto: CreateBillingPlanDto): Promise<BillingPlanResponseDto> {
+  createPlan(
+    @Body() dto: CreateBillingPlanDto,
+  ): Promise<BillingPlanResponseDto> {
     return this.service.createPlan(dto);
   }
 
@@ -105,7 +115,11 @@ export class BillingCatalogConsoleController {
   @Post('features')
   @Permissions('billing.catalog.manage')
   createFeature(
-    @Body() dto: CreateFeatureDefinitionDto & { productId?: string; productCode?: string },
+    @Body()
+    dto: CreateFeatureDefinitionDto & {
+      productId?: string;
+      productCode?: string;
+    },
   ): Promise<BillingFeatureDefinitionResponseDto> {
     return this.service.createFeature(dto);
   }
@@ -146,7 +160,7 @@ export class BillingCatalogConsoleController {
   }
 
   @Post('plan-versions/:id/publish')
-  @Permissions('billing.catalog.manage')
+  @Permissions('billing.catalog.publish')
   publishPlanVersion(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<BillingPlanVersionResponseDto> {
@@ -155,19 +169,25 @@ export class BillingCatalogConsoleController {
 
   @Get('addons')
   @Permissions('billing.catalog.read')
-  listAddons(@Query() query: ListBillingAddonsQueryDto): Promise<CatalogPageDto<BillingAddonResponseDto>> {
+  listAddons(
+    @Query() query: ListBillingAddonsQueryDto,
+  ): Promise<CatalogPageDto<BillingAddonResponseDto>> {
     return this.service.listAddons(query);
   }
 
   @Get('addons/:id')
   @Permissions('billing.catalog.read')
-  getAddon(@Param('id', ParseUUIDPipe) id: string): Promise<BillingAddonResponseDto> {
+  getAddon(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingAddonResponseDto> {
     return this.service.getAddon(id);
   }
 
   @Post('addons')
   @Permissions('billing.catalog.manage')
-  createAddon(@Body() dto: CreateBillingAddonDto): Promise<BillingAddonResponseDto> {
+  createAddon(
+    @Body() dto: CreateBillingAddonDto,
+  ): Promise<BillingAddonResponseDto> {
     return this.service.createAddon(dto);
   }
 

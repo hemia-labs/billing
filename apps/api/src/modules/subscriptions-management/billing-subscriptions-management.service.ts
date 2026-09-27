@@ -63,10 +63,7 @@ export class BillingSubscriptionsManagementService {
     private readonly checkoutSessions: Repository<BillingCheckoutSessionEntity>,
   ) {}
 
-  async getCurrentSubscription(
-    organizationId: string,
-    productCode: string,
-  ) {
+  async getCurrentSubscription(organizationId: string, productCode: string) {
     const candidates = await this.subscriptions.find({
       where: {
         organizationId,
@@ -100,10 +97,7 @@ export class BillingSubscriptionsManagementService {
     return this.toResponse(subscription);
   }
 
-  async cancelSubscription(
-    subscriptionId: string,
-    dto: CancelSubscriptionDto,
-  ) {
+  async cancelSubscription(subscriptionId: string, dto: CancelSubscriptionDto) {
     const subscription = await this.findSubscription(subscriptionId);
     if (TERMINAL_STATUSES.includes(subscription.status)) {
       throw new BadRequestException('Billing subscription is already terminal');
@@ -119,9 +113,12 @@ export class BillingSubscriptionsManagementService {
           reason: dto.reason,
         });
       } catch (error) {
-        throw new BadGatewayException('PayPal subscription cancellation failed', {
-          cause: error,
-        });
+        throw new BadGatewayException(
+          'PayPal subscription cancellation failed',
+          {
+            cause: error,
+          },
+        );
       }
     }
 
@@ -176,9 +173,13 @@ export class BillingSubscriptionsManagementService {
       dto.targetPlanCode,
       dto.targetPlanPriceCode,
     );
+    if (!dto.actorUserId)
+      throw new BadRequestException(
+        'actorUserId is required to validate legal acceptance',
+      );
     const checkout = await this.checkout.createCheckoutSession({
       organizationId: subscription.organizationId,
-      userId: dto.actorUserId ?? subscription.organizationId,
+      userId: dto.actorUserId,
       productCode: subscription.productCode,
       planCode: targetPlan.code,
       planPriceCode: dto.targetPlanPriceCode,
@@ -199,9 +200,12 @@ export class BillingSubscriptionsManagementService {
           reason: `Plan change requested to ${targetPlan.code}`,
         });
       } catch (error) {
-        throw new BadGatewayException('PayPal subscription cancellation failed', {
-          cause: error,
-        });
+        throw new BadGatewayException(
+          'PayPal subscription cancellation failed',
+          {
+            cause: error,
+          },
+        );
       }
     }
 
@@ -302,7 +306,9 @@ export class BillingSubscriptionsManagementService {
         this.getNested(billingInfo, 'cycle_executions', 0, 'end_time'),
       );
       subscription.graceUntil =
-        newStatus === SubscriptionStatus.Active ? null : subscription.graceUntil;
+        newStatus === SubscriptionStatus.Active
+          ? null
+          : subscription.graceUntil;
       subscription.metadata = {
         ...subscription.metadata,
         paypalStatus: providerStatus,
@@ -313,7 +319,9 @@ export class BillingSubscriptionsManagementService {
       await manager.getRepository(BillingSubscriptionEntity).save(subscription);
 
       checkoutSession.status = this.mapCheckoutStatus(newStatus);
-      await manager.getRepository(BillingCheckoutSessionEntity).save(checkoutSession);
+      await manager
+        .getRepository(BillingCheckoutSessionEntity)
+        .save(checkoutSession);
 
       if (previousStatus !== newStatus) {
         await this.audit.record({
@@ -471,12 +479,14 @@ export class BillingSubscriptionsManagementService {
       },
     });
 
-    if (!targetPlan) throw new NotFoundException('Target billing plan not found');
-    const current = this.planResolver.resolve(
-      subscription.plan,
-      subscription.provider,
-      subscription.planPriceCode ?? undefined,
-    );
+    if (!targetPlan)
+      throw new NotFoundException('Target billing plan not found');
+    const currentPrice =
+      subscription.planPrice ??
+      this.planResolver.activePrice(
+        this.planResolver.contractVersion(subscription),
+        subscription.planPriceCode ?? undefined,
+      );
     const target = this.planResolver.resolve(
       targetPlan,
       subscription.provider,
@@ -485,10 +495,10 @@ export class BillingSubscriptionsManagementService {
     if (targetPlan.code === subscription.planCode) {
       throw new BadRequestException('Target plan must be different');
     }
-    if (target.price.currency !== current.price.currency) {
+    if (target.price.currency !== currentPrice.currency) {
       throw new BadRequestException('Target plan currency must match');
     }
-    if (target.price.billingInterval !== current.price.billingInterval) {
+    if (target.price.billingInterval !== currentPrice.billingInterval) {
       throw new BadRequestException('Target plan billing interval must match');
     }
     if (!target.providerPrice.providerPriceId) {
@@ -502,7 +512,9 @@ export class BillingSubscriptionsManagementService {
     const reloaded = subscription.plan
       ? subscription
       : await this.findSubscription(subscription.id);
-    const resolution = await this.entitlements.resolveForSubscription(reloaded.id);
+    const resolution = await this.entitlements.resolveForSubscription(
+      reloaded.id,
+    );
     return SubscriptionManagementMapper.toResponse(reloaded, resolution);
   }
 

@@ -1,3 +1,4 @@
+import { BillingResource } from '../../common/decorators/billing-resource.decorator';
 import {
   Controller,
   Get,
@@ -6,7 +7,6 @@ import {
   Post,
   Query,
   Req,
-  SetMetadata,
   UseGuards,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
@@ -31,30 +31,45 @@ export class BillingOperationsController {
 
   @Get('subscriptions')
   @Permissions('billing.subscriptions.read')
-  listSubscriptions(@Query() query: ListConsoleSubscriptionsQueryDto) {
-    return this.operations.listSubscriptions(query);
+  listSubscriptions(
+    @Query() query: ListConsoleSubscriptionsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.operations.listSubscriptions(
+      query,
+      request.billingOrganizationScope!,
+    );
   }
 
   @Get('subscriptions/:id')
   @Permissions('billing.subscriptions.read')
+  @BillingResource('subscriptions', 'id')
   getSubscription(@Param('id', ParseUUIDPipe) id: string) {
     return this.operations.getSubscription(id);
   }
 
   @Get('checkouts')
-  @Permissions('billing.subscriptions.read')
-  listCheckouts(@Query() query: ListConsoleCheckoutsQueryDto) {
-    return this.operations.listCheckouts(query);
+  @Permissions('billing.checkout.read')
+  listCheckouts(
+    @Query() query: ListConsoleCheckoutsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.operations.listCheckouts(
+      query,
+      request.billingOrganizationScope!,
+    );
   }
 
   @Get('checkouts/:id')
-  @Permissions('billing.subscriptions.read')
+  @Permissions('billing.checkout.read')
+  @BillingResource('checkout_sessions', 'id')
   getCheckout(@Param('id', ParseUUIDPipe) id: string) {
     return this.operations.getCheckout(id);
   }
 
   @Post('checkouts/:id/verify')
-  @Permissions('billing.subscriptions.manage')
+  @Permissions('billing.checkout.verify')
+  @BillingResource('checkout_sessions', 'id')
   verifyCheckout(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() request: AuthenticatedRequest,
@@ -67,19 +82,26 @@ export class BillingOperationsController {
 
   @Get('licenses')
   @Permissions('billing.licenses.read')
-  listLicenses(@Query() query: ListConsoleLicensesQueryDto) {
-    return this.operations.listLicenses(query);
+  listLicenses(
+    @Query() query: ListConsoleLicensesQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.operations.listLicenses(
+      query,
+      request.billingOrganizationScope!,
+    );
   }
 
   @Get('licenses/:id')
   @Permissions('billing.licenses.read')
+  @BillingResource('licenses', 'id')
   getLicense(@Param('id', ParseUUIDPipe) id: string) {
     return this.operations.getLicense(id);
   }
 
   @Get('dashboard/summary')
-  @SetMetadata('billing:console:skip-auth', true)
-  dashboard() {
-    return this.operations.dashboard();
+  @Permissions('billing.dashboard.read')
+  dashboard(@Req() request: AuthenticatedRequest) {
+    return this.operations.dashboard(request.billingOrganizationScope!);
   }
 }

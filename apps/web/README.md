@@ -1,38 +1,40 @@
 # Web (Next.js)
 
-Frontend del monorepo `nextjs-nestjs`. Plantilla Next.js (App Router) con Tailwind v4 y shadcn.
-
+Frontend del monorepo `nextjs-nestjs`. Consola Next.js (App Router) con Tailwind v4, ZUNO y componentes shadcn para los casos aún no migrados.
 
 ## Stack
 
 - **Next.js 16** — App Router, React Server Components.
 - **React 19**.
 - **Tailwind CSS v4** — vía `@tailwindcss/postcss`, tokens en `src/app/globals.css`.
-- **shadcn** (estilo `base-nova`, sobre **@base-ui/react**) — componentes en `src/components/ui`.
+- **ZUNO 0.1.0-alpha.2** (sobre **@base-ui/react**) — componentes editables en `src/components/zuno`.
+- **shadcn** — sidebar, tablas, breadcrumbs, paginación y menús con filtros de radio. Viven en `src/components/ui`.
 - **lucide-react** — iconos.
 - **class-variance-authority**, **clsx**, **tailwind-merge** — variantes y merge de clases.
-- **TypeScript**, **ESLint**. Diseño **light-only**.
+- **TypeScript**, **ESLint**. Tema claro de Billing por defecto; el usuario puede activar el tema oscuro desde el menú de perfil. La elección se guarda en `localStorage`.
 - Gestor de paquetes: **bun**.
 
 ## Estructura
 
 ```
 apps/web/
-  components.json                # config shadcn (style base-nova, baseColor neutral)
+  components.json                # registro ZUNO y destino @/components/zuno
   src/
     app/
       layout.tsx                 # layout raíz
       page.tsx                   # home
-      globals.css                # tokens Tailwind v4 + tema shadcn
+      globals.css                # paleta Hemia compartida y variantes claro/oscuro
+      zuno-tokens.css           # tokens complementarios claro/oscuro de ZUNO
     components/
       app-sidebar.tsx, app-topbar.tsx, stat-card.tsx
-      ui/                        # primitivos shadcn (button, input, badge, table)
+      zuno/                      # primitivos ZUNO usados por la consola
+      ui/                        # componentes shadcn aún necesarios
     lib/
       api/                       # cliente HTTP mínimo y sesión
       nav.ts, utils.ts           # navegación y helper cn()
 ```
 
-Aliases: `@/components`, `@/components/ui`, `@/lib`, `@/lib/utils`, `@/hooks`.
+Aliases: `@/components`, `@/components/zuno`, `@/components/ui`, `@/lib`, `@/lib/utils`, `@/hooks`.
 
 ## Arranque
 
@@ -60,10 +62,18 @@ bun run --cwd apps/web start
 bun run --cwd apps/web lint
 ```
 
-## Añadir componentes shadcn
+## Añadir componentes
+
+Desde `apps/web`, ZUNO instala código editable en `src/components/zuno`:
 
 ```bash
-bunx shadcn@latest add <componente>
+bunx zunoui add <componente> --pm bun
 ```
 
-Se instalan en `src/components/ui` según `components.json`.
+Si ZUNO no ofrece el componente, instalarlo desde shadcn en su carpeta actual:
+
+```bash
+bunx shadcn add <componente> --path src/components/ui
+```
+
+`components.json` apunta por defecto a ZUNO. No sobrescribir componentes shadcn existentes.

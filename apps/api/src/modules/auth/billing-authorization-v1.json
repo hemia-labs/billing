@@ -1,0 +1,178 @@
+{
+  "contract_version": 1,
+  "catalog_version": 1,
+  "product_code": "billing",
+  "audience": "billing-api",
+  "permissions_owner": "billing",
+  "permissions": [
+    {
+      "code": "billing.addons.cancel",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.addons.create",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.addons.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.audit.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.catalog.manage",
+      "resource_domain": "catalog"
+    },
+    {
+      "code": "billing.catalog.publish",
+      "resource_domain": "catalog"
+    },
+    {
+      "code": "billing.catalog.read",
+      "resource_domain": "catalog"
+    },
+    {
+      "code": "billing.checkout.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.checkout.verify",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.dashboard.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.invoices.cancel",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.invoices.issue",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.invoices.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.licenses.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.subscriptions.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.webhooks.read",
+      "resource_domain": "customer_data"
+    },
+    {
+      "code": "billing.webhooks.retry",
+      "resource_domain": "customer_data"
+    }
+  ],
+  "roles": [
+    {
+      "code": "billing.viewer",
+      "name": "Consulta operativa",
+      "status": "active",
+      "allowed_scopes": [
+        "all_customers",
+        "organizations"
+      ],
+      "permissions": [
+        "billing.dashboard.read",
+        "billing.catalog.read",
+        "billing.subscriptions.read",
+        "billing.checkout.read",
+        "billing.licenses.read",
+        "billing.addons.read"
+      ]
+    },
+    {
+      "code": "billing.operator",
+      "name": "Operación de compras y extras",
+      "status": "active",
+      "allowed_scopes": [
+        "all_customers",
+        "organizations"
+      ],
+      "permissions": [
+        "billing.dashboard.read",
+        "billing.catalog.read",
+        "billing.subscriptions.read",
+        "billing.checkout.read",
+        "billing.checkout.verify",
+        "billing.licenses.read",
+        "billing.addons.read",
+        "billing.addons.create",
+        "billing.addons.cancel"
+      ]
+    },
+    {
+      "code": "billing.catalog_manager",
+      "name": "Administración de catálogo",
+      "status": "active",
+      "allowed_scopes": [
+        "catalog_global"
+      ],
+      "permissions": [
+        "billing.catalog.read",
+        "billing.catalog.manage",
+        "billing.catalog.publish"
+      ]
+    },
+    {
+      "code": "billing.invoice_operator",
+      "name": "Operación de facturas",
+      "status": "active",
+      "allowed_scopes": [
+        "all_customers",
+        "organizations"
+      ],
+      "permissions": [
+        "billing.invoices.read",
+        "billing.invoices.issue",
+        "billing.invoices.cancel"
+      ]
+    },
+    {
+      "code": "billing.auditor",
+      "name": "Auditoría",
+      "status": "active",
+      "allowed_scopes": [
+        "all_customers",
+        "organizations"
+      ],
+      "permissions": [
+        "billing.dashboard.read",
+        "billing.catalog.read",
+        "billing.subscriptions.read",
+        "billing.checkout.read",
+        "billing.licenses.read",
+        "billing.addons.read",
+        "billing.invoices.read",
+        "billing.audit.read"
+      ]
+    },
+    {
+      "code": "billing.integration_operator",
+      "name": "Operación de integraciones",
+      "status": "active",
+      "allowed_scopes": [
+        "all_customers",
+        "organizations"
+      ],
+      "permissions": [
+        "billing.subscriptions.read",
+        "billing.checkout.read",
+        "billing.licenses.read",
+        "billing.webhooks.read",
+        "billing.webhooks.retry"
+      ]
+    }
+  ]
+}

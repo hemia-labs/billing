@@ -26,7 +26,7 @@ export function ProductNewClient() {
 
   if (!canManage) {
     return (
-      <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
+      <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
         No tienes permiso para administrar productos.
       </div>
     );

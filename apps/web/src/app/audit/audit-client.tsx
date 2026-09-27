@@ -2,8 +2,8 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/zuno/button";
+import { Input } from "@/components/zuno/input";
 import {
   ApiError,
   apiErrorMessage,
@@ -82,7 +82,7 @@ export function AuditClient() {
 
   return (
     <div className="space-y-5">
-      <form className="grid gap-3 rounded-lg border border-border bg-card p-5 shadow-sm md:grid-cols-3 xl:grid-cols-8" onSubmit={submitFilters}>
+      <form className="grid gap-3 rounded-2xl border border-surface-line bg-card p-5 shadow-sm md:grid-cols-3 xl:grid-cols-8" onSubmit={submitFilters}>
         <Input aria-label="Organización" placeholder="Organización" value={filters.organization_id} onChange={(e) => setFilters({ ...filters, organization_id: e.target.value })} />
         <Input aria-label="Entidad" placeholder="Entidad" value={filters.resource_type} onChange={(e) => setFilters({ ...filters, resource_type: e.target.value })} />
         <Input aria-label="Resource ID" placeholder="Resource ID" value={filters.resource_id} onChange={(e) => setFilters({ ...filters, resource_id: e.target.value })} />
@@ -93,9 +93,9 @@ export function AuditClient() {
         <Button className="gap-2" type="submit"><Search className="size-4" />Filtrar</Button>
       </form>
 
-      {message ? <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message}</div> : null}
+      {message ? <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message}</div> : null}
 
-      <section className="rounded-lg border border-border bg-card shadow-sm">
+      <section className="rounded-2xl border border-surface-line bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <h2 className="text-lg font-bold">Audit logs</h2>
           <Button aria-label="Recargar auditoría" onClick={() => void loadLogs()} size="icon" variant="outline"><RefreshCw className="size-4" /></Button>

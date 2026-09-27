@@ -1,14 +1,23 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { BillingAuditLogEntity, BillingProvider } from '../billing-shared';
+import { BillingAuditLogEntity } from '../billing-shared';
 import { CatalogPageDto } from '../catalog/dtos';
 import { BillingAuditRecordInput } from './types';
-import { ConsoleAuditLogResponseDto, ListConsoleAuditLogsQueryDto } from './dtos';
+import {
+  ConsoleAuditLogResponseDto,
+  ListConsoleAuditLogsQueryDto,
+} from './dtos';
 
 const ALLOWED_METADATA_KEYS = new Set([
   'checkoutSessionId',
   'invoiceId',
+  'actorIssuer',
+  'actorSubject',
+  'actorIdentityReferenceId',
+  'traceId',
+  'outcome',
+  'operationKey',
   'subscriptionAddonId',
   'subscriptionId',
   'paymentId',
@@ -61,8 +70,14 @@ export class BillingAuditService {
 
   async listAuditLogs(
     query: ListConsoleAuditLogsQueryDto,
+    scope: string[] | null,
   ): Promise<CatalogPageDto<ConsoleAuditLogResponseDto>> {
     const builder = this.auditLogs.createQueryBuilder('audit');
+    if (scope !== null)
+      builder.andWhere(
+        'audit.organizationId IN (:...authorizedOrganizations)',
+        { authorizedOrganizations: scope },
+      );
     if (query.organization_id)
       builder.andWhere('audit.organizationId = :organizationId', {
         organizationId: query.organization_id,
@@ -82,7 +97,9 @@ export class BillingAuditService {
     if (query.action)
       builder.andWhere('audit.action = :action', { action: query.action });
     if (query.provider)
-      builder.andWhere('audit.provider = :provider', { provider: query.provider });
+      builder.andWhere('audit.provider = :provider', {
+        provider: query.provider,
+      });
     if (query.created_from)
       builder.andWhere('audit.createdAt >= :createdFrom', {
         createdFrom: query.created_from,
@@ -100,7 +117,7 @@ export class BillingAuditService {
       .getManyAndCount();
 
     return {
-      items: items.map(this.toConsoleDto),
+      items: items.map((item) => this.toConsoleDto(item)),
       total,
       page: query.page,
       limit: query.limit,
@@ -117,7 +134,9 @@ export class BillingAuditService {
     metadata: Record<string, unknown>,
   ): Record<string, unknown> {
     return Object.fromEntries(
-      Object.entries(metadata).filter(([key]) => ALLOWED_METADATA_KEYS.has(key)),
+      Object.entries(metadata).filter(([key]) =>
+        ALLOWED_METADATA_KEYS.has(key),
+      ),
     );
   }
 
@@ -129,7 +148,7 @@ export class BillingAuditService {
       action: log.action,
       resourceType: log.resourceType,
       resourceId: log.resourceId,
-      provider: log.provider as BillingProvider | null,
+      provider: log.provider,
       metadata: log.metadata,
       createdAt: log.createdAt,
     };

@@ -4,6 +4,7 @@ import {
   BillingPlanPriceEntity,
   BillingPlanVersionEntity,
   BillingProviderPriceEntity,
+  BillingSubscriptionEntity,
   FeatureAggregationStrategy,
   FeatureValueType,
   PlanPriceBillingInterval,
@@ -35,6 +36,30 @@ export class BillingPlanCatalogResolver {
       .sort((left, right) => right.version - left.version)[0];
 
     if (!version) throw new NotFoundException('Published billing plan version not found');
+    return version;
+  }
+
+  contractVersion(
+    subscription: BillingSubscriptionEntity,
+  ): BillingPlanVersionEntity {
+    const versions = subscription.plan?.versions ?? [];
+    const priceId =
+      subscription.planPriceId ?? subscription.providerPrice?.planPriceId;
+    const providerPriceId = subscription.providerPriceId;
+    if (!priceId && !providerPriceId)
+      return this.publishedVersion(subscription.plan);
+
+    const version = versions.find((item) =>
+      (item.prices ?? []).some((price) =>
+        priceId
+          ? price.id === priceId
+          : (price.providerPrices ?? []).some(
+              (providerPrice) => providerPrice.id === providerPriceId,
+            ),
+      ),
+    );
+    if (!version)
+      throw new NotFoundException('Contracted billing plan version not found');
     return version;
   }
 

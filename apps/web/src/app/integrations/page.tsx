@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/zuno/card";
 
 export const metadata: Metadata = {
   title: "Integraciones",

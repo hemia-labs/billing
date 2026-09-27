@@ -36,7 +36,7 @@ export class BillingLicenseCalculatorService {
     input: BillingLicenseCalculationInput,
   ): BillingLicenseCalculationResult {
     const version = input.subscription.plan
-      ? this.planResolver.publishedVersion(input.subscription.plan)
+      ? this.planResolver.contractVersion(input.subscription)
       : null;
     const featuresJson = version ? this.planResolver.entitlements(version) : {};
     const seatsLimit =

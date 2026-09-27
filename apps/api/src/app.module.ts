@@ -1,3 +1,5 @@
+import eventBusConfig from './config/event-bus.config';
+import { BillingEventBusModule } from './modules/event-bus/billing-event-bus.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
@@ -24,6 +26,7 @@ import { BillingModule } from './modules/billing.module';
       envFilePath: ['.env', '.env.local'],
       load: [
         appConfig,
+        eventBusConfig,
         authConfig,
         billingFiscalConfig,
         databaseConfig,
@@ -37,6 +40,7 @@ import { BillingModule } from './modules/billing.module';
     }),
     CommonAuthModule,
     AuthModule,
+    BillingEventBusModule,
     DatabaseModule,
     IdentityModule,
     BillingModule,

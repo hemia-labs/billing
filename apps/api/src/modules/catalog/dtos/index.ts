@@ -4,6 +4,7 @@ export * from './catalog-pagination.dto';
 export * from './create-billing-addon.dto';
 export * from './create-billing-plan.dto';
 export * from './create-billing-product.dto';
+export * from './public-catalog.dto';
 export * from './update-billing-addon.dto';
 export * from './update-billing-plan.dto';
 export * from './update-billing-product.dto';

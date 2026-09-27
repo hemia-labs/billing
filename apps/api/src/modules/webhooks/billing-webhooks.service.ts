@@ -1,14 +1,24 @@
+import { webhookOrganizationSql } from './webhook-organization.sql';
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, MoreThanOrEqual, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  MoreThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { BillingAuditService } from '../audit';
-import { BillingAuditLogEntity, BillingWebhookEventEntity } from '../billing-shared';
+import {
+  BillingAuditLogEntity,
+  BillingWebhookEventEntity,
+} from '../billing-shared';
 import {
   BillingProvider,
   WebhookProcessingStatus,
@@ -18,10 +28,7 @@ import { CatalogPageDto } from '../catalog/dtos';
 import { PaypalClientService } from '../paypal';
 import { BillingSubscriptionPaymentsProcessorService } from './billing-subscription-payments-processor.service';
 import { PaypalEventResource } from './types';
-import {
-  BillingWebhookProcessResult,
-  PaypalWebhookHeaders,
-} from './types';
+import { BillingWebhookProcessResult, PaypalWebhookHeaders } from './types';
 import {
   ConsoleWebhookDetailResponseDto,
   ConsoleWebhookResponseDto,
@@ -47,10 +54,18 @@ export class BillingWebhooksService {
 
   async listConsoleWebhooks(
     query: ListConsoleWebhooksQueryDto,
+    scope: string[] | null,
   ): Promise<CatalogPageDto<ConsoleWebhookResponseDto>> {
     const builder = this.webhookEvents.createQueryBuilder('webhook');
+    if (scope !== null)
+      builder.andWhere(
+        `${webhookOrganizationSql('webhook')} IN (:...authorizedOrganizations)`,
+        { authorizedOrganizations: scope },
+      );
     if (query.provider)
-      builder.andWhere('webhook.provider = :provider', { provider: query.provider });
+      builder.andWhere('webhook.provider = :provider', {
+        provider: query.provider,
+      });
     if (query.event_type)
       builder.andWhere('webhook.eventType = :eventType', {
         eventType: query.event_type,
@@ -88,14 +103,16 @@ export class BillingWebhooksService {
       .getManyAndCount();
 
     return {
-      items: items.map(this.toConsoleWebhook),
+      items: items.map((item) => this.toConsoleWebhook(item)),
       total,
       page: query.page,
       limit: query.limit,
     };
   }
 
-  async getConsoleWebhook(id: string): Promise<ConsoleWebhookDetailResponseDto> {
+  async getConsoleWebhook(
+    id: string,
+  ): Promise<ConsoleWebhookDetailResponseDto> {
     const event = await this.findWebhook(id);
     return this.toConsoleWebhookDetail(event);
   }
@@ -104,6 +121,7 @@ export class BillingWebhooksService {
     id: string,
     reason: string,
     actorUserId: string,
+    scope: string[] | null,
   ): Promise<ConsoleWebhookDetailResponseDto> {
     return this.dataSource.transaction(async (manager) => {
       const events = manager.getRepository(BillingWebhookEventEntity);
@@ -111,7 +129,8 @@ export class BillingWebhooksService {
         where: { id },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!event) throw new NotFoundException('Billing webhook event not found');
+      if (!event)
+        throw new NotFoundException('Billing webhook event not found');
       if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
         throw new BadRequestException('Only verified webhooks can be retried');
       }
@@ -119,6 +138,17 @@ export class BillingWebhooksService {
         throw new BadRequestException('Only failed webhooks can be retried');
       }
 
+      const [owner] = await manager.query<
+        Array<{ organization_id: string | null }>
+      >(
+        `SELECT ${webhookOrganizationSql('w')} AS organization_id FROM webhook_events w WHERE w.id=$1`,
+        [event.id],
+      );
+      if (
+        scope !== null &&
+        (!owner?.organization_id || !scope.includes(owner.organization_id))
+      )
+        throw new ForbiddenException('Webhook outside authorized scope');
       const retryAttempt = await this.nextRetryAttempt(manager, event.id);
       event.processingStatus = WebhookProcessingStatus.Pending;
       event.errorMessage = null;
@@ -142,6 +172,7 @@ export class BillingWebhooksService {
       await this.audit.record({
         manager,
         actorUserId,
+        organizationId: owner?.organization_id ?? null,
         action: RETRY_ACTION,
         resourceType: 'billing_webhook_event',
         resourceId: saved.id,
@@ -245,7 +276,9 @@ export class BillingWebhooksService {
     );
 
     if (missingHeader) {
-      throw new BadRequestException(`Missing PayPal header: ${missingHeader[0]}`);
+      throw new BadRequestException(
+        `Missing PayPal header: ${missingHeader[0]}`,
+      );
     }
   }
 
@@ -298,13 +331,15 @@ export class BillingWebhooksService {
     webhookEventId: string,
   ): Promise<number> {
     const since = new Date(Date.now() - RETRY_WINDOW_MINUTES * 60 * 1000);
-    const recentRetries = await manager.getRepository(BillingAuditLogEntity).count({
-      where: {
-        action: RETRY_ACTION,
-        resourceId: webhookEventId,
-        createdAt: MoreThanOrEqual(since),
-      },
-    });
+    const recentRetries = await manager
+      .getRepository(BillingAuditLogEntity)
+      .count({
+        where: {
+          action: RETRY_ACTION,
+          resourceId: webhookEventId,
+          createdAt: MoreThanOrEqual(since),
+        },
+      });
     if (recentRetries >= RETRY_LIMIT) {
       throw new HttpException(
         'Webhook retry rate limit exceeded',
@@ -428,7 +463,9 @@ export class BillingWebhooksService {
     return Object.fromEntries(
       ['id', 'custom_id', 'billing_agreement_id', 'subscription_id']
         .map((key) => [key, resource[key]])
-        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+        .filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string',
+        ),
     );
   }
 }

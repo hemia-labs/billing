@@ -12,6 +12,7 @@ export * from './billing-plan.entity';
 export * from './billing-plan-price.entity';
 export * from './billing-plan-version.entity';
 export * from './billing-product.entity';
+export * from './billing-tenant.entity';
 export * from './billing-provider-price.entity';
 export * from './billing-subscription.entity';
 export * from './billing-subscription-addon.entity';

@@ -1,85 +1,126 @@
 "use client";
 
-import { Bell, LogOut, Search } from "lucide-react";
-import { usePathname } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import Link from "next/link";
+import Image from "next/image";
+import { useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { labelFor } from "@/lib/nav";
-import { logout, useSession } from "@/components/auth-gate";
+import { getCatalogPlan, getCatalogProduct } from "@/features/billing/catalog/catalog-api";
 
 export function AppTopbar() {
-  const title = labelFor(usePathname());
-  const { user } = useSession();
-  const name = user.name || user.email || user.ssoUserId;
-  const initials = name
-    .split(/\s+|@/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const isNewPlan = pathname === "/products/plans/new";
+  const newPlanProductId = isNewPlan ? searchParams.get("product_id") : null;
+  const productId = /^\/products\/([^/]+)$/.exec(pathname)?.[1];
+  const planId = /^\/products\/plans\/([^/]+)$/.exec(pathname)?.[1];
+  const isPlanDetail = Boolean(planId && planId !== "new");
+  const isProductDetail = Boolean(productId && productId !== "new");
+  const breadcrumbProductId = isProductDetail ? productId : newPlanProductId;
+  const [productCrumb, setProductCrumb] = useState<{ id: string; code: string; name: string } | null>(null);
+  const [planCrumb, setPlanCrumb] = useState<{ id: string; code: string; productId: string; productLabel: string } | null>(null);
+
+  useEffect(() => {
+    if (!breadcrumbProductId) return;
+    let active = true;
+    void getCatalogProduct(breadcrumbProductId)
+      .then((product) => {
+        if (active) setProductCrumb({ id: breadcrumbProductId, code: product.code, name: product.name });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [breadcrumbProductId]);
+
+  useEffect(() => {
+    if (!isPlanDetail || !planId) return;
+    let active = true;
+    void getCatalogPlan(planId)
+      .then((plan) => {
+        if (active) setPlanCrumb({
+          id: planId,
+          code: plan.code,
+          productId: plan.productId,
+          productLabel: plan.product?.name ?? plan.productCode ?? "Producto",
+        });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [isPlanDetail, planId]);
+
+  const currentPlanCrumb = planCrumb?.id === planId ? planCrumb : null;
+  const title = labelFor(pathname);
 
   return (
-    <header className="flex h-topbar shrink-0 items-center gap-4 border-b border-border bg-card px-4 sm:px-6 lg:px-8">
-      <SidebarTrigger aria-label="Abrir navegación" className="size-12 md:hidden" />
-      <p className="text-lg font-semibold">{title}</p>
-      <div className="ml-auto flex items-center gap-2">
-        <div className="relative hidden sm:block">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            aria-label="Buscar"
-            className="h-12 w-64 pl-9"
-            placeholder="Buscar..."
-            type="search"
-          />
-        </div>
-        <Tooltip>
-          <TooltipTrigger
-            render={<Button aria-label="Notificaciones" className="size-12" size="icon" variant="ghost" />}
-          >
-            <Bell className="size-4" />
-          </TooltipTrigger>
-          <TooltipContent>Notificaciones</TooltipContent>
-        </Tooltip>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label="Abrir menú de usuario"
-            render={<Button variant="ghost" size="icon" className="size-12" />}
-          >
-            <Avatar className="size-9" aria-hidden="true">
-              <AvatarFallback className="bg-secondary text-xs font-bold text-primary">{initials}</AvatarFallback>
-            </Avatar>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 border border-border bg-card shadow-lg">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel className="px-3 py-2">
-                <p className="truncate text-sm font-semibold text-foreground">{name}</p>
-                <p className="truncate text-xs font-normal text-muted-foreground">{user.email}</p>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={logout} className="min-h-12 gap-3 px-3 text-sm font-medium">
-                <LogOut className="size-4" />
-                Cerrar sesión
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+    <header className="flex h-topbar shrink-0 items-center gap-2 border-b border-border px-4">
+      <SidebarTrigger aria-label="Mostrar u ocultar navegación" className="-ml-1" />
+      <Separator orientation="vertical" className="mr-2 hidden h-4 md:block" />
+      <Link href="/" aria-label="Hemia Billing" className="flex items-center gap-2 md:hidden">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[var(--hemia-navy)] dark:bg-transparent">
+          <Image src="/logo.png" alt="" width={96} height={66} className="h-auto w-8" />
+        </span>
+        <Image src="/wordmark.png" alt="" width={318} height={49} className="h-auto w-36 brightness-0 dark:invert" />
+      </Link>
+      <Breadcrumb aria-label="Ruta actual" className="hidden md:block">
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink render={<Link href="/" />}>Hemia Billing</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          {isProductDetail || isPlanDetail || isNewPlan ? (
+            <>
+              <BreadcrumbItem>
+                <BreadcrumbLink render={<Link href="/products" />}>Productos</BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              {isNewPlan ? (
+                <>
+                  {newPlanProductId ? (
+                    <>
+                      <BreadcrumbItem className="min-w-0">
+                        <BreadcrumbLink render={<Link href={`/products/${newPlanProductId}?tab=plans`} />}>
+                          {productCrumb?.id === newPlanProductId ? productCrumb.name : "Producto"}
+                        </BreadcrumbLink>
+                      </BreadcrumbItem>
+                      <BreadcrumbSeparator />
+                    </>
+                  ) : null}
+                  <BreadcrumbItem><BreadcrumbPage>Nuevo plan</BreadcrumbPage></BreadcrumbItem>
+                </>
+              ) : isPlanDetail ? (
+                <>
+                  <BreadcrumbItem className="min-w-0">
+                    <BreadcrumbLink render={<Link href={currentPlanCrumb ? "/products/" + currentPlanCrumb.productId + "?tab=plans" : "/products"} />}>
+                      {currentPlanCrumb?.productLabel ?? "Producto"}
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem className="min-w-0">
+                    <BreadcrumbPage className="max-w-[30vw] truncate">{currentPlanCrumb?.code ?? "Plan"}</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              ) : (
+                <BreadcrumbItem className="min-w-0">
+                  <BreadcrumbPage className="max-w-[40vw] truncate">{productCrumb?.id === productId ? productCrumb?.code : "Producto"}</BreadcrumbPage>
+                </BreadcrumbItem>
+              )}
+            </>
+          ) : (
+            <BreadcrumbItem>
+              <BreadcrumbPage>{title}</BreadcrumbPage>
+            </BreadcrumbItem>
+          )}
+        </BreadcrumbList>
+      </Breadcrumb>
     </header>
   );
 }

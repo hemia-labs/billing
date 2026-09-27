@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
+import { Card } from "@/components/zuno/card";
 import { CatalogClient } from "@/features/billing/catalog/catalog-client";
 import { ProductCreateAction } from "@/features/billing/catalog/product-create-action";
 
@@ -15,7 +16,9 @@ export default function CatalogPage() {
         description="Administra los productos y sus planes/add-ons comerciales."
         title="Productos"
       />
-      <CatalogClient />
+      <Card className="overflow-hidden shadow-sm">
+        <CatalogClient />
+      </Card>
     </div>
   );
 }

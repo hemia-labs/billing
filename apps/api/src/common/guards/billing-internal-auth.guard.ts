@@ -5,18 +5,14 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { AuthenticatedRequest } from '../types/authenticated-request.type';
-import { BillingInternalApiKeyGuard } from './billing-internal-api-key.guard';
 import { SsoBearerGuard } from './sso-bearer.guard';
 
 @Injectable()
 export class BillingInternalAuthGuard implements CanActivate {
-  constructor(
-    private readonly ssoBearerGuard: SsoBearerGuard,
-    private readonly apiKeyGuard: BillingInternalApiKeyGuard,
-  ) {}
+  constructor(private readonly ssoBearerGuard: SsoBearerGuard) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.header('authorization');
 
     if (authorization?.startsWith('Bearer ')) {
@@ -27,21 +23,14 @@ export class BillingInternalAuthGuard implements CanActivate {
         .getRequest<AuthenticatedRequest>();
 
       if (!authenticatedRequest.principal?.isMachine) {
-        throw new UnauthorizedException('User credentials cannot access integrations');
+        throw new UnauthorizedException(
+          'User credentials cannot access integrations',
+        );
       }
 
       return true;
     }
 
-    const allowedByApiKey = this.apiKeyGuard.canActivate(context);
-
-    request.principal = {
-      sub: 'legacy-api-key',
-      scopes: ['billing.*'],
-      isMachine: true,
-    };
-    request.user = request.principal;
-
-    return allowedByApiKey;
+    throw new UnauthorizedException('Service bearer token required');
   }
 }

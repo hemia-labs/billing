@@ -1,3 +1,4 @@
+import { BillingResource } from '../../common/decorators/billing-resource.decorator';
 import {
   Body,
   Controller,
@@ -23,23 +24,36 @@ export class BillingWebhooksConsoleController {
 
   @Get()
   @Permissions('billing.webhooks.read')
-  listWebhooks(@Query() query: ListConsoleWebhooksQueryDto) {
-    return this.service.listConsoleWebhooks(query);
+  listWebhooks(
+    @Query() query: ListConsoleWebhooksQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.service.listConsoleWebhooks(
+      query,
+      request.billingOrganizationScope!,
+    );
   }
 
   @Get(':id')
   @Permissions('billing.webhooks.read')
+  @BillingResource('webhook_events', 'id')
   getWebhook(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getConsoleWebhook(id);
   }
 
   @Post(':id/retry')
   @Permissions('billing.webhooks.retry')
+  @BillingResource('webhook_events', 'id')
   retryWebhook(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RetryWebhookDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    return this.service.retryWebhook(id, dto.reason, request.principal!.sub);
+    return this.service.retryWebhook(
+      id,
+      dto.reason,
+      request.principal!.sub,
+      request.billingOrganizationScope!,
+    );
   }
 }

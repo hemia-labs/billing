@@ -10,7 +10,9 @@ export const resolveIntegrationOrganizationId = (
       requestedOrganizationId &&
       requestedOrganizationId !== principal.organizationId
     ) {
-      throw new ForbiddenException('Organization is outside integration context');
+      throw new ForbiddenException(
+        'Organization is outside integration context',
+      );
     }
 
     return principal.organizationId;
@@ -26,4 +28,13 @@ export const resolveIntegrationOrganizationId = (
 export const resolveIntegrationUserId = (
   principal: AuthenticatedPrincipal | undefined,
   requestedUserId?: string,
-): string => requestedUserId ?? principal?.sub ?? '';
+): string => {
+  if (principal && !principal.isMachine) {
+    if (requestedUserId && requestedUserId !== principal.sub)
+      throw new ForbiddenException('User is outside integration context');
+    return principal.sub;
+  }
+  if (!requestedUserId)
+    throw new BadRequestException('userId is required for service checkout');
+  return requestedUserId;
+};

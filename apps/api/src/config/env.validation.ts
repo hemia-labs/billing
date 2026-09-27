@@ -1,23 +1,73 @@
 import * as Joi from 'joi';
 
-const minimumProductionSecretLength = 32;
 const hasValue = (value?: string): boolean => Boolean(value?.trim());
 
-export const envVarsSchema = Joi.object({
+const schema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),
+  EVENT_BUS_ENABLED: Joi.boolean().default(false),
+  EVENT_BUS_PREFETCH: Joi.number().integer().min(1).max(100).default(10),
+  AMQP_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.required(),
+      otherwise: Joi.when('EVENT_BUS_ENABLED', {
+        is: true,
+        then: Joi.required(),
+        otherwise: Joi.optional(),
+      }),
+    }),
   PORT: Joi.number().port().default(3015),
   APP_GLOBAL_PREFIX: Joi.string().default('api/v1'),
   CORS_ORIGINS: Joi.string().default(
     'http://localhost:5175,http://localhost:3015',
   ),
-  BILLING_INTERNAL_API_KEY: Joi.string().allow('').default(''),
   AUTH_ISSUER_URL: Joi.string().uri().allow('').default(''),
   AUTH_JWKS_URI: Joi.string().uri().allow('').default(''),
   AUTH_AUDIENCE: Joi.string().allow('').default(''),
   AUTH_REQUIRED_ISSUER: Joi.string().uri().allow('').default(''),
-  AUTH_LEGACY_API_KEY_ENABLED: Joi.boolean().default(false),
+  SECRETS_ENABLED: Joi.boolean().default(false),
+  SECRETS_ENVIRONMENT: Joi.string()
+    .valid('dev', 'qa', 'staging', 'prod')
+    .default('dev'),
+  SECRETS_CATEGORY: Joi.string()
+    .valid(
+      'internal',
+      'external',
+      'clients',
+      'partners',
+      'whitelabel',
+      'shared',
+    )
+    .default('internal'),
+  SECRETS_OWNER: Joi.string().default('hemia'),
+  SECRETS_SYSTEM: Joi.string().default('billing'),
+  SECRETS_SSO_PATH: Joi.string().default('auth/sso'),
+  VAULT_BASE_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .when('SECRETS_ENABLED', {
+      is: true,
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
+  VAULT_ROLE_ID: Joi.string().when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional().allow(''),
+  }),
+  VAULT_SECRET_ID: Joi.string().when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional().allow(''),
+  }),
+  VAULT_AUTH_PATH: Joi.string().default('approle'),
+  VAULT_MOUNT_PREFIX: Joi.string().default('kv-'),
+  VAULT_TIMEOUT_MS: Joi.number().integer().positive().default(5000),
+  SECRETS_CACHE_ENABLED: Joi.boolean().default(false),
+  SECRETS_CACHE_TTL_MS: Joi.number().integer().positive().default(60000),
+  REDIS_PORT: Joi.number().port().default(6379),
   REDIS_HOST: Joi.string().hostname().optional(),
   REDIS_PASSWORD: Joi.string().allow('').optional(),
   REDIS_DB: Joi.number().integer().min(0).optional(),
@@ -34,13 +84,22 @@ export const envVarsSchema = Joi.object({
   SSO_FRONTEND_URL: Joi.string().uri().optional(),
   SSO_SCOPE: Joi.string().optional(),
   SSO_COOKIE_NAME: Joi.string().optional(),
+  SSO_SESSION_TTL_SECONDS: Joi.number().integer().positive().default(604800),
+  SSO_COOKIE_SECURE: Joi.boolean().optional(),
+  PRODUCT_CODE: Joi.string().default('billing'),
+  ACCESS_API_URL: Joi.string().uri().optional(),
+  ACCESS_JWKS_URI: Joi.string().uri().optional(),
+  ACCESS_AUDIENCE: Joi.string().default('access-api'),
   PAYPAL_ENV: Joi.string().valid('sandbox', 'live').default('sandbox'),
   PAYPAL_CLIENT_ID: Joi.string().allow('').default(''),
   PAYPAL_CLIENT_SECRET: Joi.string().allow('').default(''),
   PAYPAL_WEBHOOK_ID: Joi.string().allow('').default(''),
   PAYPAL_API_BASE_URL: Joi.string().uri().optional(),
   HEMIA_LEGAL_BASE_URL: Joi.string().uri().allow('').default(''),
-  HEMIA_LEGAL_API_KEY: Joi.string().allow('').default(''),
+  HEMIA_LEGAL_TOKEN_URL: Joi.string().uri().allow('').default(''),
+  HEMIA_LEGAL_CLIENT_ID: Joi.string().default('billing-legal-service'),
+  HEMIA_LEGAL_CLIENT_SECRET: Joi.string().allow('').default(''),
+  HEMIA_LEGAL_PRODUCTS: Joi.string().default('{}'),
   BILLING_FISCAL_PROVIDER: Joi.string().default('noop'),
   BILLING_FISCAL_API_BASE_URL: Joi.string().uri().allow('').default(''),
   BILLING_FISCAL_API_KEY: Joi.string().allow('').default(''),
@@ -48,13 +107,29 @@ export const envVarsSchema = Joi.object({
   BILLING_FISCAL_STORAGE_BUCKET: Joi.string().allow('').default(''),
   BILLING_FISCAL_STORAGE_ACCESS_KEY_ID: Joi.string().allow('').default(''),
   BILLING_FISCAL_STORAGE_SECRET_ACCESS_KEY: Joi.string().allow('').default(''),
-  DB_HOST: Joi.string().required(),
+  DB_HOST: Joi.string().when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.optional().allow(''),
+    otherwise: Joi.required(),
+  }),
   DB_PORT: Joi.number().port().default(5432),
-  DB_USERNAME: Joi.string().required(),
-  DB_PASSWORD: Joi.string().allow('').required(),
-  DB_DATABASE: Joi.string().required(),
+  DB_USERNAME: Joi.string().when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.optional().allow(''),
+    otherwise: Joi.required(),
+  }),
+  DB_PASSWORD: Joi.string().allow('').when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.optional(),
+    otherwise: Joi.required(),
+  }),
+  DB_DATABASE: Joi.string().when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.optional().allow(''),
+    otherwise: Joi.required(),
+  }),
   DB_LOGGING: Joi.boolean().default(false),
-}).custom((env, helpers) => {
+}).custom((env: Record<string, unknown>, helpers) => {
   const nodeEnv = env.NODE_ENV as string;
   const corsOrigins = (env.CORS_ORIGINS as string)
     .split(',')
@@ -64,8 +139,6 @@ export const envVarsSchema = Joi.object({
   const authJwksUri = env.AUTH_JWKS_URI as string;
   const authAudience = env.AUTH_AUDIENCE as string;
   const authRequiredIssuer = env.AUTH_REQUIRED_ISSUER as string;
-  const legacyApiKeyEnabled = env.AUTH_LEGACY_API_KEY_ENABLED as boolean;
-  const billingInternalApiKey = env.BILLING_INTERNAL_API_KEY as string;
   const paypalEnv = env.PAYPAL_ENV as string;
   const paypalApiBaseUrl = env.PAYPAL_API_BASE_URL as string | undefined;
 
@@ -77,48 +150,34 @@ export const envVarsSchema = Joi.object({
     }
 
     if (
-      !hasValue(authIssuerUrl) ||
       !hasValue(authJwksUri) ||
       !hasValue(authAudience) ||
-      !hasValue(authRequiredIssuer)
+      (!hasValue(authRequiredIssuer) && !hasValue(authIssuerUrl))
     ) {
       return helpers.error('any.invalid', {
         message:
-          'AUTH_ISSUER_URL, AUTH_JWKS_URI, AUTH_AUDIENCE and AUTH_REQUIRED_ISSUER are required in production',
-      });
-    }
-
-    if (legacyApiKeyEnabled) {
-      return helpers.error('any.invalid', {
-        message: 'AUTH_LEGACY_API_KEY_ENABLED cannot be true in production',
+          'AUTH_JWKS_URI, AUTH_AUDIENCE and an issuer (AUTH_REQUIRED_ISSUER or AUTH_ISSUER_URL) are required in production',
       });
     }
 
     if (
-      !hasValue(env.REDIS_HOST as string) ||
-      !hasValue(env.REDIS_PASSWORD as string) ||
-      env.REDIS_DB === undefined ||
-      !hasValue(env.SSO_ISSUER as string) ||
-      !hasValue(env.SSO_CLIENT_ID as string) ||
-      !hasValue(env.SSO_AUDIENCE as string) ||
-      !hasValue(env.SSO_REDIRECT_URI as string) ||
-      !hasValue(env.SSO_FRONTEND_URL as string)
+      !env.SECRETS_ENABLED &&
+      (!hasValue(env.REDIS_HOST as string) ||
+        !hasValue(env.REDIS_PASSWORD as string) ||
+        env.REDIS_DB === undefined ||
+        !hasValue(env.SSO_ISSUER as string) ||
+        !hasValue(env.SSO_CLIENT_ID as string) ||
+        !hasValue(env.SSO_AUDIENCE as string) ||
+        !hasValue(env.SSO_REDIRECT_URI as string) ||
+        !hasValue(env.SSO_FRONTEND_URL as string) ||
+        !hasValue(env.ACCESS_API_URL as string) ||
+        !hasValue(env.ACCESS_JWKS_URI as string))
     ) {
       return helpers.error('any.invalid', {
         message:
-          'REDIS_HOST, REDIS_PASSWORD, REDIS_DB, SSO_ISSUER, SSO_CLIENT_ID, SSO_AUDIENCE, SSO_REDIRECT_URI and SSO_FRONTEND_URL are required in production',
+          'REDIS_HOST, REDIS_PASSWORD, REDIS_DB, SSO_ISSUER, SSO_CLIENT_ID, SSO_AUDIENCE, SSO_REDIRECT_URI, SSO_FRONTEND_URL, ACCESS_API_URL and ACCESS_JWKS_URI are required in production',
       });
     }
-  }
-
-  if (
-    legacyApiKeyEnabled &&
-    billingInternalApiKey.length < minimumProductionSecretLength
-  ) {
-    return helpers.error('any.invalid', {
-      message:
-        'BILLING_INTERNAL_API_KEY must be at least 32 characters when legacy API key auth is enabled',
-    });
   }
 
   if (
@@ -134,3 +193,16 @@ export const envVarsSchema = Joi.object({
 
   return env;
 });
+
+// Ignore inactive environment values; the selected Vault payload is validated
+// by the consuming factory before creating connections or authentication.
+const vaultFields = Object.keys(
+  (schema.describe() as { keys: Record<string, unknown> }).keys,
+).filter((key) => /^(DB_|REDIS_|SSO_|ACCESS_)/.test(key));
+export const envVarsSchema = schema.fork(vaultFields, (field) =>
+  Joi.when('SECRETS_ENABLED', {
+    is: true,
+    then: Joi.any().strip(),
+    otherwise: field,
+  }),
+);

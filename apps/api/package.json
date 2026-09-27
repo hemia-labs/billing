@@ -6,6 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "test:authorization:docker": "bash test/authorization-completion.docker.sh",
     "build": "node ./node_modules/.bin/nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
@@ -26,7 +27,8 @@
     "seed:run": "ts-node -r tsconfig-paths/register src/database/seeds/billing-catalog.seed.ts"
   },
   "dependencies": {
-    "@hemia/auth": "0.0.6",
+    "@hemia/auth": "1.0.8",
+    "@hemia/secrets": "^0.0.2",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
@@ -43,7 +45,9 @@
     "pg": "^8.21.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "typeorm": "^1.0.0"
+    "typeorm": "^1.0.0",
+    "@hemia/event-bus": "file:../../vendor/hemia-event-bus-0.0.4.tgz",
+    "@hemia/operational-metrics": "file:../../vendor/hemia-operational-metrics-0.1.0.tgz"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

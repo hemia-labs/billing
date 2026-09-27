@@ -1,4 +1,14 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
+import { Req } from '@nestjs/common';
+import type { AuthenticatedRequest } from '../../common/types/authenticated-request.type';
+import { BillingResource } from '../../common/decorators/billing-resource.decorator';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { BillingConsoleAuthGuard } from '../../common/guards/billing-console-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -12,11 +22,15 @@ export class BillingAuditConsoleController {
   constructor(private readonly service: BillingAuditService) {}
 
   @Get()
-  listAuditLogs(@Query() query: ListConsoleAuditLogsQueryDto) {
-    return this.service.listAuditLogs(query);
+  listAuditLogs(
+    @Query() query: ListConsoleAuditLogsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.service.listAuditLogs(query, request.billingOrganizationScope!);
   }
 
   @Get(':id')
+  @BillingResource('audit_logs', 'id')
   getAuditLog(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getAuditLog(id);
   }

@@ -66,6 +66,7 @@ export class BillingCheckoutService {
 
     const legal = await this.hemiaLegal.validateAcceptance({
       organizationId: dto.organizationId,
+      userId: dto.userId,
       legalAcceptanceId: dto.legalAcceptanceId,
       productCode: dto.productCode,
     });

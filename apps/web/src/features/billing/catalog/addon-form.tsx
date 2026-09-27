@@ -3,8 +3,8 @@
 import { type FormEvent, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/zuno/button";
+import { Input } from "@/components/zuno/input";
 import type {
   BillingAddonPricingModel,
   BillingAddonType,
@@ -105,7 +105,7 @@ export function AddonForm({
   };
 
   return (
-    <form className="rounded-lg border border-border bg-card p-5 shadow-sm" onSubmit={submit}>
+    <form className="rounded-2xl border border-surface-line bg-card p-5 shadow-sm" onSubmit={submit}>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="grid gap-2 text-sm font-semibold">
           Producto

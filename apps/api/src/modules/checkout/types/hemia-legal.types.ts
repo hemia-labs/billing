@@ -1,5 +1,6 @@
 export interface ValidateLegalAcceptanceInput {
   organizationId: string;
+  userId: string;
   legalAcceptanceId: string;
   productCode: string;
 }

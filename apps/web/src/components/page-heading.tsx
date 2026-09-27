@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
 import { AppBreadcrumb, type AppBreadcrumbItem } from "@/components/app-breadcrumb";
+import {
+  PageHeader,
+  PageHeaderActions,
+  PageHeaderContent,
+  PageHeaderDescription,
+  PageHeaderHeading,
+} from "@/components/zuno/page-header";
 
 export function PageHeading({
   actions,
@@ -17,19 +24,17 @@ export function PageHeading({
   titleSuffix?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
-      <div className="min-w-0">
-        <AppBreadcrumb items={breadcrumbItems} title={title} />
+    <PageHeader className="mb-6 items-start sm:items-end">
+      <PageHeaderContent>
+        {breadcrumbItems && <AppBreadcrumb items={breadcrumbItems} title={title} />}
         <div className="flex min-w-0 items-center gap-3">
           {titlePrefix}
-          <h1 className="truncate text-3xl font-bold tracking-normal md:text-4xl">{title}</h1>
+          <PageHeaderHeading className="truncate text-2xl font-bold text-heading">{title}</PageHeaderHeading>
           {titleSuffix}
         </div>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-supporting md:text-base">
-          {description}
-        </p>
-      </div>
-      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
-    </div>
+        <PageHeaderDescription className="max-w-3xl text-supporting">{description}</PageHeaderDescription>
+      </PageHeaderContent>
+      {actions && <PageHeaderActions>{actions}</PageHeaderActions>}
+    </PageHeader>
   );
 }

@@ -1,6 +1,7 @@
 export const apiBaseUrl = (
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3015/api/v1"
 ).replace(/\/$/, "");
+export const authBaseUrl = apiBaseUrl.replace(/\/api\/v\d+$/, "");
 
 type ApiBody = BodyInit | Record<string, unknown> | unknown[] | null;
 
@@ -65,7 +66,7 @@ export function toQueryString(
 }
 
 export function redirectToLogin(returnTo = currentReturnTo()): void {
-  const url = new URL(`${apiBaseUrl}/auth/login`);
+  const url = new URL(`${authBaseUrl}/auth/login`);
   url.searchParams.set("returnTo", returnTo);
   window.location.assign(url.toString());
 }

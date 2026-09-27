@@ -2,9 +2,10 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { FileText, RefreshCw, Search } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/zuno/status-badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/zuno/select";
+import { Button } from "@/components/zuno/button";
+import { Input } from "@/components/zuno/input";
 import { hasPermission, useSession } from "@/components/auth-gate";
 import {
   ApiError,
@@ -71,17 +72,18 @@ const statusLabel: Record<InvoiceStatus, string> = {
   failed: "Fallida",
 };
 
-const statusVariant: Record<InvoiceStatus, "default" | "secondary" | "destructive" | "outline"> = {
-  pending: "secondary",
-  issued: "default",
-  cancelled: "outline",
-  failed: "destructive",
+const statusTone: Record<InvoiceStatus, "warning" | "success" | "neutral" | "error"> = {
+  pending: "warning",
+  issued: "success",
+  cancelled: "neutral",
+  failed: "error",
 };
 
 export function InvoicesClient() {
   const session = useSession();
   const canRead = hasPermission(session, "billing.invoices.read");
-  const canManage = hasPermission(session, "billing.invoices.manage");
+  const canIssue = hasPermission(session, "billing.invoices.issue");
+  const canCancel = hasPermission(session, "billing.invoices.cancel");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,7 +146,7 @@ export function InvoicesClient() {
 
   if (!canRead) {
     return (
-      <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
+      <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
         No tienes permiso para consultar facturas.
       </div>
     );
@@ -153,24 +155,18 @@ export function InvoicesClient() {
   return (
     <div className="space-y-5">
       <form
-        className="grid gap-3 rounded-lg border border-border bg-card p-5 shadow-sm md:grid-cols-3 xl:grid-cols-8"
+        className="grid gap-3 rounded-2xl border border-surface-line bg-card p-5 shadow-sm md:grid-cols-3 xl:grid-cols-8"
         onSubmit={submitFilters}
       >
         <Input aria-label="Organización" placeholder="Organización" value={filters.organization_id} onChange={(event) => setFilters({ ...filters, organization_id: event.target.value })} />
         <Input aria-label="Payment" placeholder="Payment" value={filters.payment_id} onChange={(event) => setFilters({ ...filters, payment_id: event.target.value })} />
-        <select
-          aria-label="Estado"
-          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          value={filters.status}
-          onChange={(event) => setFilters({ ...filters, status: event.target.value as Filters["status"] })}
-        >
-          <option value="">Todos</option>
-          {Object.entries(statusLabel).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+        <Select value={filters.status || "all"} onValueChange={(value) => setFilters({ ...filters, status: (value === "all" ? "" : value) as Filters["status"] })}>
+          <SelectTrigger aria-label="Estado"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los estados</SelectItem>
+            {Object.entries(statusLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Input aria-label="Creada desde" type="date" value={filters.created_from} onChange={(event) => setFilters({ ...filters, created_from: event.target.value })} />
         <Input aria-label="Creada hasta" type="date" value={filters.created_to} onChange={(event) => setFilters({ ...filters, created_to: event.target.value })} />
         <Input aria-label="Emitida desde" type="date" value={filters.issued_from} onChange={(event) => setFilters({ ...filters, issued_from: event.target.value })} />
@@ -182,12 +178,12 @@ export function InvoicesClient() {
       </form>
 
       {message ? (
-        <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
+        <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
           {message}
         </div>
       ) : null}
 
-      <section className="rounded-lg border border-border bg-card shadow-sm">
+      <section className="rounded-2xl border border-surface-line bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <h2 className="text-lg font-bold">Facturas fiscales</h2>
           <Button aria-label="Recargar facturas" onClick={() => void loadInvoices()} size="icon" variant="outline">
@@ -227,7 +223,7 @@ export function InvoicesClient() {
                     <div className="text-xs text-muted-foreground">Payment {invoice.paymentId}</div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant[invoice.status]}>{statusLabel[invoice.status]}</Badge>
+                    <StatusBadge status={statusTone[invoice.status]}>{statusLabel[invoice.status]}</StatusBadge>
                     <div className="mt-2 text-xs text-muted-foreground">{invoice.cfdiUuid ?? "Sin UUID CFDI"}</div>
                     <div className="mt-1 flex gap-2 text-xs">
                       {invoice.xmlUrl ? <a className="text-primary hover:underline" href={invoice.xmlUrl}>XML</a> : null}
@@ -240,13 +236,13 @@ export function InvoicesClient() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {canManage && invoice.status === "pending" ? (
+                      {canIssue && invoice.status === "pending" ? (
                         <Button onClick={() => void runAction(invoice, "issue")} size="sm">
                           <FileText className="size-4" />
                           Emitir
                         </Button>
                       ) : null}
-                      {canManage && invoice.status === "issued" ? (
+                      {canCancel && invoice.status === "issued" ? (
                         <Button onClick={() => void runAction(invoice, "cancel")} size="sm" variant="outline">
                           Cancelar
                         </Button>

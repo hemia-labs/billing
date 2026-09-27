@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class Migration1782623530746 implements MigrationInterface {
-    name = 'Migration1782623530746'
+export class Migration1783749391848 implements MigrationInterface {
+    name = 'Migration1783749391848'
 
     public async up(queryRunner: QueryRunner): Promise<void> {
         await queryRunner.query(`CREATE TYPE "public"."products_status_enum" AS ENUM('active', 'inactive')`);
@@ -127,6 +127,10 @@ export class Migration1782623530746 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_subscription_addons_status" ON "subscription_addons"  ("status") `);
         await queryRunner.query(`CREATE INDEX "IDX_subscription_addons_addon_id" ON "subscription_addons"  ("addon_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_subscription_addons_subscription_id" ON "subscription_addons"  ("subscription_id") `);
+        await queryRunner.query(`CREATE TYPE "public"."tenants_status_enum" AS ENUM('pending', 'provisioning', 'active', 'suspended', 'archived')`);
+        await queryRunner.query(`CREATE TABLE "tenants" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "organization_id" uuid NOT NULL, "code" character varying(80) NOT NULL, "name" character varying(120) NOT NULL, "status" "public"."tenants_status_enum" NOT NULL DEFAULT 'active', "configuration" jsonb NOT NULL DEFAULT '{}'::jsonb, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_53be67a04681c66b87ee27c9321" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE INDEX "IDX_tenants_status" ON "tenants"  ("status") `);
+        await queryRunner.query(`CREATE UNIQUE INDEX "IDX_tenants_organization_id_unique" ON "tenants"  ("organization_id") `);
         await queryRunner.query(`CREATE TABLE "usage_counters" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "organization_id" uuid NOT NULL, "product_code" character varying(80) NOT NULL, "key" character varying(120) NOT NULL, "current_value" integer NOT NULL DEFAULT '0', "metadata" jsonb NOT NULL DEFAULT '{}'::jsonb, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "deleted_at" TIMESTAMP WITH TIME ZONE, CONSTRAINT "PK_fb39db314fa8fc2b6653f2f4e31" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE UNIQUE INDEX "IDX_usage_counters_organization_product_key_unique" ON "usage_counters"  ("organization_id", "product_code", "key") WHERE "deleted_at" IS NULL`);
         await queryRunner.query(`ALTER TABLE "addons" ADD CONSTRAINT "FK_ee37825d7df7f4ddd35927779dd" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
@@ -180,6 +184,10 @@ export class Migration1782623530746 implements MigrationInterface {
         await queryRunner.query(`ALTER TABLE "addons" DROP CONSTRAINT "FK_ee37825d7df7f4ddd35927779dd"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_usage_counters_organization_product_key_unique"`);
         await queryRunner.query(`DROP TABLE "usage_counters"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_tenants_organization_id_unique"`);
+        await queryRunner.query(`DROP INDEX "public"."IDX_tenants_status"`);
+        await queryRunner.query(`DROP TABLE "tenants"`);
+        await queryRunner.query(`DROP TYPE "public"."tenants_status_enum"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_subscription_addons_subscription_id"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_subscription_addons_addon_id"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_subscription_addons_status"`);
