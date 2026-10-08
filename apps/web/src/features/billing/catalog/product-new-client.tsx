@@ -3,18 +3,21 @@
 import { useRouter } from "next/navigation";
 import { hasPermission, useSession } from "@/components/auth-gate";
 import { ApiError, apiErrorMessage, redirectToLogin } from "@/lib/api";
+import { CopilotLauncher, useProductDraft } from "@/features/billing/copilot";
 import { createCatalogProduct, type CatalogProductPayload } from "./catalog-api";
 import { ProductForm } from "./product-form";
 
 export function ProductNewClient() {
   const router = useRouter();
   const session = useSession();
+  const { draft, currentProduct, setCurrentProduct, clear } = useProductDraft();
   const canManage = hasPermission(session, "billing.catalog.manage");
 
   const create = async (payload: CatalogProductPayload) => {
     try {
-      await createCatalogProduct(payload);
-      router.push("/products");
+      const product = await createCatalogProduct(payload);
+      await clear();
+      router.push(`/products/${product.id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         redirectToLogin();
@@ -32,5 +35,5 @@ export function ProductNewClient() {
     );
   }
 
-  return <ProductForm onSubmit={create} submitLabel="Crear producto" />;
+  return <ProductForm initialProduct={currentProduct ?? draft?.product} key={draft?.id ?? "empty"} onChange={setCurrentProduct} renderAssistAction={(state) => <CopilotLauncher {...state} />} onSubmit={create} submitLabel="Crear producto" />;
 }

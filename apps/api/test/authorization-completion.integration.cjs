@@ -305,6 +305,7 @@ async function run() {
   console.log(
     'PASS verified webhook ownership, list scope, retry scope, untrusted metadata and ambiguous mapping',
   );
+  await require('./checkout-scaling.integration.cjs')(ds);
 }
 run()
   .catch((e) => {

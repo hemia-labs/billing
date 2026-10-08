@@ -78,8 +78,8 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link href="/" aria-label="Hemia Billing" />}>
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--hemia-navy)] dark:bg-transparent group-data-[collapsible=icon]:size-8">
-                <Image src="/logo.png" alt="" width={96} height={66} className="h-auto w-9 group-data-[collapsible=icon]:w-8" />
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--hemia-navy)] p-0.5 dark:bg-transparent dark:p-0 group-data-[collapsible=icon]:size-8">
+                <Image src="/logo.png" alt="" width={96} height={66} className="h-auto w-full" />
               </span>
               <BrandWordmark className="group-data-[collapsible=icon]:hidden" />
             </SidebarMenuButton>

@@ -1,3 +1,4 @@
+import { BalanzWebhookDeliveryService } from './balanz-webhook-delivery.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingEntitlementsModule } from '../entitlements';
@@ -14,7 +15,11 @@ import { BillingLicensesService } from './billing-licenses.service';
     BillingEntitlementsModule,
   ],
   controllers: [BillingLicensesController],
-  providers: [BillingLicenseCalculatorService, BillingLicensesService],
+  providers: [
+    BillingLicenseCalculatorService,
+    BillingLicensesService,
+    BalanzWebhookDeliveryService,
+  ],
   exports: [BillingLicenseCalculatorService, BillingLicensesService],
 })
 export class BillingLicensesModule {}

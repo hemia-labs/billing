@@ -75,6 +75,7 @@ export class PaypalClientService {
         headers: input.requestId
           ? { 'PayPal-Request-Id': input.requestId }
           : undefined,
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify(payload),
       },
     );
@@ -165,6 +166,7 @@ export class PaypalClientService {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       ...init,
       headers,
+      signal: init.signal ?? AbortSignal.timeout(15_000),
     });
     const body = await this.parseResponse(response);
 

@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  Allow,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -93,6 +94,8 @@ export class CreatePlanEntitlementDto {
   @MaxLength(120)
   featureCode?: string;
 
+  // The catalog resolver validates the value against the feature's valueType.
+  @Allow()
   valueJson: unknown;
 }
 

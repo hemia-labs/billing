@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { parseBillingServiceClients } from './billing-service-clients';
 
 const hasValue = (value?: string): boolean => Boolean(value?.trim());
 
@@ -6,6 +7,35 @@ const schema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),
+  BALANZ_WEBHOOK_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) => {
+      if (!value) return value;
+      const url = new URL(value);
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        (url.protocol !== 'https:' &&
+          (!local ||
+            (helpers.state.ancestors as { NODE_ENV?: string }[])[0]
+              ?.NODE_ENV === 'production'))
+      )
+        return helpers.error('any.invalid');
+      return value;
+    }),
+  BALANZ_WEBHOOK_SECRET: Joi.string()
+    .min(32)
+    .max(256)
+    .when('BALANZ_WEBHOOK_URL', {
+      is: Joi.string().min(1).required(),
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
   EVENT_BUS_ENABLED: Joi.boolean().default(false),
   EVENT_BUS_PREFETCH: Joi.number().integer().min(1).max(100).default(10),
   AMQP_URL: Joi.string()
@@ -28,6 +58,16 @@ const schema = Joi.object({
   AUTH_JWKS_URI: Joi.string().uri().allow('').default(''),
   AUTH_AUDIENCE: Joi.string().allow('').default(''),
   AUTH_REQUIRED_ISSUER: Joi.string().uri().allow('').default(''),
+  BILLING_SERVICE_CLIENTS: Joi.string()
+    .default('{}')
+    .custom((value: string, helpers) => {
+      try {
+        parseBillingServiceClients(value);
+        return value;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    }),
   SECRETS_ENABLED: Joi.boolean().default(false),
   SECRETS_ENVIRONMENT: Joi.string()
     .valid('dev', 'qa', 'staging', 'prod')
@@ -95,6 +135,15 @@ const schema = Joi.object({
   PAYPAL_CLIENT_SECRET: Joi.string().allow('').default(''),
   PAYPAL_WEBHOOK_ID: Joi.string().allow('').default(''),
   PAYPAL_API_BASE_URL: Joi.string().uri().optional(),
+  FEVEX_MODELS: Joi.string()
+    .max(2048)
+    .pattern(
+      /^\s*(?:deepseek|openai):[^,\s]+(?:\s*,\s*(?:deepseek|openai):[^,\s]+)*\s*$/,
+    )
+    .optional(),
+  DEEPSEEK_API_KEY: Joi.string().allow('').optional(),
+  OPENAI_API_KEY: Joi.string().allow('').optional(),
+  OPENAI_PROJECT_ID: Joi.string().allow('').optional(),
   HEMIA_LEGAL_BASE_URL: Joi.string().uri().allow('').default(''),
   HEMIA_LEGAL_TOKEN_URL: Joi.string().uri().allow('').default(''),
   HEMIA_LEGAL_CLIENT_ID: Joi.string().default('billing-legal-service'),

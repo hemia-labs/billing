@@ -6,6 +6,8 @@ export * from './billing-entitlement.entity';
 export * from './billing-invoice.entity';
 export * from './billing-license.entity';
 export * from './billing-payment.entity';
+export * from './billing-payment-refund.entity';
+export * from './billing-payment-refund.entity';
 export * from './billing-feature-definition.entity';
 export * from './billing-plan-entitlement.entity';
 export * from './billing-plan.entity';

@@ -46,6 +46,14 @@
       "resource_domain": "customer_data"
     },
     {
+      "code": "billing.integrations.manage",
+      "resource_domain": "catalog"
+    },
+    {
+      "code": "billing.integrations.read",
+      "resource_domain": "catalog"
+    },
+    {
       "code": "billing.invoices.cancel",
       "resource_domain": "customer_data"
     },
@@ -122,7 +130,9 @@
       "permissions": [
         "billing.catalog.read",
         "billing.catalog.manage",
-        "billing.catalog.publish"
+        "billing.catalog.publish",
+        "billing.integrations.read",
+        "billing.integrations.manage"
       ]
     },
     {

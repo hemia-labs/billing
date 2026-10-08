@@ -6,10 +6,14 @@ import {
 } from '@nestjs/common';
 import { AuthenticatedRequest } from '../types/authenticated-request.type';
 import { SsoBearerGuard } from './sso-bearer.guard';
+import { BillingServicePolicyService } from '../services/billing-service-policy.service';
 
 @Injectable()
 export class BillingInternalAuthGuard implements CanActivate {
-  constructor(private readonly ssoBearerGuard: SsoBearerGuard) {}
+  constructor(
+    private readonly ssoBearerGuard: SsoBearerGuard,
+    private readonly servicePolicy: BillingServicePolicyService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -28,6 +32,10 @@ export class BillingInternalAuthGuard implements CanActivate {
         );
       }
 
+      authenticatedRequest.billingServiceAuthorization =
+        await this.servicePolicy.resolvePrincipal(
+          authenticatedRequest.principal,
+        );
       return true;
     }
 

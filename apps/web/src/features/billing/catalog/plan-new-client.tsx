@@ -13,10 +13,10 @@ import {
   listCatalogProducts,
 } from "./catalog-api";
 import { PlanForm } from "./plan-form";
-
-const productRequests = new Map<string, Promise<CatalogProduct>>();
+import { CopilotLauncher, usePlanDraft } from '../copilot';
 
 export function PlanNewClient() {
+  const { draft, currentPlan, setCurrentPlan, clear } = usePlanDraft();
   const router = useRouter();
   const searchParams = useSearchParams();
   const productId = searchParams.get("product_id") ?? undefined;
@@ -30,28 +30,36 @@ export function PlanNewClient() {
   useEffect(() => {
     if (!canManage) return;
 
+    let active = true;
     void Promise.resolve().then(async () => {
+      if (!active) return;
+      setLoading(true); setMessage(""); setLockedProduct(undefined); setProducts([]);
       try {
         if (productId) {
-          setLockedProduct(await getProduct(productId));
+          const product = await getCatalogProduct(productId);
+          if (active) setLockedProduct(product);
         } else {
-          setProducts((await listCatalogProducts({ limit: 100 })).items);
+          const page = await listCatalogProducts({ limit: 100 });
+          if (active) setProducts(page.items);
         }
       } catch (error) {
+        if (!active) return;
         if (error instanceof ApiError && error.status === 401) {
           redirectToLogin();
           return;
         }
         setMessage(apiErrorMessage(error, "No se pudieron cargar los productos."));
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     });
+    return () => { active = false; };
   }, [canManage, productId]);
 
   const create = async (payload: CatalogPlanPayload) => {
     try {
       const plan = await createCatalogPlan(payload);
+      await clear();
       router.push(`/products/plans/${plan.id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -70,7 +78,7 @@ export function PlanNewClient() {
     );
   }
 
-  if (loading) {
+  if (loading || (productId && lockedProduct?.id !== productId && !message)) {
     return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando producto...</div>;
   }
 
@@ -87,6 +95,11 @@ export function PlanNewClient() {
         title="Nuevo plan"
       />
       <PlanForm
+        renderAssistAction={({ productId, ...state }) => <CopilotLauncher {...state} requiresProduct={!productId} />}
+        key={`${productId ?? 'choose'}:${draft?.id ?? 'empty'}`}
+        initialDraft={currentPlan ?? draft?.plan}
+        onDraftChange={productId ? setCurrentPlan : undefined}
+        onProductChange={(id) => router.replace(`/products/plans/new?product_id=${encodeURIComponent(id)}`)}
         cancelHref={lockedProduct ? `/products/${lockedProduct.id}?tab=plans` : "/products"}
         defaultProductId={productId}
         lockedProduct={lockedProduct}
@@ -96,10 +109,4 @@ export function PlanNewClient() {
       />
     </div>
   );
-}
-
-function getProduct(id: string) {
-  const request = productRequests.get(id) ?? getCatalogProduct(id).finally(() => productRequests.delete(id));
-  productRequests.set(id, request);
-  return request;
 }

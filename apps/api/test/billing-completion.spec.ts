@@ -8,7 +8,10 @@ describe('Billing machine authentication without API key fallback', () => {
     return {
       context,
       bearer,
-      guard: new BillingInternalAuthGuard(bearer as never),
+      guard: new BillingInternalAuthGuard(
+        bearer as never,
+        { resolvePrincipal: jest.fn() } as never,
+      ),
     };
   };
   it('requires a bearer even if callers previously supplied an API key', async () => {

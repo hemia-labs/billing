@@ -8,9 +8,9 @@ export const metadata: Metadata = {
 
 export default function NewProductPage() {
   return (
-    <div>
+    <div className="mx-auto w-full max-w-3xl">
       <PageHeading
-        description="Crea una definición comercial de producto para Billing Core."
+        description="Define el producto y después configura sus planes y add-ons."
         title="Nuevo producto"
       />
       <ProductNewClient />

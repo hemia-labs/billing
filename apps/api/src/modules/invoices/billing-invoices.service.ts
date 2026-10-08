@@ -1,4 +1,5 @@
 import type { BillingOperationActor } from '../../common/types/billing-operation-actor';
+import type { BillingServiceAuthorization } from '../../common/types/billing-service-authorization.type';
 import {
   BadRequestException,
   ConflictException,
@@ -115,13 +116,28 @@ export class BillingInvoicesService {
 
   async listInvoices(
     query: ListBillingInvoicesQueryDto,
+    authorization: BillingServiceAuthorization,
   ): Promise<BillingInvoiceResponseDto[]> {
     const where = this.buildInvoiceWhere(query);
-
-    const invoices = await this.invoices.find({
-      where,
-      order: { createdAt: 'DESC' },
-    });
+    const builder = this.invoices
+      .createQueryBuilder('invoice')
+      .leftJoin('invoice.payment', 'payment')
+      .leftJoin('payment.subscription', 'subscription')
+      .where(where);
+    if (!authorization.policy.products.includes('*'))
+      builder.andWhere('subscription.product_code IN (:...serviceProducts)', {
+        serviceProducts: authorization.policy.products,
+      });
+    if (authorization.policy.organizationScope === 'organizations')
+      builder.andWhere(
+        'invoice.organization_id IN (:...serviceOrganizations)',
+        {
+          serviceOrganizations: authorization.policy.organizationIds,
+        },
+      );
+    const invoices = await builder
+      .orderBy('invoice.createdAt', 'DESC')
+      .getMany();
 
     return invoices.map((item) => BillingInvoiceMapper.toDto(item));
   }

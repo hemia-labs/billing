@@ -18,7 +18,7 @@ export const nav = [
   { permission: "billing.invoices.read", href: "/invoices", label: "Facturas", icon: ReceiptText },
   { permission: "billing.webhooks.read", href: "/webhooks", label: "Webhooks", icon: Webhook },
   { permission: "billing.audit.read", href: "/audit", label: "Auditoría", icon: ClipboardList },
-  { permission: "billing.webhooks.read", href: "/integrations", label: "Integraciones", icon: Cable },
+  { permission: "billing.integrations.read", href: "/integrations", label: "Integraciones", icon: Cable },
   { permission: "billing.catalog.manage", href: "/settings", label: "Configuración", icon: Settings },
 ];
 

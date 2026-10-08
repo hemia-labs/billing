@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from './audit';
 import { BillingCatalogModule } from './catalog/billing-catalog.module';
+import { BillingCopilotModule } from './copilot/billing-copilot.module';
 import { BillingCheckoutModule } from './checkout';
 import { BillingEntitlementsModule } from './entitlements';
 import { BillingInvoicesModule } from './invoices';
@@ -61,6 +62,7 @@ import {
     ]),
     BillingAuditModule,
     BillingCatalogModule,
+    BillingCopilotModule,
     BillingCheckoutModule,
     BillingEntitlementsModule,
     BillingInvoicesModule,

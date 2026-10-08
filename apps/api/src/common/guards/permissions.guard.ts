@@ -12,12 +12,14 @@ import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { AuthenticatedRequest } from '../types/authenticated-request.type';
 import { hasAllPermissions } from './permissions.util';
+import { BillingServicePolicyGuard } from './billing-service-policy.guard';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly database: DataSource,
+    private readonly servicePolicy: BillingServicePolicyGuard,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -67,7 +69,8 @@ export class PermissionsGuard implements CanActivate {
       }
       return true;
     }
-    if (requiredPermissions.length === 0) return true;
+    if (requiredPermissions.length === 0)
+      throw new ForbiddenException('Explicit service permissions required');
     const grantedPermissions =
       request.principal?.permissions ?? request.principal?.scopes ?? [];
 
@@ -75,6 +78,6 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Missing required permission');
     }
 
-    return true;
+    return this.servicePolicy.canActivate(context);
   }
 }

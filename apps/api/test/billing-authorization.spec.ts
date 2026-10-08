@@ -159,7 +159,11 @@ describe('Billing authorization contract and scope', () => {
     const database = {
       query: jest.fn().mockResolvedValue([{ organization_id: owner }]),
     };
-    const guard = new PermissionsGuard(reflector as never, database as never);
+    const guard = new PermissionsGuard(
+      reflector as never,
+      database as never,
+      {} as never,
+    );
     const context = {
       getHandler: () => null,
       getClass: () => null,
@@ -209,7 +213,7 @@ describe('Billing authorization contract and scope', () => {
       {} as never,
     );
     await service.listSubscriptions(
-      { page: 1, limit: 10, organization_id: uuid(8) } as never,
+      { page: 1, limit: 10, organization_id: uuid(8) },
       [uuid(6)],
     );
     expect(builder.andWhere).toHaveBeenCalledWith(

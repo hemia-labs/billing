@@ -22,6 +22,51 @@ import {
 } from '../src/modules/catalog/dtos';
 
 describe('catalog plan writes', () => {
+  const planWithEntitlements = (entitlements: object[]) =>
+    plainToInstance(CreateBillingPlanDto, {
+      productCode: 'example',
+      code: 'pro',
+      name: 'Pro',
+      version: { version: 1, prices: [], entitlements },
+    });
+
+  it('accepts nested entitlement values with the strict API whitelist', () => {
+    const values = [false, 0, 1.5, 'included', { limit: 10 }, ['a'], null];
+    const dto = planWithEntitlements(
+      values.map((valueJson, index) => ({
+        featureCode: `feature-${index}`,
+        valueJson,
+      })),
+    );
+
+    expect(
+      validateSync(dto, { whitelist: true, forbidNonWhitelisted: true }),
+    ).toEqual([]);
+    expect(dto.version.entitlements?.map((item) => item.valueJson)).toEqual(
+      values,
+    );
+  });
+
+  it('still rejects unknown entitlement properties', () => {
+    const dto = planWithEntitlements([
+      { featureCode: 'seats', valueJson: 10, unexpected: true },
+    ]);
+    const errors = validateSync(dto, {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
+    const entitlementErrors = errors[0]?.children?.[0]?.children?.[0]?.children;
+
+    expect(entitlementErrors).toEqual([
+      expect.objectContaining({
+        property: 'unexpected',
+        constraints: {
+          whitelistValidation: 'property unexpected should not exist',
+        },
+      }),
+    ]);
+  });
+
   it.each(['0', '0.00', '1.2', '9999999999.99'])(
     'accepts a DECIMAL(12,2) amount: %s',
     (amount) => {

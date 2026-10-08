@@ -68,6 +68,20 @@ export class BillingPaymentEntity {
   @Column({ name: 'paid_at', type: 'timestamp with time zone', nullable: true })
   paidAt: Date | null;
 
+  @Column({
+    name: 'period_start',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
+  periodStart: Date | null;
+
+  @Column({
+    name: 'period_end',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
+  periodEnd: Date | null;
+
   @Column({ name: 'raw_event_id', type: 'uuid', nullable: true })
   rawEventId: string | null;
 

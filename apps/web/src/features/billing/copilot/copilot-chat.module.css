@@ -1,0 +1,15 @@
+.pixel {
+  animation: pixel-on 650ms ease-in-out infinite;
+}
+
+@keyframes pixel-on {
+  50% {
+    opacity: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel {
+    animation: none;
+  }
+}

@@ -16,8 +16,10 @@ import { BillingCatalogService } from './billing-catalog.service';
 import {
   BillingAddonResponseDto,
   BillingFeatureDefinitionResponseDto,
+  BillingPlanOverviewResponseDto,
   BillingPlanResponseDto,
   BillingPlanVersionResponseDto,
+  BillingPlanVersionSummaryResponseDto,
   BillingProductResponseDto,
   CatalogPageDto,
   CreateBillingAddonDto,
@@ -28,6 +30,7 @@ import {
   ListBillingAddonsQueryDto,
   ListBillingPlansQueryDto,
   ListBillingProductsQueryDto,
+  ListPlanVersionSummariesQueryDto,
   UpdateBillingAddonDto,
   UpdateBillingPlanDto,
   UpdateBillingProductDto,
@@ -85,6 +88,32 @@ export class BillingCatalogConsoleController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<BillingPlanResponseDto> {
     return this.service.getPlan(id);
+  }
+
+  @Get('plans/:id/overview')
+  @Permissions('billing.catalog.read')
+  getPlanOverview(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<BillingPlanOverviewResponseDto> {
+    return this.service.getPlanOverview(id);
+  }
+
+  @Get('plans/:id/version-summaries')
+  @Permissions('billing.catalog.read')
+  listPlanVersionSummaries(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListPlanVersionSummariesQueryDto,
+  ): Promise<CatalogPageDto<BillingPlanVersionSummaryResponseDto>> {
+    return this.service.listPlanVersionSummaries(id, query);
+  }
+
+  @Get('plans/:id/versions/:versionId')
+  @Permissions('billing.catalog.read')
+  getPlanVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+  ): Promise<BillingPlanVersionResponseDto> {
+    return this.service.getPlanVersion(id, versionId);
   }
 
   @Post('plans')

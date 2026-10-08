@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { hasPermission, useSession } from "@/components/auth-gate";
+import { Alert } from "@/components/zuno/alert";
 import { ApiError, apiErrorMessage, redirectToLogin } from "@/lib/api";
 import {
   type CatalogAddonPayload,
   type CatalogProduct,
   createCatalogAddon,
+  getCatalogProduct,
   listCatalogProducts,
 } from "./catalog-api";
 import { AddonForm } from "./addon-form";
@@ -19,26 +21,41 @@ export function AddonNewClient() {
   const session = useSession();
   const canManage = hasPermission(session, "billing.catalog.manage");
   const [products, setProducts] = useState<CatalogProduct[]>([]);
+  const [lockedProduct, setLockedProduct] = useState<CatalogProduct | undefined>();
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (!canManage) return;
 
+    let active = true;
     void Promise.resolve().then(async () => {
+      if (!active) return;
+      setLoading(true);
+      setMessage("");
+      setLockedProduct(undefined);
+      setProducts([]);
       try {
-        setProducts((await listCatalogProducts({ limit: 100 })).items);
+        if (productId) {
+          const product = await getCatalogProduct(productId);
+          if (active) setLockedProduct(product);
+        } else {
+          const page = await listCatalogProducts({ limit: 100 });
+          if (active) setProducts(page.items);
+        }
       } catch (error) {
+        if (!active) return;
         if (error instanceof ApiError && error.status === 401) {
           redirectToLogin();
           return;
         }
         setMessage(apiErrorMessage(error, "No se pudieron cargar los productos."));
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     });
-  }, [canManage]);
+    return () => { active = false; };
+  }, [canManage, productId]);
 
   const create = async (payload: CatalogAddonPayload) => {
     try {
@@ -54,20 +71,16 @@ export function AddonNewClient() {
   };
 
   if (!canManage) {
-    return (
-      <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">
-        No tienes permiso para administrar add-ons.
-      </div>
-    );
+    return <Alert variant="destructive">No tienes permiso para administrar add-ons.</Alert>;
   }
 
-  if (loading) {
-    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Cargando productos...</div>;
+  if (loading || (productId && lockedProduct?.id !== productId && !message)) {
+    return <div className="rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground">{productId ? "Cargando producto..." : "Cargando productos..."}</div>;
   }
 
   if (message) {
-    return <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium text-destructive shadow-sm">{message}</div>;
+    return <Alert variant="destructive">{message}</Alert>;
   }
 
-  return <AddonForm defaultProductId={productId} onSubmit={create} products={products} submitLabel="Crear add-on" />;
+  return <AddonForm defaultProductId={productId} key={productId ?? "choose"} lockedProduct={lockedProduct} onSubmit={create} products={products} submitLabel="Crear add-on" />;
 }

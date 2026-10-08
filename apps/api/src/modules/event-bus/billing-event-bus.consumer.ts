@@ -38,10 +38,6 @@ export class BillingEventBusConsumer implements OnModuleInit, OnModuleDestroy {
     );
     this.logger.log('Subscribed to hemia-billing.access');
   }
-  isConnected() {
-    return this.bus?.isConnected() ?? false;
-  }
-
   async consume(event: EventEnvelope<unknown>) {
     if (
       event.source !== 'urn:hemia:service:hemia-access' ||

@@ -33,6 +33,7 @@ import {
   VerifyCheckoutSessionResponseDto,
 } from './dtos';
 import { SubscriptionManagementMapper } from './mappers';
+import type { BillingServiceActor } from '../../common/types/billing-service-authorization.type';
 
 const CURRENT_STATUS_PRIORITY = [
   SubscriptionStatus.Active,
@@ -136,6 +137,9 @@ export class BillingSubscriptionsManagementService {
       const savedSubscription = await manager
         .getRepository(BillingSubscriptionEntity)
         .save(subscription);
+      const licenseStatus = this.mapLicenseStatus(savedSubscription.status);
+      if (licenseStatus)
+        await this.upsertLicense(manager, savedSubscription, licenseStatus);
 
       await this.audit.record({
         manager,
@@ -162,6 +166,7 @@ export class BillingSubscriptionsManagementService {
   async changePlan(
     subscriptionId: string,
     dto: ChangePlanDto,
+    actor: BillingServiceActor,
   ): Promise<ChangePlanResponseDto> {
     const subscription = await this.findSubscription(subscriptionId);
     if (TERMINAL_STATUSES.includes(subscription.status)) {
@@ -177,18 +182,22 @@ export class BillingSubscriptionsManagementService {
       throw new BadRequestException(
         'actorUserId is required to validate legal acceptance',
       );
-    const checkout = await this.checkout.createCheckoutSession({
-      organizationId: subscription.organizationId,
-      userId: dto.actorUserId,
-      productCode: subscription.productCode,
-      planCode: targetPlan.code,
-      planPriceCode: dto.targetPlanPriceCode,
-      provider: subscription.provider,
-      legalAcceptanceId: dto.legalAcceptanceId,
-      successUrl: dto.successUrl,
-      cancelUrl: dto.cancelUrl,
-      billingEmail: dto.billingEmail,
-    });
+    const checkout = await this.checkout.createCheckoutSession(
+      {
+        idempotencyKey: dto.idempotencyKey,
+        organizationId: subscription.organizationId,
+        userId: dto.actorUserId,
+        productCode: subscription.productCode,
+        planCode: targetPlan.code,
+        planPriceCode: dto.targetPlanPriceCode,
+        provider: subscription.provider,
+        legalAcceptanceId: dto.legalAcceptanceId,
+        successUrl: dto.successUrl,
+        cancelUrl: dto.cancelUrl,
+        billingEmail: dto.billingEmail,
+      },
+      actor,
+    );
 
     if (
       subscription.provider === BillingProvider.Paypal &&
@@ -302,9 +311,15 @@ export class BillingSubscriptionsManagementService {
       subscription.currentPeriodStart = this.dateOrNull(
         this.getNested(billingInfo, 'cycle_executions', 0, 'start_time'),
       );
-      subscription.currentPeriodEnd = this.dateOrNull(
-        this.getNested(billingInfo, 'cycle_executions', 0, 'end_time'),
-      );
+      subscription.currentPeriodEnd =
+        this.dateOrNull(
+          this.getNested(billingInfo, 'cycle_executions', 0, 'end_time'),
+        ) ??
+        subscription.nextBillingTime ??
+        (newStatus === SubscriptionStatus.Cancelled &&
+        subscription.cancelAtPeriodEnd
+          ? subscription.currentPeriodEnd
+          : null);
       subscription.graceUntil =
         newStatus === SubscriptionStatus.Active
           ? null
@@ -321,7 +336,7 @@ export class BillingSubscriptionsManagementService {
       checkoutSession.status = this.mapCheckoutStatus(newStatus);
       await manager
         .getRepository(BillingCheckoutSessionEntity)
-        .save(checkoutSession);
+        .update(checkoutSession.id, { status: checkoutSession.status });
 
       if (previousStatus !== newStatus) {
         await this.audit.record({
@@ -418,7 +433,7 @@ export class BillingSubscriptionsManagementService {
     license.validUntil = calculation.validUntil;
     const saved = await licenses.save(license);
 
-    if (previousStatus !== status) {
+    if (previousStatus !== calculation.status) {
       await this.audit.record({
         manager,
         organizationId: subscription.organizationId,
@@ -431,7 +446,7 @@ export class BillingSubscriptionsManagementService {
           subscriptionId: subscription.id,
           licenseId: saved.id,
           previousStatus,
-          newStatus: status,
+          newStatus: calculation.status,
           providerSubscriptionId: subscription.providerSubscriptionId,
         },
       });
@@ -597,9 +612,9 @@ export class BillingSubscriptionsManagementService {
   private toLegalReference(subscription: BillingSubscriptionEntity) {
     return {
       legalAcceptanceId: subscription.legalAcceptanceId,
-      termsVersion: subscription.termsVersion,
-      privacyVersion: subscription.privacyVersion,
-      refundPolicyVersion: subscription.refundPolicyVersion,
+      evidence: Array.isArray(subscription.metadata?.legalEvidence)
+        ? subscription.metadata.legalEvidence
+        : undefined,
       acceptedAt: subscription.acceptedAt,
       legalSnapshotHash: subscription.legalSnapshotHash,
     };

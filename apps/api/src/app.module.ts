@@ -2,6 +2,7 @@ import eventBusConfig from './config/event-bus.config';
 import { BillingEventBusModule } from './modules/event-bus/billing-event-bus.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CommonAuthModule } from './common/common-auth.module';
@@ -21,6 +22,7 @@ import { BillingModule } from './modules/billing.module';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env', '.env.local'],

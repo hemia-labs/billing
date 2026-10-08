@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -26,7 +27,6 @@ import {
 } from '../billing-shared';
 import { CatalogPageDto } from '../catalog/dtos';
 import { PaypalClientService } from '../paypal';
-import { BillingSubscriptionPaymentsProcessorService } from './billing-subscription-payments-processor.service';
 import { PaypalEventResource } from './types';
 import { BillingWebhookProcessResult, PaypalWebhookHeaders } from './types';
 import {
@@ -38,13 +38,18 @@ import {
 const RETRY_ACTION = 'billing.webhook.manual_retry';
 const RETRY_LIMIT = 3;
 const RETRY_WINDOW_MINUTES = 15;
+const PAYPAL_WEBHOOK_CHANNEL = 'billing_paypal_webhooks';
+const RETRYABLE_IGNORED_NOTES = new Set([
+  'Subscription not found',
+  'Payment subscription not found',
+  'Payment not found',
+]);
 
 @Injectable()
 export class BillingWebhooksService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly paypal: PaypalClientService,
-    private readonly processor: BillingSubscriptionPaymentsProcessorService,
     private readonly audit: BillingAuditService,
     @InjectRepository(BillingWebhookEventEntity)
     private readonly webhookEvents: Repository<BillingWebhookEventEntity>,
@@ -134,8 +139,13 @@ export class BillingWebhooksService {
       if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
         throw new BadRequestException('Only verified webhooks can be retried');
       }
-      if (event.processingStatus !== WebhookProcessingStatus.Failed) {
-        throw new BadRequestException('Only failed webhooks can be retried');
+      if (
+        event.processingStatus !== WebhookProcessingStatus.Failed &&
+        !this.isRetryableIgnored(event)
+      ) {
+        throw new BadRequestException(
+          'Only failed or unresolved webhooks can be retried',
+        );
       }
 
       const [owner] = await manager.query<
@@ -151,24 +161,18 @@ export class BillingWebhooksService {
         throw new ForbiddenException('Webhook outside authorized scope');
       const retryAttempt = await this.nextRetryAttempt(manager, event.id);
       event.processingStatus = WebhookProcessingStatus.Pending;
+      event.attempts = 0;
+      event.nextRetryAt = new Date();
+      event.lockedUntil = null;
+      event.leaseToken = null;
+      event.requiresManualReview = false;
       event.errorMessage = null;
-
-      try {
-        const result = await this.processor.process(manager, {
-          eventId: event.id,
-          providerEventId: event.providerEventId,
-          eventType: event.eventType,
-          resource: this.getResource(event.payloadJson),
-        });
-        event.processingStatus = result.processingStatus;
-        event.errorMessage = result.note ?? null;
-      } catch (error) {
-        event.processingStatus = WebhookProcessingStatus.Failed;
-        event.errorMessage = this.getErrorMessage(error);
-      }
-
-      event.processedAt = new Date();
+      event.processedAt = null;
       const saved = await events.save(event);
+      await manager.query('SELECT pg_notify($1, $2)', [
+        PAYPAL_WEBHOOK_CHANNEL,
+        saved.id,
+      ]);
       await this.audit.record({
         manager,
         actorUserId,
@@ -200,17 +204,23 @@ export class BillingWebhooksService {
     const resource = this.getResource(payload);
     const resourceId = this.stringOrNull(resource.id);
 
-    const verification = await this.paypal.verifyWebhook({
-      transmissionId: headers.transmissionId,
-      transmissionTime: headers.transmissionTime,
-      certUrl: headers.certUrl,
-      authAlgo: headers.authAlgo,
-      transmissionSig: headers.transmissionSig,
-      webhookEvent: payload,
-    });
+    const verification = await this.paypal
+      .verifyWebhook({
+        transmissionId: headers.transmissionId,
+        transmissionTime: headers.transmissionTime,
+        certUrl: headers.certUrl,
+        authAlgo: headers.authAlgo,
+        transmissionSig: headers.transmissionSig,
+        webhookEvent: payload,
+      })
+      .catch(() => {
+        throw new ServiceUnavailableException(
+          'PayPal webhook verification is temporarily unavailable',
+        );
+      });
 
     if (!verification.verified) {
-      const event = await this.saveUnverifiedEvent({
+      await this.saveUnverifiedEvent({
         providerEventId,
         eventType,
         resourceId,
@@ -218,11 +228,13 @@ export class BillingWebhooksService {
         payload,
       });
 
-      return this.toResult(event, false);
+      throw new ForbiddenException(
+        'PayPal webhook signature verification failed',
+      );
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const event = await this.getOrCreateLockedEvent(manager, {
+      const { event, created } = await this.getOrCreateLockedEvent(manager, {
         providerEventId,
         eventType,
         resourceId,
@@ -230,44 +242,41 @@ export class BillingWebhooksService {
         payload,
       });
 
+      if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
+        event.verificationStatus = WebhookVerificationStatus.Verified;
+        event.eventType = eventType;
+        event.resourceId = resourceId;
+        event.payloadJson = payload;
+        event.transmissionId = headers.transmissionId;
+        event.processingStatus = WebhookProcessingStatus.Pending;
+        event.attempts = 0;
+        event.nextRetryAt = new Date();
+        event.lockedUntil = null;
+        event.leaseToken = null;
+        event.requiresManualReview = false;
+        event.errorMessage = null;
+        event.processedAt = null;
+        await manager.getRepository(BillingWebhookEventEntity).save(event);
+      }
+
       if (
-        event.processingStatus === WebhookProcessingStatus.Processed ||
-        event.processingStatus === WebhookProcessingStatus.Ignored
+        event.processingStatus === WebhookProcessingStatus.Pending &&
+        !event.requiresManualReview
       ) {
-        return this.toResult(event, true);
+        await manager.query('SELECT pg_notify($1, $2)', [
+          PAYPAL_WEBHOOK_CHANNEL,
+          event.id,
+        ]);
       }
-
-      event.verificationStatus = WebhookVerificationStatus.Verified;
-      event.processingStatus = WebhookProcessingStatus.Pending;
-      event.errorMessage = null;
-      event.payloadJson = payload;
-      event.transmissionId = headers.transmissionId;
-
-      try {
-        const result = await this.processor.process(manager, {
-          eventId: event.id,
-          providerEventId,
-          eventType,
-          resource,
-        });
-
-        event.processingStatus = result.processingStatus;
-        event.processedAt = new Date();
-        event.errorMessage = result.note ?? null;
-        const saved = await manager
-          .getRepository(BillingWebhookEventEntity)
-          .save(event);
-        return this.toResult(saved, false);
-      } catch (error) {
-        event.processingStatus = WebhookProcessingStatus.Failed;
-        event.processedAt = new Date();
-        event.errorMessage = this.getErrorMessage(error);
-        const saved = await manager
-          .getRepository(BillingWebhookEventEntity)
-          .save(event);
-        return this.toResult(saved, false);
-      }
+      return this.toResult(event, !created);
     });
+  }
+
+  private isRetryableIgnored(event: BillingWebhookEventEntity): boolean {
+    return (
+      event.processingStatus === WebhookProcessingStatus.Ignored &&
+      RETRYABLE_IGNORED_NOTES.has(event.errorMessage ?? '')
+    );
   }
 
   private validateHeaders(headers: PaypalWebhookHeaders): void {
@@ -289,35 +298,45 @@ export class BillingWebhooksService {
     transmissionId: string;
     payload: Record<string, unknown>;
   }): Promise<BillingWebhookEventEntity> {
-    const existing = await this.webhookEvents.findOne({
-      where: { providerEventId: input.providerEventId },
-    });
-
-    const event =
-      existing ??
-      this.webhookEvents.create({
-        provider: BillingProvider.Paypal,
-        providerEventId: input.providerEventId,
-        eventType: input.eventType,
-        receivedAt: new Date(),
+    return this.dataSource.transaction(async (manager) => {
+      const events = manager.getRepository(BillingWebhookEventEntity);
+      await manager.query(
+        `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json,error_message,processed_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,clock_timestamp())
+         ON CONFLICT(provider_event_id) DO NOTHING`,
+        [
+          BillingProvider.Paypal,
+          input.providerEventId,
+          input.eventType,
+          input.resourceId,
+          input.transmissionId,
+          WebhookVerificationStatus.Failed,
+          WebhookProcessingStatus.Failed,
+          JSON.stringify(input.payload),
+          'PayPal webhook signature verification failed',
+        ],
+      );
+      const event = await events.findOne({
+        where: { providerEventId: input.providerEventId },
+        lock: { mode: 'pessimistic_write' },
       });
+      if (!event) throw new Error('PayPal webhook could not be persisted');
+      if (event.verificationStatus === WebhookVerificationStatus.Verified)
+        return event;
 
-    if (
-      existing?.processingStatus === WebhookProcessingStatus.Processed ||
-      existing?.processingStatus === WebhookProcessingStatus.Ignored
-    ) {
-      return existing;
-    }
-
-    event.resourceId = input.resourceId;
-    event.transmissionId = input.transmissionId;
-    event.verificationStatus = WebhookVerificationStatus.Failed;
-    event.processingStatus = WebhookProcessingStatus.Failed;
-    event.payloadJson = input.payload;
-    event.errorMessage = 'PayPal webhook signature verification failed';
-    event.processedAt = new Date();
-
-    return this.webhookEvents.save(event);
+      event.eventType = input.eventType;
+      event.resourceId = input.resourceId;
+      event.transmissionId = input.transmissionId;
+      event.verificationStatus = WebhookVerificationStatus.Failed;
+      event.processingStatus = WebhookProcessingStatus.Failed;
+      event.payloadJson = input.payload;
+      event.errorMessage = 'PayPal webhook signature verification failed';
+      event.processedAt = new Date();
+      event.lockedUntil = null;
+      event.leaseToken = null;
+      event.requiresManualReview = false;
+      return events.save(event);
+    });
   }
 
   private async findWebhook(id: string): Promise<BillingWebhookEventEntity> {
@@ -358,30 +377,29 @@ export class BillingWebhooksService {
       transmissionId: string;
       payload: Record<string, unknown>;
     },
-  ): Promise<BillingWebhookEventEntity> {
+  ): Promise<{ event: BillingWebhookEventEntity; created: boolean }> {
     const events = manager.getRepository(BillingWebhookEventEntity);
-    const existing = await events.findOne({
+    const inserted = await manager.query<Array<{ id: string }>>(
+      `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+       ON CONFLICT(provider_event_id) DO NOTHING RETURNING id`,
+      [
+        BillingProvider.Paypal,
+        input.providerEventId,
+        input.eventType,
+        input.resourceId,
+        input.transmissionId,
+        WebhookVerificationStatus.Verified,
+        WebhookProcessingStatus.Pending,
+        JSON.stringify(input.payload),
+      ],
+    );
+    const event = await events.findOne({
       where: { providerEventId: input.providerEventId },
       lock: { mode: 'pessimistic_write' },
     });
-
-    if (existing) return existing;
-
-    const event = events.create({
-      provider: BillingProvider.Paypal,
-      providerEventId: input.providerEventId,
-      eventType: input.eventType,
-      resourceId: input.resourceId,
-      transmissionId: input.transmissionId,
-      verificationStatus: WebhookVerificationStatus.Verified,
-      processingStatus: WebhookProcessingStatus.Pending,
-      payloadJson: input.payload,
-      errorMessage: null,
-      receivedAt: new Date(),
-      processedAt: null,
-    });
-
-    return events.save(event);
+    if (!event) throw new Error('Persisted PayPal webhook could not be loaded');
+    return { event, created: inserted.length > 0 };
   }
 
   private getResource(payload: Record<string, unknown>): PaypalEventResource {
@@ -414,11 +432,6 @@ export class BillingWebhooksService {
     return value as Record<string, unknown>;
   }
 
-  private getErrorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    return 'PayPal webhook processing failed';
-  }
-
   private toResult(
     event: BillingWebhookEventEntity,
     duplicate: boolean,
@@ -443,6 +456,10 @@ export class BillingWebhooksService {
       verificationStatus: event.verificationStatus,
       processingStatus: event.processingStatus,
       errorMessage: event.errorMessage,
+      attempts: event.attempts,
+      nextRetryAt: event.nextRetryAt,
+      lockedUntil: event.lockedUntil,
+      requiresManualReview: event.requiresManualReview,
       receivedAt: event.receivedAt,
       processedAt: event.processedAt,
     };

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import type { EntityManager } from 'typeorm';
 import { BillingAuditService } from '../audit';
 import { BillingPlanCatalogResolver } from '../catalog';
 import { DEFAULT_BILLING_CURRENCY } from '../billing-shared';
@@ -44,17 +45,20 @@ export class BillingEntitlementsService {
 
   async recalculate(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
-    const subscription = await this.findSubscription(subscriptionId);
-    const activeAddons = await this.findActiveAddons(subscriptionId);
+    const subscription = await this.findSubscription(subscriptionId, manager);
+    const activeAddons = await this.findActiveAddons(subscriptionId, manager);
     const resolution = this.calculate(subscription, activeAddons);
 
     await this.upsertEntitlements(
       subscription,
       resolution.entitlements,
       this.planResolver.contractVersion(subscription).id,
+      manager,
     );
     await this.audit.record({
+      manager,
       organizationId: subscription.organizationId,
       action: 'billing.entitlements.recalculated',
       resourceType: 'billing_subscription',
@@ -235,7 +239,10 @@ export class BillingEntitlementsService {
     subscription: BillingSubscriptionEntity,
     summary: BillingEntitlementsSummary,
     planVersionId: string,
+    manager?: EntityManager,
   ): Promise<void> {
+    const entitlements =
+      manager?.getRepository(BillingEntitlementEntity) ?? this.entitlements;
     const values = new Map<string, number | null>([
       ['max_users', summary.maxUsers],
       ['included_users', summary.includedUsers],
@@ -247,12 +254,12 @@ export class BillingEntitlementsService {
 
     await Promise.all(
       Array.from(values.entries()).map(async ([key, rawValue]) => {
-        const existing = await this.entitlements.findOne({
+        const existing = await entitlements.findOne({
           where: { subscriptionId: subscription.id, key },
         });
         const entitlement =
           existing ??
-          this.entitlements.create({
+          entitlements.create({
             organizationId: subscription.organizationId,
             subscriptionId: subscription.id,
             subscription,
@@ -263,7 +270,7 @@ export class BillingEntitlementsService {
         entitlement.value = rawValue ?? 0;
         entitlement.status = EntitlementStatus.Active;
         entitlement.metadata = { nullable: rawValue === null, planVersionId };
-        await this.entitlements.save(entitlement);
+        await entitlements.save(entitlement);
       }),
     );
   }
@@ -304,8 +311,11 @@ export class BillingEntitlementsService {
 
   private async findSubscription(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingSubscriptionEntity> {
-    const subscription = await this.subscriptions.findOne({
+    const subscriptions =
+      manager?.getRepository(BillingSubscriptionEntity) ?? this.subscriptions;
+    const subscription = await subscriptions.findOne({
       where: { id: subscriptionId },
       relations: {
         plan: {
@@ -325,8 +335,12 @@ export class BillingEntitlementsService {
 
   private findActiveAddons(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingSubscriptionAddonEntity[]> {
-    return this.subscriptionAddons.find({
+    const subscriptionAddons =
+      manager?.getRepository(BillingSubscriptionAddonEntity) ??
+      this.subscriptionAddons;
+    return subscriptionAddons.find({
       where: { subscriptionId, status: SubscriptionAddonStatus.Active },
     });
   }

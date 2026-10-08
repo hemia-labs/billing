@@ -1,4 +1,7 @@
-import { Controller, Get, Header, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Query, Req, UseGuards } from '@nestjs/common';
+import { BillingServiceAccess } from '../../common/decorators/billing-service-access.decorator';
+import type { AuthenticatedRequest } from '../../common/types/authenticated-request.type';
+import { billingServiceAuthorization } from '../../common/types/billing-service-authorization.type';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { BillingInternalAuthGuard } from '../../common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -17,10 +20,15 @@ export class BillingCatalogPublicController {
   constructor(private readonly service: BillingCatalogService) {}
 
   @Get('products')
+  @BillingServiceAccess('catalog')
   @UseGuards(BillingInternalAuthGuard, PermissionsGuard)
   @Permissions('billing.integration.catalog.read')
-  listProducts(): Promise<BillingActiveProductResponseDto[]> {
-    return this.service.listActiveProducts();
+  listProducts(
+    @Req() request: AuthenticatedRequest,
+  ): Promise<BillingActiveProductResponseDto[]> {
+    return this.service.listActiveProducts(
+      billingServiceAuthorization(request).policy.products,
+    );
   }
 
   @Get('plans')

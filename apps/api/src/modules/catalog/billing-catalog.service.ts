@@ -48,7 +48,11 @@ import {
   ListBillingAddonsQueryDto,
   ListBillingPlansQueryDto,
   ListBillingProductsQueryDto,
+  ListPlanVersionSummariesQueryDto,
+  BillingPlanOverviewResponseDto,
   BillingPlanResponseDto,
+  BillingPlanVersionResponseDto,
+  BillingPlanVersionSummaryResponseDto,
   BillingProductResponseDto,
   PublicCatalogPlanDto,
   PublicCatalogPlansResponseDto,
@@ -92,9 +96,14 @@ export class BillingCatalogService {
     private readonly planResolver: BillingPlanCatalogResolver,
   ) {}
 
-  async listActiveProducts(): Promise<BillingActiveProductResponseDto[]> {
+  async listActiveProducts(
+    productCodes: string[],
+  ): Promise<BillingActiveProductResponseDto[]> {
     const products = await this.products.find({
-      where: { status: BillingProductStatus.Active },
+      where: {
+        status: BillingProductStatus.Active,
+        ...(productCodes.includes('*') ? {} : { code: In(productCodes) }),
+      },
       order: { createdAt: 'DESC', id: 'DESC' },
     });
 
@@ -198,6 +207,119 @@ export class BillingCatalogService {
 
   async getPlan(id: string): Promise<BillingPlanResponseDto> {
     return BillingCatalogMapper.toPlanDto(await this.findPlanById(id));
+  }
+
+  async getPlanOverview(id: string): Promise<BillingPlanOverviewResponseDto> {
+    const plan = await this.plans.findOne({
+      where: { id },
+      relations: { product: true },
+    });
+    if (!plan) throw new NotFoundException('Billing plan not found');
+    const published = await this.planVersions.findOne({
+      where: { planId: id, status: PlanVersionStatus.Published },
+      order: { version: 'DESC' },
+    });
+    if (!published) {
+      return {
+        ...BillingCatalogMapper.toPlanOverviewDto(plan),
+        publishedVersion: null,
+      };
+    }
+    const [priceCount, entitlementCount] = await Promise.all([
+      this.planPrices.count({ where: { planVersionId: published.id } }),
+      this.planEntitlements.count({ where: { planVersionId: published.id } }),
+    ]);
+    return {
+      ...BillingCatalogMapper.toPlanOverviewDto(plan),
+      publishedVersion: {
+        id: published.id,
+        version: published.version,
+        status: published.status,
+        effectiveFrom: published.effectiveFrom,
+        effectiveUntil: published.effectiveUntil,
+        createdAt: published.createdAt,
+        priceCount,
+        entitlementCount,
+      },
+    };
+  }
+
+  async listPlanVersionSummaries(
+    id: string,
+    query: ListPlanVersionSummariesQueryDto,
+  ): Promise<CatalogPageDto<BillingPlanVersionSummaryResponseDto>> {
+    const plan = await this.plans.findOne({
+      where: { id },
+      select: { id: true },
+    });
+    if (!plan) throw new NotFoundException('Billing plan not found');
+
+    const [versions, total] = await this.planVersions
+      .createQueryBuilder('version')
+      .where('version.planId = :planId', { planId: id })
+      .orderBy(
+        "CASE WHEN version.status = 'published' THEN 0 WHEN version.status = 'draft' THEN 1 ELSE 2 END",
+        'ASC',
+      )
+      .addOrderBy('version.version', 'DESC')
+      .addOrderBy('version.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getManyAndCount();
+
+    if (versions.length === 0) return this.page([], total, query);
+    const ids = versions.map((version) => version.id);
+    const [priceCounts, entitlementCounts] = await Promise.all([
+      this.planPrices
+        .createQueryBuilder('price')
+        .select('price.planVersionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('price.planVersionId IN (:...ids)', { ids })
+        .groupBy('price.planVersionId')
+        .getRawMany<{ versionId: string; count: string }>(),
+      this.planEntitlements
+        .createQueryBuilder('entitlement')
+        .select('entitlement.planVersionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('entitlement.planVersionId IN (:...ids)', { ids })
+        .groupBy('entitlement.planVersionId')
+        .getRawMany<{ versionId: string; count: string }>(),
+    ]);
+    const priceCountByVersion = new Map(
+      priceCounts.map((item) => [item.versionId, Number(item.count)]),
+    );
+    const entitlementCountByVersion = new Map(
+      entitlementCounts.map((item) => [item.versionId, Number(item.count)]),
+    );
+    return this.page(
+      versions.map((version) => ({
+        id: version.id,
+        version: version.version,
+        status: version.status,
+        effectiveFrom: version.effectiveFrom,
+        effectiveUntil: version.effectiveUntil,
+        createdAt: version.createdAt,
+        priceCount: priceCountByVersion.get(version.id) ?? 0,
+        entitlementCount: entitlementCountByVersion.get(version.id) ?? 0,
+      })),
+      total,
+      query,
+    );
+  }
+
+  async getPlanVersion(
+    id: string,
+    versionId: string,
+  ): Promise<BillingPlanVersionResponseDto> {
+    const version = await this.planVersions.findOne({
+      where: { id: versionId, planId: id },
+      relations: {
+        prices: { providerPrices: true },
+        entitlements: { feature: true },
+      },
+    });
+    if (!version) throw new NotFoundException('Billing plan version not found');
+    return BillingCatalogMapper.toPlanVersionDto(version);
   }
 
   async getAddon(id: string): Promise<BillingAddonResponseDto> {

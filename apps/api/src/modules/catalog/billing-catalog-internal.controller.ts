@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
+import { BillingServiceAccess } from '../../common/decorators/billing-service-access.decorator';
 import { BillingInternalAuthGuard } from '../../common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { BillingCatalogService } from './billing-catalog.service';
@@ -30,6 +31,7 @@ export class BillingCatalogInternalController {
   constructor(private readonly service: BillingCatalogService) {}
 
   @Post('products')
+  @BillingServiceAccess({ product: 'code', source: 'body' })
   createProduct(
     @Body() dto: CreateBillingProductDto,
   ): Promise<BillingProductResponseDto> {
@@ -37,6 +39,7 @@ export class BillingCatalogInternalController {
   }
 
   @Patch('products/:id')
+  @BillingServiceAccess({ resource: 'products' })
   updateProduct(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBillingProductDto,
@@ -45,6 +48,7 @@ export class BillingCatalogInternalController {
   }
 
   @Post('plans')
+  @BillingServiceAccess('catalog-target')
   createPlan(
     @Body() dto: CreateBillingPlanDto,
   ): Promise<BillingPlanResponseDto> {
@@ -52,6 +56,7 @@ export class BillingCatalogInternalController {
   }
 
   @Patch('plans/:id')
+  @BillingServiceAccess({ resource: 'plans' })
   updatePlan(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBillingPlanDto,
@@ -60,6 +65,7 @@ export class BillingCatalogInternalController {
   }
 
   @Post('addons')
+  @BillingServiceAccess('catalog-target')
   createAddon(
     @Body() dto: CreateBillingAddonDto,
   ): Promise<BillingAddonResponseDto> {
@@ -67,6 +73,7 @@ export class BillingCatalogInternalController {
   }
 
   @Patch('addons/:id')
+  @BillingServiceAccess({ resource: 'addons' })
   updateAddon(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBillingAddonDto,

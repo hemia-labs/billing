@@ -35,6 +35,10 @@ export class CatalogPaginationQueryDto {
   limit = 20;
 }
 
+export class ListPlanVersionSummariesQueryDto extends CatalogPaginationQueryDto {
+  limit = 10;
+}
+
 export class ListBillingProductsQueryDto extends CatalogPaginationQueryDto {
   @IsOptional()
   @IsString()

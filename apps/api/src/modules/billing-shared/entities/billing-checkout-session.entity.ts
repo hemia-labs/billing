@@ -20,6 +20,8 @@ import { BillingProviderPriceEntity } from './billing-provider-price.entity';
 @Index('IDX_checkout_sessions_plan_id', ['planId'])
 @Index('IDX_checkout_sessions_provider', ['provider'])
 @Index('IDX_checkout_sessions_status', ['status'])
+// Expression index is maintained by the checkout idempotency migration.
+@Index('UQ_checkout_sessions_service_idempotency', { synchronize: false })
 export class BillingCheckoutSessionEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -54,7 +56,12 @@ export class BillingCheckoutSessionEntity {
   @JoinColumn({ name: 'provider_price_id' })
   providerPrice: BillingProviderPriceEntity | null;
 
-  @Column({ name: 'plan_price_code', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'plan_price_code',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   planPriceCode: string | null;
 
   @Column({ type: 'enum', enum: BillingProvider })
@@ -78,15 +85,6 @@ export class BillingCheckoutSessionEntity {
 
   @Column({ name: 'legal_acceptance_id', length: 150 })
   legalAcceptanceId: string;
-
-  @Column({ name: 'terms_version', length: 50 })
-  termsVersion: string;
-
-  @Column({ name: 'privacy_version', length: 50 })
-  privacyVersion: string;
-
-  @Column({ name: 'refund_policy_version', length: 50 })
-  refundPolicyVersion: string;
 
   @Column({ name: 'accepted_at', type: 'timestamp with time zone' })
   acceptedAt: Date;

@@ -1,13 +1,33 @@
 "use client"
 
 import { type ComponentProps } from "react"
-import { Check } from "lucide-react"
+import { Check, ChevronRight } from "lucide-react"
 import { Menu as BaseMenu } from "@base-ui/react/menu"
 import { cn } from "@/lib/utils"
 
 export const DropdownMenu = BaseMenu.Root
 export const DropdownMenuTrigger = BaseMenu.Trigger
 export const DropdownMenuGroup = BaseMenu.Group
+export const DropdownMenuSub = BaseMenu.SubmenuRoot
+
+export function DropdownMenuSubTrigger({ className, children, ...props }: BaseMenu.SubmenuTrigger.Props) {
+  return (
+    <BaseMenu.SubmenuTrigger
+      className={cn(
+        "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-popover-foreground outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[popup-open]:bg-accent data-[popup-open]:text-accent-foreground",
+        className
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRight className="ml-auto size-4 shrink-0" aria-hidden="true" />
+    </BaseMenu.SubmenuTrigger>
+  )
+}
+
+export function DropdownMenuSubContent({ className, side = "right", sideOffset = 2, ...props }: ComponentProps<typeof DropdownMenuContent>) {
+  return <DropdownMenuContent className={cn("min-w-32", className)} side={side} sideOffset={sideOffset} {...props} />
+}
 
 // Positioner + Popup render through a portal. The Popup uses popover tokens so the menu keeps the
 // correct Light/Dark surface when it opens over a table row or any other differently-themed context.

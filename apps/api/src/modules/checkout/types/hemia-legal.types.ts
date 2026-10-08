@@ -8,9 +8,7 @@ export interface ValidateLegalAcceptanceInput {
 export interface HemiaLegalValidationResult {
   valid: boolean;
   legalAcceptanceId: string;
-  termsVersion: string;
-  privacyVersion: string;
-  refundPolicyVersion: string;
+  evidence: Record<string, unknown>[];
   acceptedAt: string;
   legalSnapshotHash: string;
   raw: Record<string, unknown>;

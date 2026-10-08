@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { HemiaLegalClientService } from '../src/modules/checkout/clients/hemia-legal-client.service';
 const ids = {
@@ -25,6 +26,24 @@ const config = {
     }),
   },
 };
+function documents(count = 1) {
+  return Array.from({ length: count }, (_, n) => ({
+    documentId: `20000000-0000-4000-8000-00000000000${n}`,
+    documentVersionId: `30000000-0000-4000-8000-00000000000${n}`,
+    acceptanceRuleId: `40000000-0000-4000-8000-00000000000${n}`,
+    acceptanceId:
+      n === 0
+        ? ids.legalAcceptanceId
+        : `50000000-0000-4000-8000-00000000000${n}`,
+    version: `${n + 1}.0.0`,
+    contentHash: 'a'.repeat(64),
+    registeringClient: {
+      oauthIssuer: 'http://localhost:4000',
+      clientId: 'balanz-legal-service',
+    },
+    acceptedAt: '2026-09-22T00:00:00.000Z',
+  }));
+}
 const proof = {
   contractVersion: 1,
   valid: true,
@@ -35,9 +54,7 @@ const proof = {
   legalAcceptanceId: ids.legalAcceptanceId,
   applicationId: ids.applicationId,
   issuerId: ids.issuerId,
-  termsVersion: '1.0.0',
-  privacyVersion: '2.0.0',
-  refundPolicyVersion: '3.0.0',
+  evidence: documents(),
   acceptedAt: '2026-09-22T00:00:00Z',
   legalSnapshotHash: 'a'.repeat(64),
 };
@@ -65,6 +82,42 @@ describe('Billing Legal OAuth', () => {
       ),
     );
   }
+  it.each([1, 2, 4])(
+    'accepts %s documents without fixed document types',
+    async (count) => {
+      token();
+      const evidence = documents(count).reverse();
+      fetcher.mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...proof, evidence })),
+      );
+      await expect(client.validateAcceptance(input)).resolves.toMatchObject({
+        valid: true,
+        evidence,
+      });
+    },
+  );
+  it('accepts the current document version verified by Legal', async () => {
+    token();
+    const evidence = [{ ...documents()[0], version: 'updated-version' }];
+    fetcher.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ...proof, evidence })),
+    );
+    await expect(client.validateAcceptance(input)).resolves.toMatchObject({
+      evidence,
+    });
+  });
+  it.each(['incomplete confirmations', 'changed required versions'])(
+    'blocks when Legal rejects %s',
+    async (reason) => {
+      token();
+      fetcher.mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...proof, valid: false, reason })),
+      );
+      await expect(client.validateAcceptance(input)).rejects.toMatchObject({
+        status: 400,
+      });
+    },
+  );
   it('uses client_credentials and bearer with bound consumer before accepting proof', async () => {
     token();
     fetcher.mockResolvedValueOnce(new Response(JSON.stringify(proof)));
@@ -102,7 +155,8 @@ describe('Billing Legal OAuth', () => {
     { ...proof, legalAcceptanceId: ids.userId },
     { ...proof, productCode: 'other' },
     { ...proof, legalSnapshotHash: '' },
-    { ...proof, termsVersion: '' },
+    { ...proof, evidence: [] },
+    { ...proof, evidence: undefined },
     { ...proof, contractVersion: 2 },
   ])('rejects unbound or incomplete evidence', async (result) => {
     token();
@@ -129,6 +183,16 @@ describe('Billing Legal OAuth', () => {
       status: 400,
     });
   });
+  it.each([400, 403, 401, 503])(
+    'preserves buyer rejection and fails closed on upstream %s',
+    async (status) => {
+      token();
+      fetcher.mockResolvedValueOnce(new Response(null, { status }));
+      await expect(client.validateAcceptance(input)).rejects.toMatchObject({
+        status: status === 400 || status === 403 ? status : 502,
+      });
+    },
+  );
   it('rejects absent product binding before network', async () => {
     await expect(
       client.validateAcceptance({ ...input, productCode: 'unknown' }),
@@ -141,5 +205,145 @@ describe('Billing Legal OAuth', () => {
       status: 502,
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('External Legal v2 evidence', () => {
+  const original = global.fetch;
+  const source = '10000000-0000-4000-8000-000000000006';
+  const externalInput = { ...input, productCode: 'balanz_cfdi' };
+  function externalProof(count = 3, version?: string) {
+    const evidence = documents(count);
+    if (version) evidence[0].version = version;
+    const snapshot = {
+      contractVersion: 2,
+      identitySourceId: source,
+      issuerId: ids.issuerId,
+      applicationId: ids.applicationId,
+      organizationId: ids.organizationId,
+      identityIssuer: 'urn:hemia:balanz',
+      subjectId: ids.userId,
+      productCode: 'balanz_cfdi',
+      legalAcceptanceId: ids.legalAcceptanceId,
+      evidence,
+    };
+    const hash = createHash('sha256')
+      .update(JSON.stringify(snapshot))
+      .digest('hex');
+    return { ...proof, ...snapshot, legalSnapshotHash: hash };
+  }
+  function setup(value: unknown) {
+    const fetcher = jest
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: 'opaque',
+            token_type: 'Bearer',
+            expires_in: 120,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(value)));
+    global.fetch = fetcher;
+    const client = new HemiaLegalClientService(
+      new ConfigService({
+        hemiaLegal: {
+          ...config.hemiaLegal,
+          identityIssuer: '',
+          // Balanz resolves its integration from the acceptance in Legal.
+          products: '{}',
+        },
+      }),
+    );
+    return { client, fetcher };
+  }
+  afterEach(() => {
+    global.fetch = original;
+  });
+  it.each([1, 2, 4])(
+    'accepts %s external documents without legacy versions',
+    async (count) => {
+      const proof = externalProof(count);
+      const { client } = setup(proof);
+      await expect(
+        client.validateAcceptance(externalInput),
+      ).resolves.toMatchObject({ valid: true, evidence: proof.evidence });
+    },
+  );
+  it('accepts the updated external version with a verified snapshot', async () => {
+    const proof = externalProof(1, 'updated-version');
+    const { client } = setup(proof);
+    await expect(
+      client.validateAcceptance(externalInput),
+    ).resolves.toMatchObject({ evidence: proof.evidence });
+  });
+  it.each(['incomplete confirmations', 'changed required versions'])(
+    'blocks external checkout when Legal rejects %s',
+    async (reason) => {
+      const { client } = setup({ ...externalProof(), valid: false, reason });
+      await expect(
+        client.validateAcceptance(externalInput),
+      ).rejects.toMatchObject({ status: 400 });
+    },
+  );
+  it.each([undefined, [], 'invalid'])(
+    'rejects unverifiable external evidence %s',
+    async (evidence) => {
+      const { client } = setup({ ...externalProof(), evidence });
+      await expect(
+        client.validateAcceptance(externalInput),
+      ).rejects.toMatchObject({ status: 502 });
+    },
+  );
+  it('uses external source and v2 scope without assuming SSO buyer issuer', async () => {
+    const { client, fetcher } = setup(externalProof());
+    await expect(
+      client.validateAcceptance(externalInput),
+    ).resolves.toMatchObject({ valid: true });
+    const calls = fetcher.mock.calls as [URL, RequestInit][];
+    expect(String(calls[1][0])).toBe(
+      'http://localhost:3017/v1/legal/integrations/acceptances/validate',
+    );
+    expect((calls[0][1].body as URLSearchParams).get('scope')).toBe(
+      'legal.integration.acceptances.validate',
+    );
+    expect(JSON.parse(calls[1][1].body as string)).toEqual({
+      organizationId: ids.organizationId,
+      subjectId: ids.userId,
+      productCode: 'balanz_cfdi',
+      legalAcceptanceId: ids.legalAcceptanceId,
+    });
+  });
+  it.each([
+    'source',
+    'issuer',
+    'buyer',
+    'organization',
+    'hash',
+    'missing',
+    'duplicate',
+    'version',
+    'anchor',
+    'v1',
+  ])('rejects altered %s evidence', async (failure) => {
+    const proof = externalProof();
+    const bad = { ...proof };
+    if (failure === 'source') bad.identitySourceId = ids.userId;
+    if (failure === 'issuer') bad.identityIssuer = 'http://localhost:4000';
+    if (failure === 'buyer') bad.subjectId = ids.organizationId;
+    if (failure === 'organization') bad.organizationId = ids.userId;
+    if (failure === 'hash') bad.legalSnapshotHash = 'b'.repeat(64);
+    if (failure === 'missing') bad.evidence = bad.evidence.slice(1);
+    if (failure === 'duplicate')
+      bad.evidence = [bad.evidence[0], bad.evidence[0], bad.evidence[2]];
+    if (failure === 'version') bad.evidence[0].version = 'changed';
+    if (failure === 'anchor')
+      bad.evidence[0] = { ...bad.evidence[0], acceptanceId: ids.userId };
+    if (failure === 'v1') bad.contractVersion = 1;
+    const { client } = setup(bad);
+    await expect(
+      client.validateAcceptance(externalInput),
+    ).rejects.toMatchObject({ status: 502 });
   });
 });

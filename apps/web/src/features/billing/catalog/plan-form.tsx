@@ -1,12 +1,13 @@
 "use client";
 
-import { type FormEvent, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/zuno/button";
 import { Card } from "@/components/zuno/card";
 import { Switch } from "@/components/zuno/switch";
 import { Input } from "@/components/zuno/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -29,6 +30,12 @@ import type {
   ProviderPriceStatus,
 } from "./catalog-api";
 import { primaryVersion } from "./catalog-api";
+
+export type PlanFormDraft = {
+  name: string; code: string; description: string;
+  prices: { code: string; amount: string; currency: BillingCurrency; billingInterval: PlanPriceBillingInterval; billingIntervalCount: number; providerPrices?: CatalogPlanPricePayload['providerPrices']; status?: CatalogPlanPricePayload['status'] }[];
+  features: { code: string; name: string; valueType: FeatureValueType; value: string; unit: string; aggregationStrategy: FeatureAggregationStrategy; isMetered: boolean }[];
+};
 
 type EntitlementDraft = {
   key: string;
@@ -82,6 +89,10 @@ export function PlanForm({
   cancelHref,
   defaultProductId,
   initialPlan,
+  initialDraft,
+  onDraftChange,
+  renderAssistAction,
+  onProductChange,
   lockedProduct,
   onSubmit,
   products,
@@ -91,6 +102,10 @@ export function PlanForm({
   cancelHref?: string;
   defaultProductId?: string;
   initialPlan?: CatalogPlan;
+  initialDraft?: PlanFormDraft;
+  onDraftChange?: (draft: PlanFormDraft) => void;
+  renderAssistAction?: (state: { hasContent: boolean; disabled: boolean; productId: string }) => ReactNode;
+  onProductChange?: (productId: string) => void;
   lockedProduct?: CatalogProduct;
   onSubmit: (payload: CatalogPlanPayload) => Promise<void>;
   products: CatalogProduct[];
@@ -98,15 +113,16 @@ export function PlanForm({
   submitLabel: string;
 }) {
   const isNew = !initialPlan;
+  const [details, setDetails] = useState({ name: initialDraft?.name ?? initialPlan?.name ?? '', code: initialDraft?.code ?? initialPlan?.code ?? '', description: initialDraft?.description ?? initialPlan?.description ?? '' });
   const currentVersion = initialPlan
     ? [...initialPlan.versions].filter((version) => version.status === "draft")
         .sort((left, right) => right.version - left.version)[0] ?? primaryVersion(initialPlan)
     : undefined;
   const [prices, setPrices] = useState<PriceDraft[]>(() =>
-    currentVersion?.prices.length ? currentVersion.prices.map(priceDraftFromCatalog) : [blankPrice()],
+    initialDraft ? initialDraft.prices.map(price => ({ ...price, key: crypto.randomUUID(), status: price.status ?? 'active', providerPrices: (price.providerPrices ?? []).map(provider => ({ ...provider, key: crypto.randomUUID(), providerProductId: provider.providerProductId ?? '', providerPriceId: provider.providerPriceId ?? '', providerMetadata: provider.providerMetadata ?? {}, status: provider.status ?? 'active' })) })) : currentVersion?.prices.length ? currentVersion.prices.map(priceDraftFromCatalog) : [blankPrice()],
   );
   const [entitlements, setEntitlements] = useState<EntitlementDraft[]>(() =>
-    currentVersion?.entitlements.length
+    initialDraft ? initialDraft.features.map(feature => ({ ...feature, key: crypto.randomUUID() })) : currentVersion?.entitlements.length
       ? currentVersion.entitlements.map((entitlement) => ({
           key: entitlement.id,
           code: entitlement.feature.code,
@@ -120,6 +136,13 @@ export function PlanForm({
       : [],
   );
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    onDraftChange?.({
+      ...details,
+      prices: prices.map(price => ({ ...pricePayload(price), status: price.status })),
+      features: entitlements.map(({ code, name, valueType, value, unit, aggregationStrategy, isMetered }) => ({ code, name, valueType, value, unit, aggregationStrategy, isMetered })),
+    });
+  }, [details, prices, entitlements, onDraftChange]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [expandedPriceOptions, setExpandedPriceOptions] = useState<Record<string, boolean>>({});
   const errorRef = useRef<HTMLDivElement>(null);
@@ -244,6 +267,7 @@ export function PlanForm({
   return (
     <Card className="shadow-sm">
       <form className="space-y-7 p-5 md:p-6" noValidate onSubmit={submit}>
+        {renderAssistAction && !readOnly && renderAssistAction({ hasContent: Boolean(details.name.trim() || details.code.trim() || details.description.trim()), disabled: saving, productId })}
         {(message || Object.keys(fieldErrors).length > 0) && (
           <div
             className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-foreground outline-none"
@@ -272,7 +296,7 @@ export function PlanForm({
           ) : (
             <label className="grid gap-2 text-sm font-medium" htmlFor="plan-product">
               Producto
-              <Select defaultValue={productId || undefined} disabled={readOnly} name="productId" onValueChange={() => clearError("plan-product")} required>
+              <Select defaultValue={productId || undefined} disabled={readOnly} name="productId" onValueChange={(value) => { clearError("plan-product"); if (value) onProductChange?.(value); }} required>
                 <SelectTrigger aria-invalid={Boolean(fieldErrors["plan-product"])} className={selectTriggerClassName} id="plan-product">
                   <SelectValue placeholder="Selecciona producto" />
                 </SelectTrigger>
@@ -287,11 +311,12 @@ export function PlanForm({
               <Input
                 aria-invalid={Boolean(fieldErrors["plan-name"])}
                 className={inputClassName}
-                defaultValue={initialPlan?.name ?? ""}
+                value={details.name}
                 id="plan-name"
                 maxLength={120}
                 name="name"
-                onChange={() => clearError("plan-name")}
+                placeholder="Ej. Plan Pro"
+                onChange={(event) => { clearError("plan-name"); setDetails(current => ({ ...current, name: event.target.value })); }}
                 readOnly={readOnly}
                 required
               />
@@ -302,11 +327,12 @@ export function PlanForm({
               <Input
                 aria-invalid={Boolean(fieldErrors["plan-code"])}
                 className={inputClassName}
-                defaultValue={initialPlan?.code ?? ""}
+                value={details.code}
                 id="plan-code"
                 maxLength={100}
                 name="code"
-                onChange={() => clearError("plan-code")}
+                placeholder="plan_pro"
+                onChange={(event) => { clearError("plan-code"); setDetails(current => ({ ...current, code: event.target.value })); }}
                 readOnly={readOnly}
                 required
               />
@@ -317,11 +343,13 @@ export function PlanForm({
           </div>
           <label className="grid gap-2 text-sm font-medium" htmlFor="plan-description">
             <span>Descripción <span className="text-xs font-normal text-muted-foreground">(opcional)</span></span>
-            <textarea
-              className="min-h-24 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
-              defaultValue={initialPlan?.description ?? ""}
+            <Textarea
+              className="min-h-24 bg-background font-normal"
+              value={details.description}
+              onChange={(event) => setDetails(current => ({ ...current, description: event.target.value }))}
               id="plan-description"
               name="description"
+              placeholder="Qué incluye este plan"
               readOnly={readOnly}
             />
           </label>
@@ -399,7 +427,10 @@ export function PlanForm({
             return (
               <div className="space-y-5 rounded-lg border border-border bg-muted/15 p-4" key={price.key}>
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-semibold">Precio {priceIndex + 1}</h3>
+                  <h3 className="min-w-0 font-semibold">
+                    Precio {priceIndex + 1}
+                    {price.code && <span className="ml-2 break-all font-mono text-xs font-normal text-muted-foreground">{price.code}</span>}
+                  </h3>
                   {!readOnly && prices.length > 1 && (
                     <Button aria-label={"Quitar precio " + (priceIndex + 1)} onClick={() => { setPrices((items) => items.filter((_, index) => index !== priceIndex)); setFieldErrors({}); }} size="icon" type="button" variant="outline">
                       <Trash2 className="size-4" />
@@ -439,19 +470,19 @@ export function PlanForm({
                     </Select>
                   </label>
                 </div>
-                {isNew ? (
-                  <details
-                    className="border-t border-border pt-4"
-                    onToggle={(event) => {
-                      const open = event.currentTarget.open;
-                      setExpandedPriceOptions((current) => current[price.key] === open ? current : { ...current, [price.key]: open });
-                    }}
-                    open={Boolean(expandedPriceOptions[price.key])}
-                  >
-                    <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">Opciones avanzadas del precio</summary>
-                    {advancedPriceFields}
-                  </details>
-                ) : <div className="border-t border-border">{advancedPriceFields}</div>}
+                <details
+                  className="border-t border-border pt-4"
+                  onToggle={(event) => {
+                    const open = event.currentTarget.open;
+                    setExpandedPriceOptions((current) => current[price.key] === open ? current : { ...current, [price.key]: open });
+                  }}
+                  open={Boolean(expandedPriceOptions[price.key])}
+                >
+                  <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+                    Opciones avanzadas del precio{price.status === "archived" ? " · Archivado" : ""}
+                  </summary>
+                  {advancedPriceFields}
+                </details>
 
                 <div className="space-y-3 border-t border-border pt-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -503,12 +534,12 @@ export function PlanForm({
                             </Button>
                           )}
                         </div>
-                        {isNew ? (
-                          <details className="mt-3">
-                            <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">IDs y configuración del proveedor</summary>
-                            {advancedProviderFields}
-                          </details>
-                        ) : advancedProviderFields}
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                            IDs y configuración del proveedor{providerPrice.status === "archived" ? " · Archivado" : ""}
+                          </summary>
+                          {advancedProviderFields}
+                        </details>
                       </div>
                     );
                   })}
@@ -546,7 +577,7 @@ export function PlanForm({
                 <div className="grid items-start gap-4 md:grid-cols-2">
                   <label className="grid gap-2 text-sm font-medium" htmlFor={"feature-" + index + "-name"}>
                     Nombre
-                    <Input className={inputClassName} id={"feature-" + index + "-name"} onChange={(event) => { updateEntitlement(index, "name", event.target.value, setEntitlements); clearError("plan-features"); }} readOnly={readOnly} value={item.name} />
+                    <Input className={inputClassName} id={"feature-" + index + "-name"} placeholder="Ej. Usuarios incluidos" onChange={(event) => { updateEntitlement(index, "name", event.target.value, setEntitlements); clearError("plan-features"); }} readOnly={readOnly} value={item.name} />
                   </label>
                   <label className="grid gap-2 text-sm font-medium" htmlFor={"feature-" + index + "-code"}>
                     Código
@@ -574,7 +605,7 @@ export function PlanForm({
                         <SelectContent><SelectItem value="true">Sí</SelectItem><SelectItem value="false">No</SelectItem></SelectContent>
                       </Select>
                     ) : item.valueType === "json" ? (
-                      <textarea className="min-h-20 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50" id={"feature-" + index + "-value"} onChange={(event) => { updateEntitlement(index, "value", event.target.value, setEntitlements); clearError("plan-features"); }} readOnly={readOnly} value={item.value} />
+                      <Textarea className="min-h-20 bg-background font-mono" id={"feature-" + index + "-value"} onChange={(event) => { updateEntitlement(index, "value", event.target.value, setEntitlements); clearError("plan-features"); }} readOnly={readOnly} value={item.value} />
                     ) : (
                       <Input className={inputClassName} id={"feature-" + index + "-value"} onChange={(event) => { updateEntitlement(index, "value", event.target.value, setEntitlements); clearError("plan-features"); }} readOnly={readOnly} value={item.value} />
                     )}
@@ -809,5 +840,5 @@ function stringValue(form: FormData, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-const inputClassName = "bg-card font-normal";
-const selectTriggerClassName = "w-full rounded-lg bg-card font-normal";
+const inputClassName = "bg-background font-normal";
+const selectTriggerClassName = "w-full rounded-lg bg-background font-normal";

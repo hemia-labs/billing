@@ -1,7 +1,3 @@
-import { REDIS } from './modules/auth/redis-session-store';
-import { BillingEventBusConsumer } from './modules/event-bus/billing-event-bus.consumer';
-import { installMetrics } from '@hemia/operational-metrics';
-import { DataSource } from 'typeorm';
 import { NestFactory } from '@nestjs/core';
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -34,14 +30,6 @@ async function bootstrap() {
   );
   app.enableCors({ origin: corsOrigins, credentials: true });
 
-  await installMetrics(app, {
-    service: 'billing',
-    dataSource: app.get(DataSource),
-    checks: {
-      redis: () => app.get(REDIS).ping(),
-      rabbitmq: () => app.get(BillingEventBusConsumer).isConnected(),
-    },
-  });
   app.enableShutdownHooks();
   await app.listen(config.get<number>('app.port') ?? 3015);
 }

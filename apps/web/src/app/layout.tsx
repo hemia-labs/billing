@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { AppSidebar } from "@/components/app-sidebar";
-import { AppTopbar } from "@/components/app-topbar";
+import { AppWorkspace } from "@/components/app-workspace";
 import { AuthGate } from "@/components/auth-gate";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/zuno/tooltip";
 
 const sans = Inter({
@@ -52,12 +52,7 @@ export default function RootLayout({
               } as CSSProperties}
             >
               <AppSidebar />
-              <SidebarInset>
-                <AppTopbar />
-                <div className="flex flex-1 flex-col gap-4 p-4">
-                  <div className="min-h-full flex-1 rounded-xl bg-muted/50 p-4 md:p-6">{children}</div>
-                </div>
-              </SidebarInset>
+              <AppWorkspace>{children}</AppWorkspace>
             </SidebarProvider>
           </AuthGate>
         </TooltipProvider>

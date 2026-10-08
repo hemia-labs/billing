@@ -239,6 +239,8 @@ describe('Billing SSO integration', () => {
       'billing.catalog.manage',
       'billing.catalog.publish',
       'billing.catalog.read',
+      'billing.integrations.manage',
+      'billing.integrations.read',
     ]);
     expect(session).not.toHaveProperty('tenantId');
   });

@@ -1,8 +1,10 @@
 import type { BillingAuthorization } from '../../modules/auth/billing-console-permissions';
 import type { AccessContext, AccessOrganizationContext } from '@hemia/auth';
 import { Request } from 'express';
+import type { BillingServiceAuthorization } from './billing-service-authorization.type';
 
 export type AuthenticatedPrincipal = {
+  issuer?: string;
   sub: string;
   scopes: string[];
   permissions?: string[];
@@ -13,6 +15,7 @@ export type AuthenticatedPrincipal = {
 };
 
 export type AuthenticatedRequest = Request & {
+  billingServiceAuthorization?: BillingServiceAuthorization;
   billingAuthorization?: BillingAuthorization;
   billingOrganizationScope?: string[] | null;
   principal?: AuthenticatedPrincipal;

@@ -5,11 +5,18 @@ import {
   IsString,
   IsUrl,
   IsUUID,
+  Matches,
   MaxLength,
 } from 'class-validator';
 import { BillingProvider } from '../../billing-shared';
+import { checkoutReturnUrlOptions } from '../../../common/utils/checkout-return-url';
 
 export class CreateCheckoutSessionDto {
+  @IsString()
+  @Matches(/^\S+$/)
+  @MaxLength(120)
+  idempotencyKey: string;
+
   @IsUUID()
   organizationId: string;
 
@@ -35,10 +42,10 @@ export class CreateCheckoutSessionDto {
   @MaxLength(150)
   legalAcceptanceId: string;
 
-  @IsUrl({ require_tld: false })
+  @IsUrl(checkoutReturnUrlOptions)
   successUrl: string;
 
-  @IsUrl({ require_tld: false })
+  @IsUrl(checkoutReturnUrlOptions)
   cancelUrl: string;
 
   @IsOptional()

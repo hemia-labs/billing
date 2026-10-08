@@ -21,6 +21,14 @@ const ALLOWED_METADATA_KEYS = new Set([
   'subscriptionAddonId',
   'subscriptionId',
   'paymentId',
+  'refundId',
+  'providerRefundId',
+  'paymentRefundId',
+  'refundedAmount',
+  'currency',
+  'periodStart',
+  'periodEnd',
+  'cancellationJobId',
   'licenseId',
   'addonCode',
   'quantity',
@@ -34,6 +42,8 @@ const ALLOWED_METADATA_KEYS = new Set([
   'providerStatus',
   'retryReason',
   'retryAttempt',
+  'attemptCount',
+  'requiresManualReview',
 ]);
 
 @Injectable()
@@ -58,12 +68,12 @@ export class BillingAuditService {
         resourceId: input.resourceId ?? null,
         provider: input.provider ?? null,
         legalAcceptanceId: legal?.legalAcceptanceId ?? null,
-        termsVersion: legal?.termsVersion ?? null,
-        privacyVersion: legal?.privacyVersion ?? null,
-        refundPolicyVersion: legal?.refundPolicyVersion ?? null,
         acceptedAt: legal ? new Date(legal.acceptedAt) : null,
         legalSnapshotHash: legal?.legalSnapshotHash ?? null,
-        metadata: this.sanitizeMetadata(input.metadata ?? {}),
+        metadata: {
+          ...this.sanitizeMetadata(input.metadata ?? {}),
+          ...(legal?.evidence ? { legalEvidence: legal.evidence } : {}),
+        },
       }),
     );
   }

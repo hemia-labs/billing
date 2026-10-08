@@ -52,6 +52,10 @@ export type CatalogPlan = {
   versions: CatalogPlanVersion[];
 };
 
+export type CatalogPlanOverview = Omit<CatalogPlan, "versions"> & {
+  publishedVersion: CatalogPlanVersionSummary | null;
+};
+
 export type CatalogProviderPrice = {
   id: string;
   provider: BillingProvider;
@@ -99,6 +103,17 @@ export type CatalogPlanVersion = {
   effectiveUntil: string | null;
   prices: CatalogPlanPrice[];
   entitlements: CatalogPlanEntitlement[];
+};
+
+export type CatalogPlanVersionSummary = {
+  id: string;
+  version: number;
+  status: PlanVersionStatus;
+  effectiveFrom: string | null;
+  effectiveUntil: string | null;
+  createdAt: string;
+  priceCount: number;
+  entitlementCount: number;
 };
 
 export type CatalogProviderPricePayload = {
@@ -203,7 +218,7 @@ export type CatalogFilters = {
   limit?: number;
 };
 
-export function listCatalogProducts(filters: CatalogFilters) {
+export function listCatalogProducts(filters: CatalogFilters, signal?: AbortSignal) {
   return apiFetch<CatalogPage<CatalogProduct>>(
     `/billing/console/catalog/products${toQueryString({
       q: filters.q,
@@ -211,6 +226,7 @@ export function listCatalogProducts(filters: CatalogFilters) {
       page: filters.page,
       limit: filters.limit,
     })}`,
+    { signal },
   );
 }
 
@@ -240,6 +256,20 @@ export function listCatalogPlans(filters: CatalogFilters) {
 
 export function getCatalogPlan(id: string) {
   return apiFetch<CatalogPlan>(`/billing/console/catalog/plans/${id}`);
+}
+
+export function getCatalogPlanOverview(id: string) {
+  return apiFetch<CatalogPlanOverview>(`/billing/console/catalog/plans/${id}/overview`);
+}
+
+export function listCatalogPlanVersionSummaries(id: string, page: number, limit = 10) {
+  return apiFetch<CatalogPage<CatalogPlanVersionSummary>>(
+    `/billing/console/catalog/plans/${id}/version-summaries${toQueryString({ page, limit })}`,
+  );
+}
+
+export function getCatalogPlanVersion(id: string, versionId: string) {
+  return apiFetch<CatalogPlanVersion>(`/billing/console/catalog/plans/${id}/versions/${versionId}`);
 }
 
 export function createCatalogPlan(payload: CatalogPlanPayload) {

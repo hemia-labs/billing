@@ -1,6 +1,6 @@
 # Comunicación Access–Billing
 
-Billing consume RabbitMQ mediante `@hemia/event-bus@0.0.4`, incluido como paquete reproducible en `vendor/`. Exchange `hemia.events`; cola duradera propia `hemia-billing.access`. Las réplicas de Billing comparten esta cola; Legal conserva la suya. No se ha publicado el SDK al registro.
+Billing consume RabbitMQ mediante `@hemia/event-bus@0.0.3`, publicado en npm y fijado en el manifest y lockfile. Exchange `hemia.events`; cola duradera propia `hemia-billing.access`. Las réplicas de Billing comparten esta cola; Legal conserva la suya.
 
 ## Eventos implementados
 
@@ -42,8 +42,8 @@ No se ejecutan migraciones ni seeds. No se agregaron tenants de sesión, tablas 
 
 ## Recuperación de conexión
 
-El SDK 0.0.4 reconecta y restaura topología/suscripciones. Retry y DLQ requieren confirmación antes del ACK original. Los resultados inciertos pueden duplicarse; se conserva el ID estable del outbox. No se garantiza entrega exactamente una vez.
+El SDK 0.0.3 publicado incluye las correcciones de la antigua copia local 0.0.4: reconecta y restaura topología/suscripciones. Retry y DLQ requieren confirmación antes del ACK original. Los resultados inciertos pueden duplicarse; se conserva el ID estable del outbox. No se garantiza entrega exactamente una vez.
 
-## Operación instrumentada
+## Observabilidad pendiente
 
-La monitorización de conexión RabbitMQ, dependencias, HTTP y pool está integrada y probada; Access observa el atraso y estados del outbox. La carga y entrega/resolución de alertas locales están documentadas en `docs/operacion-sso.md` de Billing. TODO: integrar métricas y alertas con HORUS, el software propio elegido para producción; no se requiere desplegar Prometheus/Alertmanager. No se enviaron notificaciones externas.
+La instrumentación local de conexión RabbitMQ, dependencias, HTTP y pool fue retirada de Billing. La evidencia histórica de carga y entrega/resolución de alertas locales está documentada en `docs/operacion-sso.md`. TODO: integrar métricas y alertas con HORUS, el software propio elegido para producción; no se requiere desplegar Prometheus/Alertmanager.

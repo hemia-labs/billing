@@ -4,6 +4,7 @@ import {
   BillingAuditLogEntity,
   BillingLicenseEntity,
   BillingPaymentEntity,
+  BillingPaymentRefundEntity,
   BillingProductEntity,
   BillingSubscriptionEntity,
   BillingWebhookEventEntity,
@@ -16,6 +17,9 @@ import { BillingSubscriptionPaymentsProcessorService } from './billing-subscript
 import { BillingWebhooksConsoleController } from './billing-webhooks-console.controller';
 import { BillingWebhooksController } from './billing-webhooks.controller';
 import { BillingWebhooksService } from './billing-webhooks.service';
+import { BillingPaypalRefundsService } from './billing-paypal-refunds.service';
+import { PaypalCancellationWorker } from './paypal-cancellation-worker';
+import { PaypalWebhookWorker } from './paypal-webhook-worker';
 
 @Module({
   imports: [
@@ -23,6 +27,7 @@ import { BillingWebhooksService } from './billing-webhooks.service';
       BillingWebhookEventEntity,
       BillingSubscriptionEntity,
       BillingPaymentEntity,
+      BillingPaymentRefundEntity,
       BillingLicenseEntity,
       BillingProductEntity,
       BillingAuditLogEntity,
@@ -36,6 +41,9 @@ import { BillingWebhooksService } from './billing-webhooks.service';
   providers: [
     BillingWebhooksService,
     BillingSubscriptionPaymentsProcessorService,
+    BillingPaypalRefundsService,
+    PaypalCancellationWorker,
+    PaypalWebhookWorker,
   ],
 })
 export class BillingWebhooksModule {}

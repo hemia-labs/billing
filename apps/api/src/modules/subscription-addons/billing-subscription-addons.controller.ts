@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
+import { BillingServiceAccess } from '../../common/decorators/billing-service-access.decorator';
 import { BillingInternalAuthGuard } from '../../common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { BillingSubscriptionAddonsService } from './billing-subscription-addons.service';
@@ -24,6 +25,10 @@ export class BillingSubscriptionAddonsController {
   constructor(private readonly service: BillingSubscriptionAddonsService) {}
 
   @Post('subscriptions/:subscriptionId/addons')
+  @BillingServiceAccess({
+    resource: 'subscriptions',
+    parameter: 'subscriptionId',
+  })
   createPendingAddon(
     @Param('subscriptionId', ParseUUIDPipe) subscriptionId: string,
     @Body() dto: CreateSubscriptionAddonDto,
@@ -32,6 +37,10 @@ export class BillingSubscriptionAddonsController {
   }
 
   @Get('subscriptions/:subscriptionId/addons')
+  @BillingServiceAccess({
+    resource: 'subscriptions',
+    parameter: 'subscriptionId',
+  })
   getSummary(
     @Param('subscriptionId', ParseUUIDPipe) subscriptionId: string,
   ): Promise<SubscriptionAddonSummaryResponseDto> {
@@ -39,6 +48,7 @@ export class BillingSubscriptionAddonsController {
   }
 
   @Post('subscription-addons/:id/schedule-cancel')
+  @BillingServiceAccess({ resource: 'subscription_addons' })
   scheduleCancel(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<SubscriptionAddonResponseDto> {

@@ -125,15 +125,6 @@ export class BillingSubscriptionEntity {
   @Column({ name: 'legal_acceptance_id', length: 150 })
   legalAcceptanceId: string;
 
-  @Column({ name: 'terms_version', length: 50 })
-  termsVersion: string;
-
-  @Column({ name: 'privacy_version', length: 50 })
-  privacyVersion: string;
-
-  @Column({ name: 'refund_policy_version', length: 50 })
-  refundPolicyVersion: string;
-
   @Column({ name: 'accepted_at', type: 'timestamp with time zone' })
   acceptedAt: Date;
 

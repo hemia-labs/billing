@@ -44,30 +44,6 @@ export class BillingAuditLogEntity {
   legalAcceptanceId: string | null;
 
   @Column({
-    name: 'terms_version',
-    type: 'varchar',
-    length: 50,
-    nullable: true,
-  })
-  termsVersion: string | null;
-
-  @Column({
-    name: 'privacy_version',
-    type: 'varchar',
-    length: 50,
-    nullable: true,
-  })
-  privacyVersion: string | null;
-
-  @Column({
-    name: 'refund_policy_version',
-    type: 'varchar',
-    length: 50,
-    nullable: true,
-  })
-  refundPolicyVersion: string | null;
-
-  @Column({
     name: 'accepted_at',
     type: 'timestamp with time zone',
     nullable: true,

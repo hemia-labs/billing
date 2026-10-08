@@ -6,17 +6,17 @@ import {
 } from '../enums';
 
 @Entity('webhook_events')
-@Index(
-  'IDX_webhook_events_provider_event_id_unique',
-  ['providerEventId'],
-  {
-    unique: true,
-  },
-)
+@Index('IDX_webhook_events_provider_event_id_unique', ['providerEventId'], {
+  unique: true,
+})
 @Index('IDX_webhook_events_provider', ['provider'])
 @Index('IDX_webhook_events_event_type', ['eventType'])
 @Index('IDX_webhook_events_resource_id', ['resourceId'])
 @Index('IDX_webhook_events_processing_status', ['processingStatus'])
+@Index('ix_webhook_events_paypal_due', ['nextRetryAt', 'receivedAt', 'id'], {
+  where:
+    "provider = 'paypal' AND verification_status = 'verified' AND requires_manual_review = false AND processing_status IN ('pending', 'processing')",
+})
 export class BillingWebhookEventEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -65,6 +65,29 @@ export class BillingWebhookEventEntity {
 
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
+
+  @Column({ name: 'attempts', type: 'integer', default: 0 })
+  attempts: number;
+
+  @Column({
+    name: 'next_retry_at',
+    type: 'timestamp with time zone',
+    default: () => 'CURRENT_TIMESTAMP',
+  })
+  nextRetryAt: Date;
+
+  @Column({
+    name: 'locked_until',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
+  lockedUntil: Date | null;
+
+  @Column({ name: 'lease_token', type: 'uuid', nullable: true })
+  leaseToken: string | null;
+
+  @Column({ name: 'requires_manual_review', type: 'boolean', default: false })
+  requiresManualReview: boolean;
 
   @Column({
     name: 'received_at',

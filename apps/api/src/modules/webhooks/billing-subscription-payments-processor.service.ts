@@ -1,7 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadGatewayException, Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { BillingAuditService } from '../audit';
-import { DEFAULT_BILLING_CURRENCY, type BillingCurrency } from '../billing-shared';
+import {
+  DEFAULT_BILLING_CURRENCY,
+  type BillingCurrency,
+} from '../billing-shared';
 import {
   BillingLicenseEntity,
   BillingPaymentEntity,
@@ -18,8 +21,10 @@ import {
 import { BillingLicenseCalculatorService } from '../licenses';
 import { PaypalClientService } from '../paypal';
 import { BillingSubscriptionAddonPaymentsProcessorService } from '../subscription-addons';
+import { BillingPaypalRefundsService } from './billing-paypal-refunds.service';
 import {
   BillingWebhookProcessorInput,
+  BillingWebhookProcessorContext,
   BillingWebhookProcessorResult,
   PaypalEventResource,
 } from './types';
@@ -45,11 +50,13 @@ export class BillingSubscriptionPaymentsProcessorService {
     private readonly licenseCalculator: BillingLicenseCalculatorService,
     private readonly audit: BillingAuditService,
     private readonly addonProcessor?: BillingSubscriptionAddonPaymentsProcessorService,
+    private readonly refunds?: BillingPaypalRefundsService,
   ) {}
 
   async process(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
+    context: BillingWebhookProcessorContext = {},
   ): Promise<BillingWebhookProcessorResult> {
     const addonResult = await this.addonProcessor?.process(manager, input);
     if (addonResult) return addonResult;
@@ -59,36 +66,24 @@ export class BillingSubscriptionPaymentsProcessorService {
 
     switch (input.eventType) {
       case 'BILLING.SUBSCRIPTION.CREATED':
-        return this.processSubscriptionStatus(manager, input, SubscriptionStatus.Pending);
+        return this.processSubscriptionStatus(manager, input, context);
       case 'BILLING.SUBSCRIPTION.ACTIVATED':
-        return this.processActivatedSubscription(manager, input);
       case 'BILLING.SUBSCRIPTION.PAYMENT.FAILED':
-        return this.processPaymentFailed(manager, input);
       case 'BILLING.SUBSCRIPTION.SUSPENDED':
-        return this.processSubscriptionAndLicenseStatus(
-          manager,
-          input,
-          SubscriptionStatus.Suspended,
-          LicenseStatus.Suspended,
-        );
       case 'BILLING.SUBSCRIPTION.CANCELLED':
-        return this.processSubscriptionAndLicenseStatus(
-          manager,
-          input,
-          SubscriptionStatus.Cancelled,
-          LicenseStatus.Revoked,
-        );
       case 'BILLING.SUBSCRIPTION.EXPIRED':
         return this.processSubscriptionAndLicenseStatus(
           manager,
           input,
-          SubscriptionStatus.Expired,
-          LicenseStatus.Revoked,
+          context,
         );
       case 'PAYMENT.SALE.COMPLETED':
-        return this.processPaymentCompleted(manager, input);
+        return this.processPaymentCompleted(manager, input, context);
       case 'PAYMENT.SALE.REFUNDED':
-        return this.processPaymentStatus(manager, input, PaymentStatus.Refunded);
+        return (
+          this.refunds?.process(manager, input) ??
+          this.retryableFailure('PayPal refund processor unavailable')
+        );
       case 'PAYMENT.SALE.REVERSED':
         return this.processPaymentReversed(manager, input);
       default:
@@ -96,140 +91,88 @@ export class BillingSubscriptionPaymentsProcessorService {
     }
   }
 
-  private async processActivatedSubscription(
-    manager: EntityManager,
+  async prepare(
     input: BillingWebhookProcessorInput,
-  ): Promise<BillingWebhookProcessorResult> {
-    const subscription = await this.updateSubscriptionFromPaypal(
-      manager,
-      input,
-      SubscriptionStatus.Active,
-      true,
-    );
-
-    if (!subscription) return this.ignored('Subscription not found');
-
-    await this.upsertLicense(manager, input, subscription, LicenseStatus.Active);
-    return { processingStatus: WebhookProcessingStatus.Processed };
-  }
-
-  private async processPaymentFailed(
-    manager: EntityManager,
-    input: BillingWebhookProcessorInput,
-  ): Promise<BillingWebhookProcessorResult> {
-    const subscription = await this.updateSubscriptionFromPaypal(
-      manager,
-      input,
-      SubscriptionStatus.PastDue,
-      true,
-    );
-
-    if (!subscription) return this.ignored('Subscription not found');
-
-    const failureCount = this.numberOrNull(
-      this.getNested(subscription.metadata, 'paypalBillingInfo', 'failed_payments_count'),
-    );
-    const licenseStatus =
-      failureCount && failureCount >= 3 ? LicenseStatus.Suspended : LicenseStatus.Grace;
-    const subscriptionStatus =
-      licenseStatus === LicenseStatus.Suspended
-        ? SubscriptionStatus.Suspended
-        : SubscriptionStatus.PastDue;
-
-    if (subscription.status !== subscriptionStatus) {
-      const previousStatus = subscription.status;
-      subscription.status = subscriptionStatus;
-      await manager.getRepository(BillingSubscriptionEntity).save(subscription);
-      await this.audit.record({
-        manager,
-        organizationId: subscription.organizationId,
-        action: 'billing.subscription.status_changed',
-        resourceType: 'billing_subscription',
-        resourceId: subscription.id,
-        provider: BillingProvider.Paypal,
-        legalReference: this.toLegalReference(subscription),
-        metadata: this.toAuditMetadata(input, {
-          subscriptionId: subscription.id,
-          previousStatus,
-          newStatus: subscriptionStatus,
-        }),
-      });
+  ): Promise<BillingWebhookProcessorContext> {
+    if (
+      ![
+        'BILLING.SUBSCRIPTION.CREATED',
+        'BILLING.SUBSCRIPTION.ACTIVATED',
+        'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
+        'BILLING.SUBSCRIPTION.SUSPENDED',
+        'BILLING.SUBSCRIPTION.CANCELLED',
+        'BILLING.SUBSCRIPTION.EXPIRED',
+        'PAYMENT.SALE.COMPLETED',
+      ].includes(input.eventType)
+    ) {
+      return {};
     }
 
-    await this.upsertLicense(manager, input, subscription, licenseStatus);
-    return { processingStatus: WebhookProcessingStatus.Processed };
+    const providerSubscriptionId = this.extractSubscriptionId(
+      input.resource,
+      input.eventType !== 'PAYMENT.SALE.COMPLETED',
+    );
+    if (!providerSubscriptionId) return {};
+
+    return {
+      paypalSubscription: await this.paypal.getSubscription(
+        providerSubscriptionId,
+      ),
+    };
   }
 
   private async processSubscriptionStatus(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
-    status: SubscriptionStatus,
+    context: BillingWebhookProcessorContext,
   ): Promise<BillingWebhookProcessorResult> {
     const subscription = await this.updateSubscriptionFromPaypal(
       manager,
       input,
-      status,
       true,
+      context,
     );
 
     return subscription
       ? { processingStatus: WebhookProcessingStatus.Processed }
-      : this.ignored('Subscription not found');
+      : this.retryableFailure('Subscription not found');
   }
 
   private async processSubscriptionAndLicenseStatus(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
-    subscriptionStatus: SubscriptionStatus,
-    licenseStatus: LicenseStatus,
+    context: BillingWebhookProcessorContext,
   ): Promise<BillingWebhookProcessorResult> {
     const subscription = await this.updateSubscriptionFromPaypal(
       manager,
       input,
-      subscriptionStatus,
       true,
+      context,
     );
 
-    if (!subscription) return this.ignored('Subscription not found');
+    if (!subscription) return this.retryableFailure('Subscription not found');
 
-    await this.upsertLicense(manager, input, subscription, licenseStatus);
+    await this.upsertLicense(manager, input, subscription);
     return { processingStatus: WebhookProcessingStatus.Processed };
   }
 
   private async processPaymentCompleted(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
+    context: BillingWebhookProcessorContext,
   ): Promise<BillingWebhookProcessorResult> {
-    const subscription = await this.findSubscriptionForPayment(manager, input.resource);
-    if (!subscription) return this.ignored('Payment subscription not found');
+    const subscription = await this.updateSubscriptionFromPaypal(
+      manager,
+      input,
+      false,
+      context,
+    );
+    if (!subscription)
+      return this.retryableFailure('Payment subscription not found');
 
     await this.upsertPayment(manager, input, PaymentStatus.Paid, subscription);
 
-    if (
-      subscription.status === SubscriptionStatus.PastDue ||
-      subscription.graceUntil
-    ) {
-      const previousStatus = subscription.status;
-      subscription.status = SubscriptionStatus.Active;
-      subscription.graceUntil = null;
-      await manager.getRepository(BillingSubscriptionEntity).save(subscription);
-      await this.audit.record({
-        manager,
-        organizationId: subscription.organizationId,
-        action: 'billing.subscription.status_changed',
-        resourceType: 'billing_subscription',
-        resourceId: subscription.id,
-        provider: BillingProvider.Paypal,
-        legalReference: this.toLegalReference(subscription),
-        metadata: this.toAuditMetadata(input, {
-          subscriptionId: subscription.id,
-          previousStatus,
-          newStatus: SubscriptionStatus.Active,
-        }),
-      });
-    }
-
-    await this.upsertLicense(manager, input, subscription, LicenseStatus.Active);
+    await this.upsertLicense(manager, input, subscription);
     return { processingStatus: WebhookProcessingStatus.Processed };
   }
 
@@ -242,7 +185,12 @@ export class BillingSubscriptionPaymentsProcessorService {
       input,
       PaymentStatus.Reversed,
     );
-    const subscription = await this.findSubscriptionForPayment(manager, input.resource);
+    if (result.processingStatus !== WebhookProcessingStatus.Processed)
+      return result;
+    const subscription = await this.findSubscriptionForPayment(
+      manager,
+      input.resource,
+    );
 
     if (subscription) {
       const previousStatus = subscription.status;
@@ -263,7 +211,7 @@ export class BillingSubscriptionPaymentsProcessorService {
           newStatus: SubscriptionStatus.PastDue,
         }),
       });
-      await this.upsertLicense(manager, input, subscription, LicenseStatus.Grace);
+      await this.upsertLicense(manager, input, subscription);
     }
 
     return result;
@@ -276,7 +224,7 @@ export class BillingSubscriptionPaymentsProcessorService {
   ): Promise<BillingWebhookProcessorResult> {
     const payment = await this.findPayment(manager, input.resource);
 
-    if (!payment) return this.ignored('Payment not found');
+    if (!payment) return this.retryableFailure('Payment not found');
 
     const previousStatus = payment.status;
     payment.status = status;
@@ -311,10 +259,13 @@ export class BillingSubscriptionPaymentsProcessorService {
   private async updateSubscriptionFromPaypal(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
-    fallbackStatus: SubscriptionStatus,
-    confirmWithPaypal: boolean,
+    includeResourceId = true,
+    context: BillingWebhookProcessorContext = {},
   ): Promise<BillingSubscriptionEntity | null> {
-    const providerSubscriptionId = this.extractSubscriptionId(input.resource);
+    const providerSubscriptionId = this.extractSubscriptionId(
+      input.resource,
+      includeResourceId,
+    );
     if (!providerSubscriptionId) return null;
 
     const subscriptions = manager.getRepository(BillingSubscriptionEntity);
@@ -332,37 +283,52 @@ export class BillingSubscriptionPaymentsProcessorService {
 
     if (!subscription) return null;
 
-    const paypalSubscription = confirmWithPaypal
-      ? await this.paypal.getSubscription(providerSubscriptionId)
-      : null;
-    const paypalRaw = paypalSubscription?.raw ?? input.resource;
+    const paypalSubscription =
+      context.paypalSubscription ??
+      (await this.paypal.getSubscription(providerSubscriptionId));
+    const paypalRaw = paypalSubscription.raw;
     const billingInfo = this.asRecord(paypalRaw.billing_info);
     const previousStatus = subscription.status;
-    const newStatus = this.mapPaypalSubscriptionStatus(
-      paypalSubscription?.status ?? this.stringOrNull(paypalRaw.status),
-      fallbackStatus,
-      billingInfo,
-    );
+    const newStatus = subscription.metadata.refundRevocation
+      ? SubscriptionStatus.Cancelled
+      : this.mapPaypalSubscriptionStatus(
+          paypalSubscription.status ?? this.stringOrNull(paypalRaw.status),
+          billingInfo,
+        );
+    const nextBillingTime = this.dateOrNull(billingInfo?.next_billing_time);
+    if (
+      input.eventType === 'PAYMENT.SALE.COMPLETED' &&
+      newStatus === SubscriptionStatus.Active &&
+      !nextBillingTime
+    ) {
+      throw new BadGatewayException('PayPal next billing time is unavailable');
+    }
 
+    const paidThrough =
+      subscription.currentPeriodEnd ?? subscription.nextBillingTime;
     subscription.status = newStatus;
-    subscription.nextBillingTime = this.dateOrNull(
-      billingInfo?.next_billing_time,
-    );
+    subscription.nextBillingTime = subscription.metadata.refundRevocation
+      ? null
+      : nextBillingTime;
     subscription.currentPeriodStart = this.dateOrNull(
-      this.getNested(billingInfo, 'cycle_executions', 0, 'start_time'),
+      this.getNested(billingInfo, 'last_payment', 'time'),
     );
-    subscription.currentPeriodEnd = this.dateOrNull(
-      this.getNested(billingInfo, 'cycle_executions', 0, 'end_time'),
-    );
+    subscription.currentPeriodEnd =
+      nextBillingTime ??
+      (newStatus === SubscriptionStatus.Cancelled &&
+      subscription.cancelAtPeriodEnd
+        ? paidThrough
+        : null);
     subscription.graceUntil =
       newStatus === SubscriptionStatus.PastDue
-        ? this.addDays(new Date(), GRACE_DAYS)
+        ? (subscription.graceUntil ?? this.addDays(new Date(), GRACE_DAYS))
         : newStatus === SubscriptionStatus.Active
           ? null
           : subscription.graceUntil;
     subscription.metadata = {
       ...subscription.metadata,
-      paypalStatus: paypalSubscription?.status ?? this.stringOrNull(paypalRaw.status),
+      paypalStatus:
+        paypalSubscription.status ?? this.stringOrNull(paypalRaw.status),
       paypalBillingInfo: billingInfo ?? null,
     };
 
@@ -392,8 +358,16 @@ export class BillingSubscriptionPaymentsProcessorService {
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
     subscription: BillingSubscriptionEntity,
-    status: LicenseStatus,
   ): Promise<void> {
+    const status = subscription.metadata.refundRevocation
+      ? LicenseStatus.Revoked
+      : subscription.status === SubscriptionStatus.Active
+        ? LicenseStatus.Active
+        : subscription.status === SubscriptionStatus.PastDue
+          ? LicenseStatus.Grace
+          : subscription.status === SubscriptionStatus.Suspended
+            ? LicenseStatus.Suspended
+            : LicenseStatus.Revoked;
     const licenses = manager.getRepository(BillingLicenseEntity);
     const products = manager.getRepository(BillingProductEntity);
     const product = await products.findOne({
@@ -430,7 +404,7 @@ export class BillingSubscriptionPaymentsProcessorService {
     license.validUntil = calculation.validUntil;
     const saved = await licenses.save(license);
 
-    if (previousStatus !== status) {
+    if (previousStatus !== calculation.status) {
       await this.audit.record({
         manager,
         organizationId: subscription.organizationId,
@@ -443,7 +417,7 @@ export class BillingSubscriptionPaymentsProcessorService {
           subscriptionId: subscription.id,
           licenseId: saved.id,
           previousStatus,
-          newStatus: status,
+          newStatus: calculation.status,
         }),
       });
     }
@@ -470,12 +444,17 @@ export class BillingSubscriptionPaymentsProcessorService {
         metadata: {},
       });
 
+    if (existing?.status === PaymentStatus.Refunded) return existing;
+
     payment.providerPaymentId = this.extractProviderPaymentId(input.resource);
     payment.providerCaptureId = this.extractPaymentCaptureId(input.resource);
     payment.amount = amount.total;
     payment.currency = amount.currency;
     payment.status = status;
     payment.paidAt = this.dateOrNull(input.resource.create_time) ?? new Date();
+    payment.periodStart = subscription.currentPeriodStart ?? payment.paidAt;
+    payment.periodEnd =
+      subscription.currentPeriodEnd ?? subscription.nextBillingTime;
     payment.rawEventId = input.eventId;
     payment.metadata = {
       ...payment.metadata,
@@ -512,7 +491,10 @@ export class BillingSubscriptionPaymentsProcessorService {
     resource: PaypalEventResource,
   ): Promise<BillingPaymentEntity | null> {
     const payments = manager.getRepository(BillingPaymentEntity);
-    const providerCaptureId = this.extractPaymentCaptureId(resource);
+    const providerCaptureId =
+      typeof resource.sale_id === 'string'
+        ? this.stringOrNull(resource.sale_id)
+        : this.extractPaymentCaptureId(resource);
     const providerPaymentId = this.extractProviderPaymentId(resource);
 
     return (
@@ -553,18 +535,20 @@ export class BillingSubscriptionPaymentsProcessorService {
 
   private mapPaypalSubscriptionStatus(
     paypalStatus: string | null | undefined,
-    fallback: SubscriptionStatus,
     billingInfo?: Record<string, unknown>,
   ): SubscriptionStatus {
-    const failedPayments = this.numberOrNull(billingInfo?.failed_payments_count);
-
-    if (failedPayments && failedPayments >= 3) {
-      return SubscriptionStatus.Suspended;
-    }
+    const failedPayments = this.numberOrNull(
+      billingInfo?.failed_payments_count,
+    );
 
     switch (paypalStatus) {
       case 'ACTIVE':
-        return failedPayments ? SubscriptionStatus.PastDue : SubscriptionStatus.Active;
+        if (failedPayments && failedPayments >= 3) {
+          return SubscriptionStatus.Suspended;
+        }
+        return failedPayments
+          ? SubscriptionStatus.PastDue
+          : SubscriptionStatus.Active;
       case 'SUSPENDED':
         return SubscriptionStatus.Suspended;
       case 'CANCELLED':
@@ -575,12 +559,14 @@ export class BillingSubscriptionPaymentsProcessorService {
       case 'APPROVED':
         return SubscriptionStatus.Pending;
       default:
-        return fallback;
+        throw new BadGatewayException(
+          'PayPal subscription status is unavailable',
+        );
     }
   }
 
-  private ignored(note: string): BillingWebhookProcessorResult {
-    return { processingStatus: WebhookProcessingStatus.Ignored, note };
+  private retryableFailure(note: string): BillingWebhookProcessorResult {
+    return { processingStatus: WebhookProcessingStatus.Failed, note };
   }
 
   private extractSubscriptionId(
@@ -602,17 +588,26 @@ export class BillingSubscriptionPaymentsProcessorService {
     );
   }
 
-  private extractPaymentCaptureId(resource: PaypalEventResource): string | null {
+  private extractPaymentCaptureId(
+    resource: PaypalEventResource,
+  ): string | null {
     return (
       this.stringOrNull(resource.id) ??
       this.stringOrNull(resource.sale_id) ??
       this.stringOrNull(
-        this.getNested(resource, 'supplementary_data', 'related_ids', 'sale_id'),
+        this.getNested(
+          resource,
+          'supplementary_data',
+          'related_ids',
+          'sale_id',
+        ),
       )
     );
   }
 
-  private extractProviderPaymentId(resource: PaypalEventResource): string | null {
+  private extractProviderPaymentId(
+    resource: PaypalEventResource,
+  ): string | null {
     return (
       this.stringOrNull(resource.parent_payment) ??
       this.stringOrNull(resource.parent_payment_id) ??
@@ -686,9 +681,9 @@ export class BillingSubscriptionPaymentsProcessorService {
   private toLegalReference(subscription: BillingSubscriptionEntity) {
     return {
       legalAcceptanceId: subscription.legalAcceptanceId,
-      termsVersion: subscription.termsVersion,
-      privacyVersion: subscription.privacyVersion,
-      refundPolicyVersion: subscription.refundPolicyVersion,
+      evidence: Array.isArray(subscription.metadata?.legalEvidence)
+        ? subscription.metadata.legalEvidence
+        : undefined,
       acceptedAt: subscription.acceptedAt,
       legalSnapshotHash: subscription.legalSnapshotHash,
     };

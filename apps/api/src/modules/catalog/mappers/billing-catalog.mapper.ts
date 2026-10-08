@@ -14,6 +14,7 @@ import {
   BillingFeatureDefinitionResponseDto,
   BillingPlanEntitlementResponseDto,
   BillingPlanPriceResponseDto,
+  BillingPlanOverviewResponseDto,
   BillingPlanResponseDto,
   BillingPlanVersionResponseDto,
   BillingProductResponseDto,
@@ -39,6 +40,17 @@ export class BillingCatalogMapper {
 
   static toPlanDto(entity: BillingPlanEntity): BillingPlanResponseDto {
     return {
+      ...BillingCatalogMapper.toPlanOverviewDto(entity),
+      versions: (entity.versions ?? []).map(
+        BillingCatalogMapper.toPlanVersionDto,
+      ),
+    };
+  }
+
+  static toPlanOverviewDto(
+    entity: BillingPlanEntity,
+  ): BillingPlanOverviewResponseDto {
+    return {
       id: entity.id,
       productId: entity.productId,
       productCode: entity.product?.code,
@@ -49,7 +61,6 @@ export class BillingCatalogMapper {
       name: entity.name,
       description: entity.description,
       status: entity.status,
-      versions: (entity.versions ?? []).map(BillingCatalogMapper.toPlanVersionDto),
     };
   }
 
@@ -69,7 +80,9 @@ export class BillingCatalogMapper {
     };
   }
 
-  static toPlanPriceDto(entity: BillingPlanPriceEntity): BillingPlanPriceResponseDto {
+  static toPlanPriceDto(
+    entity: BillingPlanPriceEntity,
+  ): BillingPlanPriceResponseDto {
     return {
       id: entity.id,
       code: entity.code,
