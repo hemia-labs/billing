@@ -43,3 +43,8 @@ nextjs-nestjs/
 ```
 
 Cada app documenta su stack, variables de entorno y comandos en su propio README.
+
+
+## Payments SDK
+
+`@hemia/payments` usa Changesets y PR de versión en `main`. Consulta [releases de Payments](docs/payments-release.md) para CI, publicación npm y GitHub Releases.

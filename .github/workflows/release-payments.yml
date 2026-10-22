@@ -1,0 +1,130 @@
+name: Payments releases
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payments-release-main
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  classify:
+    if: github.repository == 'hemia-labs/billing' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.batch.outputs.release }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Identify a reviewed version-only merge
+        id: batch
+        env:
+          BASE_SHA: ${{ github.event.before }}
+        run: node scripts/payments-release.mjs classify "$BASE_SHA"
+
+  version-pr:
+    needs: classify
+    if: needs.classify.outputs.release != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
+      - name: Check for pending public releases
+        id: changesets
+        run: |
+          bun run changeset status --output "$RUNNER_TEMP/changeset-status.json"
+          node -e "const s=require(process.env.RUNNER_TEMP+'/changeset-status.json'); require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'pending='+(s.releases.length>0)+'\n')"
+      - name: Create or update the version PR
+        if: steps.changesets.outputs.pending == 'true'
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1 for Changesets CLI 2
+        with:
+          github-token: ${{ github.token }}
+          version: bun run version:payments
+          title: 'chore(payments): release package versions'
+          commit: 'chore(payments): release package versions'
+          commitMode: github-api
+          createGithubReleases: false
+
+  validate:
+    needs: classify
+    if: needs.classify.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
+      - run: node --test test/release/payments-release.test.mjs
+      - run: bun run --cwd packages/payments typecheck
+      - run: bun run --cwd packages/payments build
+      - run: bun run --cwd packages/payments test
+      - run: bun run --cwd packages/payments test:nest
+      - name: Validate and preserve the npm tarball
+        env:
+          PAYMENTS_RELEASE_DIR: ${{ runner.temp }}/payments-release
+        run: node test/payments/package/check-payments-tarball.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: payments-release
+          path: ${{ runner.temp }}/payments-release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [classify, validate]
+    if: needs.classify.outputs.release == 'true' && vars.ENABLE_NPM_PUBLISH == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.15.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: payments-release
+          path: ${{ runner.temp }}/payments-release
+      - name: Publish verified npm package and create GitHub Release
+        env:
+          ENABLE_NPM_PUBLISH: ${{ vars.ENABLE_NPM_PUBLISH }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/payments-release.mjs publish "$RUNNER_TEMP/payments-release"
