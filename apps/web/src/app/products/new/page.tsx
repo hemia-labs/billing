@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
-import { ProductNewClient } from "@/features/billing/catalog/product-new-client";
+import { ProductNewClient } from "@/features/billing/catalog/products/product-new-client";
 
 export const metadata: Metadata = {
   title: "Nuevo producto",

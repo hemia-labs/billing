@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
-import { ServiceClientNewClient } from "@/features/billing/integrations/service-client-new-client";
+import { ServiceClientNewClient } from "@/features/billing/integrations/service-clients/service-client-new-client";
 
 export const metadata: Metadata = { title: "Nuevo cliente autorizado" };
 

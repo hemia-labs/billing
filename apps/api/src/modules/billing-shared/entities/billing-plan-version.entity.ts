@@ -42,16 +42,27 @@ export class BillingPlanVersionEntity {
   })
   status: PlanVersionStatus;
 
-  @Column({ name: 'effective_from', type: 'timestamp with time zone', nullable: true })
+  @Column({
+    name: 'effective_from',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
   effectiveFrom: Date | null;
 
-  @Column({ name: 'effective_until', type: 'timestamp with time zone', nullable: true })
+  @Column({
+    name: 'effective_until',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
   effectiveUntil: Date | null;
 
   @OneToMany(() => BillingPlanPriceEntity, (price) => price.planVersion)
   prices?: BillingPlanPriceEntity[];
 
-  @OneToMany(() => BillingPlanEntitlementEntity, (entitlement) => entitlement.planVersion)
+  @OneToMany(
+    () => BillingPlanEntitlementEntity,
+    (entitlement) => entitlement.planVersion,
+  )
   entitlements?: BillingPlanEntitlementEntity[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp with time zone' })

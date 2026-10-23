@@ -11,7 +11,13 @@ docs/
 !docs/billing-development-progress.md
 ROADMAP_DESARROLLO_BILLING_CORE.md
 .agents/
+.codex/
+AGENTS.md
 billing-integrations-v1.md
 docs/
 billing-medsync.md
 .codegraph
+# Keep only the payments release guide visible among ignored docs.
+!docs/
+docs/*
+!docs/payments-release.md

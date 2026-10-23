@@ -34,14 +34,14 @@ From `apps/api`:
 
 ```sh
 bun run test --runInBand copilot
-bun test test/copilot/copilot-fevex.test.mjs
+bun run test:bun
 bun run build
 ```
 
 From `apps/web`:
 
 ```sh
-bun test test/copilot
+bun run test -- --runInBand
 bunx tsc --noEmit --incremental false
 bun run build
 ```

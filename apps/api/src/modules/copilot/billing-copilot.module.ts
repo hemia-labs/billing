@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingCatalogModule } from '../catalog/billing-catalog.module';
-import { RedisModule } from '../auth/redis.module';
+import { RedisModule } from '../auth/redis/redis.module';
 import { CopilotRateLimitGuard } from './copilot-rate-limit.guard';
 import { BillingCopilotController } from './billing-copilot.controller';
 import { BillingCopilotService } from './billing-copilot.service';

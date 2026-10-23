@@ -10,7 +10,10 @@ import {
   Min,
 } from 'class-validator';
 import { BILLING_CURRENCIES, BillingInterval } from '../../billing-shared';
-import type { AddonEntitlementEffects, BillingCurrency } from '../../billing-shared';
+import type {
+  AddonEntitlementEffects,
+  BillingCurrency,
+} from '../../billing-shared';
 import {
   AddonStatus,
   BillingAddonPricingModel,

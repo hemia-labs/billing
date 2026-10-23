@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
-import { AddonNewClient } from "@/features/billing/catalog/addon-new-client";
+import { AddonNewClient } from "@/features/billing/catalog/addons/addon-new-client";
 
 export const metadata: Metadata = {
   title: "Nuevo add-on",

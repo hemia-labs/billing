@@ -6,7 +6,8 @@
     "dev": "next dev --port 5175",
     "build": "next build",
     "start": "next start --port 5175",
-    "lint": "eslint"
+    "lint": "cd ../.. && apps/web/node_modules/.bin/eslint --config apps/web/eslint.config.mjs apps/web test/web",
+    "test": "bun test --tsconfig-override ../../test/web/tsconfig.json ../../test/web"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",

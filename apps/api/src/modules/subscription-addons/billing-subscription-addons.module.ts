@@ -10,8 +10,8 @@ import {
   BillingSubscriptionEntity,
   BillingUsageCounterEntity,
 } from '../billing-shared';
-import { BillingSubscriptionAddonsController } from './billing-subscription-addons.controller';
-import { BillingSubscriptionAddonsConsoleController } from './billing-subscription-addons-console.controller';
+import { BillingSubscriptionAddonsController } from './controllers/billing-subscription-addons.controller';
+import { BillingSubscriptionAddonsConsoleController } from './controllers/billing-subscription-addons-console.controller';
 import { BillingSubscriptionAddonPaymentsProcessorService } from './billing-subscription-addon-payments-processor.service';
 import { BillingSubscriptionAddonsService } from './billing-subscription-addons.service';
 import { BillingSubscriptionAddonsWorker } from './billing-subscription-addons.worker';

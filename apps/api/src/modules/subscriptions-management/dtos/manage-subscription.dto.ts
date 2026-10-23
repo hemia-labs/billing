@@ -6,6 +6,7 @@ import {
   IsUUID,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { checkoutReturnUrlOptions } from '../../../common/utils/checkout-return-url';
 
@@ -19,6 +20,14 @@ export class CurrentSubscriptionQueryDto {
 }
 
 export class CancelSubscriptionDto {
+  @IsString()
+  @Matches(/^\S+$/)
+  @MaxLength(120)
+  idempotencyKey: string;
+
+  @IsUUID()
+  actorUserId: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -31,9 +40,8 @@ export class ChangePlanDto {
   @MaxLength(120)
   idempotencyKey: string;
 
-  @IsOptional()
   @IsUUID()
-  actorUserId?: string;
+  actorUserId: string;
 
   @IsString()
   @MaxLength(100)
@@ -43,9 +51,9 @@ export class ChangePlanDto {
   @MaxLength(100)
   targetPlanPriceCode: string;
 
-  @IsString()
-  @MaxLength(150)
-  legalAcceptanceId: string;
+  @ValidateIf((_, value) => value !== undefined)
+  @IsUUID()
+  legalAcceptanceId?: string;
 
   @IsUrl(checkoutReturnUrlOptions)
   successUrl: string;

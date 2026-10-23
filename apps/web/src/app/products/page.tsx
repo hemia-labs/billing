@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { PageHeading } from "@/components/page-heading";
 import { Card } from "@/components/zuno/card";
 import { CatalogClient } from "@/features/billing/catalog/catalog-client";
-import { ProductCreateAction } from "@/features/billing/catalog/product-create-action";
+import { ProductCreateAction } from "@/features/billing/catalog/products/product-create-action";
 
 export const metadata: Metadata = {
   title: "Productos",

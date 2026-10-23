@@ -7,7 +7,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { BillingServiceClients } from '../../config/billing-service-clients';
 import type { AuthenticatedPrincipal } from '../types/authenticated-request.type';
 import type {
   BillingServiceActor,
@@ -28,7 +27,7 @@ type CheckoutContext = {
 export class BillingServicePolicyService {
   constructor(
     private readonly config: ConfigService,
-    private readonly registry?: BillingServiceClientRegistryService,
+    private readonly registry: BillingServiceClientRegistryService,
   ) {}
 
   async resolvePrincipal(
@@ -49,8 +48,6 @@ export class BillingServicePolicyService {
     const issuer =
       this.config.get<string>('auth.requiredIssuer') ??
       this.config.get<string>('auth.issuerUrl');
-    const clients =
-      this.config.get<BillingServiceClients>('auth.serviceClients') ?? {};
     if (
       !issuer ||
       !actor ||
@@ -59,12 +56,7 @@ export class BillingServicePolicyService {
       actor.issuer !== issuer
     )
       throw new ForbiddenException('Service client is not authorized');
-    const stored = await this.registry?.findPolicy(actor.clientId, manager);
-    const policy =
-      stored ??
-      (Object.hasOwn(clients, actor.clientId)
-        ? clients[actor.clientId]
-        : undefined);
+    const policy = await this.registry.findPolicy(actor.clientId, manager);
     if (!policy)
       throw new ForbiddenException('Service client is not authorized');
     if (!policy.enabled)

@@ -64,7 +64,7 @@ export function buildSsoConfig(
         !granted.has(`${productCode}.disabled`)
       );
     },
-    onUserResolved: async (user) => ({ internalUserId: user.sub }),
+    onUserResolved: (user) => Promise.resolve({ internalUserId: user.sub }),
   });
 }
 

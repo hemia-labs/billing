@@ -25,12 +25,13 @@ import {
   WebhookProcessingStatus,
   WebhookVerificationStatus,
 } from '../billing-shared';
-import { CatalogPageDto } from '../catalog/dtos';
+import { CatalogPageDto, CatalogPaginationQueryDto } from '../catalog/dtos';
 import { PaypalClientService } from '../paypal';
 import { PaypalEventResource } from './types';
 import { BillingWebhookProcessResult, PaypalWebhookHeaders } from './types';
 import {
   ConsoleWebhookDetailResponseDto,
+  ConsoleWebhookManualRetryResponseDto,
   ConsoleWebhookResponseDto,
   ListConsoleWebhooksQueryDto,
 } from './dtos';
@@ -120,6 +121,43 @@ export class BillingWebhooksService {
   ): Promise<ConsoleWebhookDetailResponseDto> {
     const event = await this.findWebhook(id);
     return this.toConsoleWebhookDetail(event);
+  }
+
+  async listManualRetries(
+    id: string,
+    query: CatalogPaginationQueryDto,
+  ): Promise<CatalogPageDto<ConsoleWebhookManualRetryResponseDto>> {
+    await this.findWebhook(id);
+    const [items, total] = await this.auditLogs.findAndCount({
+      where: {
+        action: RETRY_ACTION,
+        resourceType: 'billing_webhook_event',
+        resourceId: id,
+      },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    });
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        actorUserId: item.actorUserId,
+        reason:
+          typeof item.metadata.retryReason === 'string'
+            ? item.metadata.retryReason
+            : null,
+        attempt:
+          typeof item.metadata.retryAttempt === 'number' &&
+          Number.isSafeInteger(item.metadata.retryAttempt) &&
+          item.metadata.retryAttempt > 0
+            ? item.metadata.retryAttempt
+            : null,
+        createdAt: item.createdAt,
+      })),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
   }
 
   async retryWebhook(
@@ -472,7 +510,94 @@ export class BillingWebhooksService {
       ...this.toConsoleWebhook(event),
       transmissionId: event.transmissionId,
       references: this.references(event),
+      summary: this.eventSummary(event),
     };
+  }
+
+  private eventSummary(
+    event: BillingWebhookEventEntity,
+  ): Record<string, string> {
+    const payload = this.asRecord(event.payloadJson) ?? {};
+    const resource = this.asRecord(payload.resource) ?? {};
+    const amount = this.asRecord(resource.amount) ?? {};
+    const summary: Record<string, string> = {};
+    // Only expose validated operational fields; never copy arbitrary provider text.
+    for (const [key, value] of Object.entries({
+      eventCreatedAt: payload.create_time,
+      resourceCreatedAt: resource.create_time,
+      resourceUpdatedAt: resource.update_time,
+      subscriptionStartedAt: resource.start_time,
+    })) {
+      if (
+        typeof value === 'string' &&
+        value.length <= 40 &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+          value,
+        ) &&
+        Number.isFinite(Date.parse(value))
+      ) {
+        summary[key] = value;
+      }
+    }
+    const resourceTypes = new Set([
+      'subscription',
+      'sale',
+      'capture',
+      'refund',
+      'payment',
+      'authorization',
+      'billing-agreement',
+      'plan',
+      'product',
+      'checkout-order',
+      'order',
+    ]);
+    if (
+      typeof payload.resource_type === 'string' &&
+      resourceTypes.has(payload.resource_type)
+    ) {
+      summary.resourceType = payload.resource_type;
+    }
+    const status = resource.status ?? resource.state;
+    const statuses = new Set([
+      'ACTIVE',
+      'APPROVAL_PENDING',
+      'APPROVED',
+      'SUSPENDED',
+      'CANCELLED',
+      'EXPIRED',
+      'CREATED',
+      'COMPLETED',
+      'DENIED',
+      'PENDING',
+      'REFUNDED',
+      'PARTIALLY_REFUNDED',
+      'FAILED',
+      'CANCELED',
+      'VOIDED',
+      'DECLINED',
+    ]);
+    if (typeof status === 'string' && statuses.has(status.toUpperCase())) {
+      summary.resourceStatus = status;
+    }
+    if (
+      typeof resource.plan_id === 'string' &&
+      /^P-[A-Z0-9-]{1,177}$/i.test(resource.plan_id)
+    ) {
+      summary.planId = resource.plan_id;
+    }
+    const amountValue = amount.value ?? amount.total;
+    const currency = amount.currency_code ?? amount.currency;
+    if (
+      typeof amountValue === 'string' &&
+      /^\d{1,20}(?:\.\d{1,10})?$/.test(amountValue) &&
+      typeof currency === 'string' &&
+      /^[A-Z]{3}$/.test(currency)
+    ) {
+      summary.amount = amountValue;
+      summary.currency = currency;
+    }
+    return summary;
   }
 
   private references(event: BillingWebhookEventEntity): Record<string, string> {

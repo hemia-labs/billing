@@ -9,7 +9,7 @@ import {
   CopilotLauncherContext,
   ProductDraftContext,
   PlanDraftContext,
-} from "./copilot-draft-context";
+} from "./drafts/copilot-draft-context";
 import {
   Sheet,
   SheetContent,
@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/sheet";
 
 const CopilotChat = dynamic(
-  () => import("./copilot-chat").then((module) => module.CopilotChat),
+  () => import("./chat/copilot-chat").then((module) => module.CopilotChat),
   {
     loading: () => (
       <p role="status" className="p-4 text-xs text-muted-foreground">

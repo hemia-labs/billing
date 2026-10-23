@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IntegrationCatalogClient } from "@/features/billing/integrations/integration-catalog-client";
+import { IntegrationCatalogClient } from "@/features/billing/integrations/catalog/integration-catalog-client";
 
 export const metadata: Metadata = { title: "Integraciones" };
 

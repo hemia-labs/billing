@@ -25,48 +25,17 @@ export class HemiaLegalClientService {
       )
     )
       throw new BadRequestException('Invalid legal acceptance context');
-    let external = input.productCode === 'balanz_cfdi';
-    let tokenUrl: URL,
-      url: URL,
-      clientId: string,
-      secret: string,
-      identityIssuer: string,
-      target:
-        | {
-            issuerId: string;
-            applicationId: string;
-            identitySourceId?: string;
-            identityIssuer?: string;
-          }
-        | undefined;
+    let tokenUrl: URL, url: URL, clientId: string, secret: string;
     try {
       tokenUrl = this.endpoint(
         this.config.getOrThrow<string>('hemiaLegal.tokenUrl'),
       );
       url = new URL(
-        '/v1/legal/acceptances/validate',
+        '/v1/legal/integrations/acceptances/validate',
         this.endpoint(this.config.getOrThrow<string>('hemiaLegal.baseUrl')),
       );
       clientId = this.config.getOrThrow<string>('hemiaLegal.clientId');
       secret = this.config.getOrThrow<string>('hemiaLegal.clientSecret');
-      identityIssuer = this.config.get<string>('hemiaLegal.identityIssuer', '');
-      if (!external) {
-        const products = JSON.parse(
-          this.config.getOrThrow<string>('hemiaLegal.products'),
-        ) as Record<string, NonNullable<typeof target>>;
-        if (!Object.hasOwn(products, input.productCode)) throw new Error();
-        target = products[input.productCode];
-        external = target?.identitySourceId !== undefined;
-      }
-      if (external) {
-        url = new URL('/v1/legal/integrations/acceptances/validate', url);
-      } else if (
-        !identityIssuer ||
-        !isUUID(target?.issuerId) ||
-        !isUUID(target?.applicationId)
-      ) {
-        throw new Error();
-      }
       if (!secret || !clientId) throw new Error();
     } catch {
       throw new ServiceUnavailableException(
@@ -84,9 +53,8 @@ export class HemiaLegalClientService {
           grant_type: 'client_credentials',
           client_id: clientId,
           client_secret: secret,
-          scope: external
-            ? 'legal.integration.acceptances.validate'
-            : 'legal.acceptances.validate',
+          audience: 'legal-api',
+          scope: 'legal.integration.acceptances.validate',
         }),
       });
       if (!issued.ok) throw new Error();
@@ -109,13 +77,6 @@ export class HemiaLegalClientService {
           authorization: 'Bearer ' + token.access_token,
         },
         body: JSON.stringify({
-          ...(external
-            ? {}
-            : {
-                issuerId: target!.issuerId,
-                applicationId: target!.applicationId,
-                identityIssuer,
-              }),
           organizationId: input.organizationId,
           subjectId: input.userId,
           productCode: input.productCode,
@@ -137,27 +98,23 @@ export class HemiaLegalClientService {
     if (!body.valid)
       throw new BadRequestException('Legal acceptance is not valid');
     if (
-      body.contractVersion !== (external ? 2 : 1) ||
-      (external &&
-        (!isUUID(body.identitySourceId) ||
-          !isUUID(body.issuerId) ||
-          !isUUID(body.applicationId) ||
-          typeof body.identityIssuer !== 'string' ||
-          !/^urn:hemia:[a-z][a-z0-9_-]{1,80}$/.test(body.identityIssuer))) ||
+      body.contractVersion !== 2 ||
+      !isUUID(body.identitySourceId) ||
+      !isUUID(body.issuerId) ||
+      !isUUID(body.applicationId) ||
+      typeof body.identityIssuer !== 'string' ||
+      !/^urn:hemia:[a-z][a-z0-9_-]{1,80}$/.test(body.identityIssuer) ||
       body.organizationId !== input.organizationId ||
-      (!external && body.identityIssuer !== identityIssuer) ||
       body.subjectId !== input.userId ||
       body.productCode !== input.productCode ||
       body.legalAcceptanceId !== input.legalAcceptanceId ||
-      (!external && body.applicationId !== target!.applicationId) ||
-      (!external && body.issuerId !== target!.issuerId) ||
       typeof body.acceptedAt !== 'string' ||
       !Number.isFinite(Date.parse(body.acceptedAt)) ||
       typeof body.legalSnapshotHash !== 'string' ||
       !/^[a-f0-9]{64}$/.test(body.legalSnapshotHash)
     )
       throw new BadGatewayException('Invalid Legal evidence binding');
-    this.verifyEvidence(body, external);
+    this.verifyEvidence(body);
     return {
       valid: true,
       legalAcceptanceId: input.legalAcceptanceId,
@@ -167,7 +124,7 @@ export class HemiaLegalClientService {
       raw: body,
     };
   }
-  private verifyEvidence(body: Record<string, unknown>, external: boolean) {
+  private verifyEvidence(body: Record<string, unknown>) {
     const evidence = body.evidence;
     if (
       !Array.isArray(evidence) ||
@@ -183,12 +140,11 @@ export class HemiaLegalClientService {
           ].every((k) => typeof e[k] === 'string' && isUUID(e[k])) ||
           typeof e.version !== 'string' ||
           !e.version ||
-          (external &&
-            (!record(e.registeringClient) ||
-              typeof e.registeringClient.oauthIssuer !== 'string' ||
-              !e.registeringClient.oauthIssuer ||
-              typeof e.registeringClient.clientId !== 'string' ||
-              !e.registeringClient.clientId)) ||
+          !record(e.registeringClient) ||
+          typeof e.registeringClient.oauthIssuer !== 'string' ||
+          !e.registeringClient.oauthIssuer ||
+          typeof e.registeringClient.clientId !== 'string' ||
+          !e.registeringClient.clientId ||
           typeof e.contentHash !== 'string' ||
           !/^[a-f0-9]{64}$/.test(e.contentHash) ||
           typeof e.acceptedAt !== 'string' ||
@@ -207,7 +163,6 @@ export class HemiaLegalClientService {
         Math.max(...rows.map((e) => Date.parse(e.acceptedAt as string)))
     )
       throw new BadGatewayException('Invalid Legal documents');
-    if (!external) return;
     const snapshot = {
       contractVersion: 2,
       identitySourceId: body.identitySourceId,
@@ -237,7 +192,7 @@ export class HemiaLegalClientService {
         !(
           url.protocol === 'http:' &&
           ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
-          process.env.NODE_ENV !== 'production'
+          this.config.get<string>('app.nodeEnv') !== 'production'
         ))
     )
       throw new Error();

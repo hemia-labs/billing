@@ -22,7 +22,10 @@ import {
 } from '../dtos';
 
 export class BillingCatalogMapper {
-  static toProductDto(entity: BillingProductEntity): BillingProductResponseDto {
+  static toProductDto(
+    this: void,
+    entity: BillingProductEntity,
+  ): BillingProductResponseDto {
     return {
       id: entity.id,
       code: entity.code,
@@ -33,12 +36,16 @@ export class BillingCatalogMapper {
   }
 
   static toActiveProductDto(
+    this: void,
     entity: BillingProductEntity,
   ): BillingActiveProductResponseDto {
     return { id: entity.id, code: entity.code, name: entity.name };
   }
 
-  static toPlanDto(entity: BillingPlanEntity): BillingPlanResponseDto {
+  static toPlanDto(
+    this: void,
+    entity: BillingPlanEntity,
+  ): BillingPlanResponseDto {
     return {
       ...BillingCatalogMapper.toPlanOverviewDto(entity),
       versions: (entity.versions ?? []).map(
@@ -48,6 +55,7 @@ export class BillingCatalogMapper {
   }
 
   static toPlanOverviewDto(
+    this: void,
     entity: BillingPlanEntity,
   ): BillingPlanOverviewResponseDto {
     return {
@@ -65,6 +73,7 @@ export class BillingCatalogMapper {
   }
 
   static toPlanVersionDto(
+    this: void,
     entity: BillingPlanVersionEntity,
   ): BillingPlanVersionResponseDto {
     return {
@@ -81,6 +90,7 @@ export class BillingCatalogMapper {
   }
 
   static toPlanPriceDto(
+    this: void,
     entity: BillingPlanPriceEntity,
   ): BillingPlanPriceResponseDto {
     return {
@@ -98,6 +108,7 @@ export class BillingCatalogMapper {
   }
 
   static toProviderPriceDto(
+    this: void,
     entity: BillingProviderPriceEntity,
   ): BillingProviderPriceResponseDto {
     return {
@@ -111,6 +122,7 @@ export class BillingCatalogMapper {
   }
 
   static toFeatureDefinitionDto(
+    this: void,
     entity: BillingFeatureDefinitionEntity,
   ): BillingFeatureDefinitionResponseDto {
     return {
@@ -128,6 +140,7 @@ export class BillingCatalogMapper {
   }
 
   static toPlanEntitlementDto(
+    this: void,
     entity: BillingPlanEntitlementEntity,
   ): BillingPlanEntitlementResponseDto {
     return {
@@ -137,7 +150,10 @@ export class BillingCatalogMapper {
     };
   }
 
-  static toAddonDto(entity: BillingAddonEntity): BillingAddonResponseDto {
+  static toAddonDto(
+    this: void,
+    entity: BillingAddonEntity,
+  ): BillingAddonResponseDto {
     return {
       id: entity.id,
       productId: entity.productId,

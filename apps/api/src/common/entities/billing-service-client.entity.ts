@@ -6,7 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import type { BillingServiceClientPolicy } from '../../config/billing-service-clients';
+import type { BillingServiceClientPolicy } from '../types/billing-service-policy';
 
 @Entity('billing_service_clients')
 @Index('IDX_billing_service_clients_client_id', ['clientId'], { unique: true })

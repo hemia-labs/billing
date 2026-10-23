@@ -11,7 +11,7 @@ import {
 import type Redis from 'ioredis';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../common/types/authenticated-request.type';
-import { REDIS } from '../auth/redis-session-store';
+import { REDIS } from '../auth/redis/redis-session-store';
 
 @Injectable()
 export class CopilotRateLimitGuard implements CanActivate {

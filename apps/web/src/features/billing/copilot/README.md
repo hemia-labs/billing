@@ -14,4 +14,4 @@ Removing the workspace wrapper and the two creation-screen integrations leaves o
 
 The backend is contained in `apps/api/src/modules/copilot`. Module registration, environment validation and package dependencies remain at the application's normal composition boundaries.
 
-Tests are grouped under `apps/web/test/copilot` and `apps/api/test/copilot`. Run `bun test test/copilot` from the web app. See the backend module README for its test commands and session persistence details.
+Tests are grouped under `test/web/copilot` and `test/api/unit/copilot` at the Billing root. Run `bun run test` from the web app. See the backend module README for its test commands and session persistence details.

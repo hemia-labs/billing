@@ -1,4 +1,8 @@
-import { Injectable, NotImplementedException, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  NotImplementedException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BillingInvoiceIssuerAdapter } from './billing-invoice-issuer.adapter';
 
@@ -14,11 +18,15 @@ export class NoopBillingInvoiceIssuerAdapter
     }
   }
 
-  async issue(): Promise<never> {
-    throw new NotImplementedException('PAC invoice issuing is not configured');
+  issue(): Promise<never> {
+    return Promise.reject(
+      new NotImplementedException('PAC invoice issuing is not configured'),
+    );
   }
 
-  async cancel(): Promise<never> {
-    throw new NotImplementedException('PAC invoice cancellation is not configured');
+  cancel(): Promise<never> {
+    return Promise.reject(
+      new NotImplementedException('PAC invoice cancellation is not configured'),
+    );
   }
 }

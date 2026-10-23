@@ -1,4 +1,4 @@
-import type { BillingAuthorization } from '../../modules/auth/billing-console-permissions';
+import type { BillingAuthorization } from '../../modules/auth/session/billing-console-permissions';
 import type { AccessContext, AccessOrganizationContext } from '@hemia/auth';
 import { Request } from 'express';
 import type { BillingServiceAuthorization } from './billing-service-authorization.type';
@@ -22,6 +22,7 @@ export type AuthenticatedRequest = Request & {
   user?: unknown;
   accessContext?: AccessContext;
   selectedAccessOrganization?: AccessOrganizationContext;
+  ssoSubject?: string;
   ssoAuth?: {
     accessToken: string;
     cookie: string;

@@ -12,9 +12,13 @@ import { BillingPlanPriceEntity } from './billing-plan-price.entity';
 
 @Entity('provider_prices')
 @Index('IDX_provider_prices_plan_price_id', ['planPriceId'])
-@Index('IDX_provider_prices_plan_price_provider_unique', ['planPriceId', 'provider'], {
-  unique: true,
-})
+@Index(
+  'IDX_provider_prices_plan_price_provider_unique',
+  ['planPriceId', 'provider'],
+  {
+    unique: true,
+  },
+)
 @Index('IDX_provider_prices_provider_price_id', ['providerPriceId'])
 export class BillingProviderPriceEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -32,13 +36,27 @@ export class BillingProviderPriceEntity {
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
 
-  @Column({ name: 'provider_product_id', type: 'varchar', length: 150, nullable: true })
+  @Column({
+    name: 'provider_product_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   providerProductId: string | null;
 
-  @Column({ name: 'provider_price_id', type: 'varchar', length: 150, nullable: true })
+  @Column({
+    name: 'provider_price_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   providerPriceId: string | null;
 
-  @Column({ name: 'provider_metadata', type: 'jsonb', default: () => "'{}'::jsonb" })
+  @Column({
+    name: 'provider_metadata',
+    type: 'jsonb',
+    default: () => "'{}'::jsonb",
+  })
   providerMetadata: Record<string, unknown>;
 
   @Column({

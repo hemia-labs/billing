@@ -157,7 +157,10 @@ export class BillingEntitlementsService {
       );
     const planEntitlements = this.planResolver.entitlements(version);
     const numeric: Record<string, number> = {
-      included_users: this.numberFromFeature(planEntitlements['users.included'], 0),
+      included_users: this.numberFromFeature(
+        planEntitlements['users.included'],
+        0,
+      ),
       max_users: this.numberFromFeature(
         planEntitlements['users.max'],
         this.numberFromFeature(planEntitlements['users.included'], 0),
@@ -169,7 +172,9 @@ export class BillingEntitlementsService {
       ),
     };
     const featureFlags: Record<string, boolean> = Object.fromEntries(
-      Object.entries(planEntitlements).filter(([, value]) => typeof value === 'boolean'),
+      Object.entries(planEntitlements).filter(
+        ([, value]) => typeof value === 'boolean',
+      ),
     ) as Record<string, boolean>;
 
     for (const addon of eligibleAddons) {
@@ -201,11 +206,12 @@ export class BillingEntitlementsService {
         includedUsers: numeric.included_users,
         extraUsers: numeric.max_users - numeric.included_users,
         maxAgents: numeric.max_agents,
-        maxConversationsMonthly: this.nullableNumberFromFeature(
-          planEntitlements['conversations.monthly'],
-        ) === null && numeric.max_conversations_monthly === 0
-          ? null
-          : numeric.max_conversations_monthly,
+        maxConversationsMonthly:
+          this.nullableNumberFromFeature(
+            planEntitlements['conversations.monthly'],
+          ) === null && numeric.max_conversations_monthly === 0
+            ? null
+            : numeric.max_conversations_monthly,
         additional,
         featureFlags,
       },
@@ -216,10 +222,11 @@ export class BillingEntitlementsService {
   private calculateBilling(
     subscription: BillingSubscriptionEntity,
     activeAddons: BillingSubscriptionAddonEntity[],
-    price = subscription.planPrice ?? this.planResolver.activePrice(
-      this.planResolver.contractVersion(subscription),
-      subscription.planPriceCode ?? undefined,
-    ),
+    price = subscription.planPrice ??
+      this.planResolver.activePrice(
+        this.planResolver.contractVersion(subscription),
+        subscription.planPriceCode ?? undefined,
+      ),
   ): BillingAmountsSummary {
     const baseCents = this.toCents(price.amount);
     const addonsCents = activeAddons.reduce(
@@ -303,7 +310,7 @@ export class BillingEntitlementsService {
       maxAgents: values.get('max_agents')?.value ?? 0,
       maxConversationsMonthly: conversations?.metadata?.nullable
         ? null
-        : conversations?.value ?? null,
+        : (conversations?.value ?? null),
       additional,
       featureFlags,
     };
@@ -329,7 +336,8 @@ export class BillingEntitlementsService {
       },
     });
 
-    if (!subscription) throw new NotFoundException('Billing subscription not found');
+    if (!subscription)
+      throw new NotFoundException('Billing subscription not found');
     return subscription;
   }
 
@@ -346,7 +354,9 @@ export class BillingEntitlementsService {
   }
 
   private numberFromFeature(value: unknown, fallback: number): number {
-    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : fallback;
   }
 
   private nullableNumberFromFeature(value: unknown): number | null {

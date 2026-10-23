@@ -70,7 +70,12 @@ export class BillingSubscriptionEntity {
   @JoinColumn({ name: 'provider_price_id' })
   providerPrice: BillingProviderPriceEntity | null;
 
-  @Column({ name: 'plan_price_code', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'plan_price_code',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   planPriceCode: string | null;
 
   @Column({ type: 'enum', enum: BillingProvider })
@@ -122,14 +127,28 @@ export class BillingSubscriptionEntity {
   })
   graceUntil: Date | null;
 
-  @Column({ name: 'legal_acceptance_id', length: 150 })
-  legalAcceptanceId: string;
+  @Column({
+    name: 'legal_acceptance_id',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
+  legalAcceptanceId: string | null;
 
-  @Column({ name: 'accepted_at', type: 'timestamp with time zone' })
-  acceptedAt: Date;
+  @Column({
+    name: 'accepted_at',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
+  acceptedAt: Date | null;
 
-  @Column({ name: 'legal_snapshot_hash', length: 150 })
-  legalSnapshotHash: string;
+  @Column({
+    name: 'legal_snapshot_hash',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
+  legalSnapshotHash: string | null;
 
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
   metadata: Record<string, unknown>;

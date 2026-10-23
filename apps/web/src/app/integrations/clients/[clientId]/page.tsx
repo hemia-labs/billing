@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ServiceClientDetailClient } from "@/features/billing/integrations/service-client-detail-client";
+import { ServiceClientDetailClient } from "@/features/billing/integrations/service-clients/service-client-detail-client";
 
 export const metadata: Metadata = { title: "Detalle de integración" };
 

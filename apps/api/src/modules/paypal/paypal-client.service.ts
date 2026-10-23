@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   CreatePaypalSubscriptionInput,
+  RevisePaypalSubscriptionInput,
   CancelPaypalSubscriptionInput,
   PaypalApiErrorBody,
   PaypalApiException,
@@ -27,7 +28,10 @@ export class PaypalClientService {
       return this.cachedToken.accessToken;
     }
 
-    const body = await this.request<{ access_token: string; expires_in: number }>(
+    const body = await this.request<{
+      access_token: string;
+      expires_in: number;
+    }>(
       '/v1/oauth2/token',
       {
         method: 'POST',
@@ -102,6 +106,31 @@ export class PaypalClientService {
       planId: typeof raw.plan_id === 'string' ? raw.plan_id : undefined,
       billingInfo: this.asRecord(raw.billing_info),
       subscriber: this.asRecord(raw.subscriber),
+      approvalUrl: this.findApprovalUrl(raw),
+      raw,
+    };
+  }
+
+  async reviseSubscription(
+    input: RevisePaypalSubscriptionInput,
+  ): Promise<PaypalSubscriptionResult> {
+    const raw = await this.request<Record<string, unknown>>(
+      `/v1/billing/subscriptions/${encodeURIComponent(input.providerSubscriptionId)}/revise`,
+      {
+        method: 'POST',
+        headers: { 'PayPal-Request-Id': input.requestId },
+        body: JSON.stringify({
+          plan_id: input.providerPlanId,
+          application_context: {
+            return_url: input.returnUrl,
+            cancel_url: input.cancelUrl,
+          },
+        }),
+      },
+    );
+    return {
+      id: input.providerSubscriptionId,
+      status: typeof raw.status === 'string' ? raw.status : undefined,
       approvalUrl: this.findApprovalUrl(raw),
       raw,
     };
@@ -211,8 +240,8 @@ export class PaypalClientService {
     const links = raw.links;
     if (!Array.isArray(links)) return undefined;
 
-    const approveLink = links.find(
-      (link) =>
+    const approveLink: unknown = links.find(
+      (link: unknown) =>
         this.asRecord(link)?.rel === 'approve' &&
         typeof this.asRecord(link)?.href === 'string',
     );

@@ -1,5 +1,8 @@
 import { IsString, MaxLength } from 'class-validator';
-import { BillingProvider, PlanPriceBillingInterval } from '../../billing-shared';
+import {
+  BillingProvider,
+  PlanPriceBillingInterval,
+} from '../../billing-shared';
 import type { BillingCurrency } from '../../billing-shared';
 
 export class PublicCatalogPlanPriceDto {

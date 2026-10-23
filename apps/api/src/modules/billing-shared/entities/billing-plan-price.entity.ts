@@ -35,7 +35,11 @@ export class BillingPlanPriceEntity {
   @Column({ length: 100 })
   code: string;
 
-  @Column({ name: 'billing_interval', type: 'enum', enum: PlanPriceBillingInterval })
+  @Column({
+    name: 'billing_interval',
+    type: 'enum',
+    enum: PlanPriceBillingInterval,
+  })
   billingInterval: PlanPriceBillingInterval;
 
   @Column({ name: 'billing_interval_count', type: 'int', default: 1 })
@@ -54,7 +58,10 @@ export class BillingPlanPriceEntity {
   })
   status: PlanPriceStatus;
 
-  @OneToMany(() => BillingProviderPriceEntity, (providerPrice) => providerPrice.planPrice)
+  @OneToMany(
+    () => BillingProviderPriceEntity,
+    (providerPrice) => providerPrice.planPrice,
+  )
   providerPrices?: BillingProviderPriceEntity[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamp with time zone' })

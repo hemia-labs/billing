@@ -42,9 +42,6 @@ apps/api/
       subscriptions-management/
       webhooks/
       identity/
-  test/
-    unit/                        # specs unitarios centralizados
-    app.e2e-spec.ts              # e2e
 ```
 
 ## Variables de entorno
@@ -61,7 +58,6 @@ AUTH_ISSUER_URL=
 AUTH_JWKS_URI=
 AUTH_AUDIENCE=
 AUTH_REQUIRED_ISSUER=
-BILLING_SERVICE_CLIENTS={}
 AUTH_LEGACY_API_KEY_ENABLED=false
 
 PAYPAL_ENV=sandbox
@@ -74,7 +70,6 @@ HEMIA_LEGAL_BASE_URL=
 HEMIA_LEGAL_TOKEN_URL=
 HEMIA_LEGAL_CLIENT_ID=billing-legal-service
 HEMIA_LEGAL_CLIENT_SECRET=
-HEMIA_LEGAL_PRODUCTS={}
 
 DB_HOST=localhost
 DB_PORT=5432
@@ -115,7 +110,7 @@ DB_LOGGING=false
   solicitar un nuevo access token a Identity y conservarlo hasta su expiración.
 - Scopes soportan exacto, `billing.*` y `*.*`; pueden venir como `scope` string OAuth o `scopes` array.
 - Los scopes no otorgan acceso a cualquier producto u organización: cada
-  `client_id` verificado debe registrarse en `BILLING_SERVICE_CLIENTS`.
+  `client_id` verificado debe tener una política en `billing_service_clients`, administrada desde Console.
 - Scopes de consola a registrar/asignar en Identity: `billing.dashboard.read`,
   `billing.catalog.read`, `billing.catalog.manage`, `billing.subscriptions.read`,
   `billing.subscriptions.manage`, `billing.licenses.read`, `billing.addons.read`,
@@ -134,31 +129,18 @@ DB_LOGGING=false
 
 Identity verifica la identidad del sistema y sus scopes. Billing autoriza los
 recursos usando el emisor verificado y `client_id`; no requiere sesión SSO.
-Configura `BILLING_SERVICE_CLIENTS` como JSON (estos IDs son ejemplos y deben
-reemplazarse por los clientes reales de Identity):
-
-```json
-{
-  "medsync-service": {
-    "products": ["medsync"],
-    "organizationScope": "all_for_allowed_products",
-    "allowedReturnOrigins": ["https://medsync.example"]
-  },
-  "restricted-service": {
-    "products": ["medsync"],
-    "organizationScope": "organizations",
-    "organizationIds": ["00000000-0000-4000-8000-000000000001"],
-    "allowedReturnOrigins": ["https://restricted.example"]
-  }
-}
-```
-
-En `.env`, guarda el JSON en una sola línea. La configuración se valida al
-arrancar; cambiarla requiere reiniciar Billing. `{}` rechaza todos los clientes.
-Un cliente desconocido o con `enabled: false` recibe `403`, aunque tenga scopes
-amplios. El alcance por organización siempre debe ser explícito.
-`products: ["*"]` permite todos los productos; usarlo junto con
-`organizationScope: "all_for_allowed_products"` otorga acceso global explícito.
+Registra el consumidor desde Console: selecciona su cliente Identity, productos,
+organizaciones y retornos. Billing consulta `billing_service_clients` en cada
+autorización; no existe un fallback de configuración por entorno. Los permisos
+OAuth efectivos deben incluir el destino Billing. Los retornos solo son
+obligatorios para clientes habilitados con permiso de crear checkout.
+Una conexión de solo catálogo puede guardar `organizationScope: "organizations"`
+y `organizationIds: []`, sin retornos: consulta los productos autorizados y no
+accede a ninguna organización. Los permisos efectivos para crear/consultar
+checkout o consultar licencias requieren organizaciones concretas o el alcance
+global explícito por producto.
+Un cliente desconocido o deshabilitado recibe `403`. El alcance por organización
+es explícito y el formulario exige productos concretos.
 
 Crear checkout o consultar licencia fuera de los productos/organizaciones
 permitidos devuelve `403`. Consultar o modificar un recurso existente ajeno
@@ -336,56 +318,54 @@ bun run --cwd apps/api migration:revert
 
 `migration:generate` crea `src/database/migrations/<timestamp>-migration.ts`.
 
+El build emite la API en `dist/src/`: `bun run start:prod` inicia `dist/src/main.js` y el DataSource de producción descubre las migraciones en `dist/src/database/migrations/*.js`. Las migraciones siguen ejecutándose explícitamente, nunca durante el arranque.
+
 `synchronize` está en `false`: todo cambio de schema requiere migración.
 
 ## Tests y build
 
 ```bash
 bun run --cwd apps/api build
-bun run --cwd apps/api test      # unit specs en apps/api/test/unit
+bun run --cwd apps/api test      # unit specs en test/api/unit
 bun run --cwd apps/api test:e2e
 ```
 
 ### Consumidores administrables desde consola
 
-Billing → Integraciones permite registrar y editar consumidores con los permisos
-`billing.integrations.read` y `billing.integrations.manage` del rol global
-`billing.catalog_manager`. El registro persistido tiene prioridad sobre
-`BILLING_SERVICE_CLIENTS`, incluso al deshabilitar un consumidor, y se consulta
-sin caché para aplicar cambios sin reiniciar. Las credenciales OAuth y scopes
-continúan en Identity. Aplicar la migración
-`src/database/migrations/1791244800000-billing-service-clients.ts` antes de
-desplegar.
+Console administra conexiones con un token de servicio para Billing y los scopes
+`billing.integrations.read` / `billing.integrations.manage`. Cada llamada incluye
+`x-hemia-actor-subject` del operador autorizado por Console; Billing registra
+operador y cliente técnico. La consola propia de Billing mantiene su sesión
+humana y permisos existentes.
 
-Esquema a incluir en la migración TypeORM para
-`src/common/entities/billing-service-client.entity.ts`:
+Rutas bajo `/api/v1/billing/integrations/admin`:
 
-- Tabla `billing_service_clients`.
-- `id`: UUID generado, llave primaria.
-- `client_id`: varchar(120) obligatorio; índice único
-  `IDX_billing_service_clients_client_id`.
-- `policy`: jsonb obligatorio.
-- `created_at` y `updated_at`: timestamptz obligatorios, valor inicial `now()`.
+- `GET /options`: productos, organizaciones conocidas, clientes Identity, políticas y receptores.
+- `PUT /clients/:clientId`: política persistida con permisos Identity comprobados.
+- `PUT /receivers/:productCode`: `{url,audience,resource,enabled}`; requiere destino
+  autorizado del cliente Billing para `billing.webhooks.deliver`.
+- `POST /receivers/:productCode/check`: comprobación GET autenticada y sin efectos
+  comerciales del receptor registrado.
 
-La migración está generada y pendiente de ejecución. Aplicarla antes de desplegar el backend:
-la consulta del registro falla cerrada si no está disponible la tabla. Los
-consumidores del entorno no se importan durante GET ni al arrancar; al editarlos
-se crea un registro persistido que tiene prioridad, incluso al deshabilitarlo.
+Aplicar explícitamente `1792627200000-generic-license-connections.ts` junto con
+los consumidores actualizados. La cola identifica organización y producto;
+los receptores se registran por producto. No hay variables de callback fijas,
+aliases ni ejecución simultánea del contrato anterior. Los pendientes previos
+se conservan y esperan a que se registre su receptor. No se aplican migraciones
+en el arranque.
 
 ### Contexto vigente de compradores externos
 
-Para `balanz_cfdi`, Billing exige el contrato externo v2 de Legal: el mapeo en
-`HEMIA_LEGAL_PRODUCTS` debe incluir `issuerId`, `applicationId`, `identitySourceId`
-y `identityIssuer: "urn:hemia:balanz"`. Un mapeo interno v1 o un emisor de identidad
-distinto se rechaza antes de llamar a Legal o PayPal. Los UUID corresponden a la
-integración existente en Legal; no se registran organizaciones ni membresías en
-Billing para comprobar el contexto.
+Todos los productos usan el contrato externo v2 de Legal. La referencia de
+aceptación determina sistema/aplicación/documentos en Legal; Billing envía
+organización, usuario, producto y aceptación y verifica el hash de la evidencia.
+No existe un mapa por producto ni una rama especial para Balanz.
 
 El cliente `billing-legal-service` necesita audiencia `legal-api`, scope
 `legal.integration.acceptances.validate` y rol `validator` en la integración
-externa de Legal. Legal consulta el contexto vigente de Balanz con propósito
+externa de Legal. Legal consulta el contexto vigente del sistema consumidor con propósito
 `checkout_validation`: membresía activa, organización habilitada y permiso para
-contratar. La URL y autorización de esa consulta se configuran en Legal y Balanz;
+contratar. La URL y autorización de esa consulta se configuran desde Console;
 Billing usa el contrato de validación existente.
 
 Una compra nueva valida Legal antes de crear el checkout. Si un intento anterior
@@ -401,3 +381,9 @@ bloquea la compra. Las respuestas ya persistidas se reutilizan sin otra llamada
 a Legal/PayPal, y los intentos con reserva vigente siguen devolviendo
 `CHECKOUT_IN_PROGRESS` sin volver a consultar Legal. Esta comprobación no cancela
 ni revoca una suscripción o enlace que ya exista en PayPal. No requiere migración.
+
+## Organización de pruebas y módulos
+
+Todas las pruebas, configuraciones y runners viven en `../../test/`: Jest usa `test/api/unit`, Fevex usa Bun y las integraciones desechables viven en `test/api/integration`. Ejecutar `bun run test` desde la raíz Billing incluye API y frontend. Ver [guía de pruebas](../../test/README.md).
+
+Auth agrupa sesión y Redis; Integrations separa service-clients y oauth-clients; los módulos con varios controladores usan `controllers/`. Webhooks agrupa sus workers y servicios PayPal en `paypal/`; Event Bus mantiene transporte y contratos juntos. No cambian endpoints ni contratos.

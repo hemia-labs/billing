@@ -7,7 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthenticatedUser } from '@hemia/auth';
 import { SsoAuthGuard } from '@hemia/auth/nestjs';
-import { BillingConsoleSessionService } from '../../modules/auth/billing-console-session.service';
+import { BillingConsoleSessionService } from '../../modules/auth/session/billing-console-session.service';
 import { AuthenticatedRequest } from '../types/authenticated-request.type';
 
 @Injectable()
@@ -28,7 +28,7 @@ export class BillingConsoleAuthGuard implements CanActivate {
     await this.ssoAuthGuard.canActivate(context);
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const user = request.user as unknown as AuthenticatedUser | undefined;
+    const user = request.user as AuthenticatedUser | undefined;
 
     if (!user?.sub) {
       throw new UnauthorizedException('Missing session');
@@ -38,6 +38,7 @@ export class BillingConsoleAuthGuard implements CanActivate {
       allowOrganizationSelection: false,
     });
 
+    request.ssoSubject = user.sub;
     request.principal = {
       sub: user.internalUserId ?? user.sub,
       email: user.email || undefined,

@@ -7,10 +7,7 @@ import { LicenseStatus } from '../billing-shared';
 import { BillingLicenseResolveResponseDto } from './dtos';
 import { BillingLicenseMapper } from './mappers';
 
-const ACCESSIBLE_LICENSE_STATUSES = [
-  LicenseStatus.Active,
-  LicenseStatus.Grace,
-];
+const ACCESSIBLE_LICENSE_STATUSES = [LicenseStatus.Active, LicenseStatus.Grace];
 
 @Injectable()
 export class BillingLicensesService {

@@ -36,6 +36,6 @@ Las integraciones aceptan exclusivamente bearer de máquina. Se retiraron el gua
 
 Prueba aislada: `bun run test:authorization:docker` aplica migraciones únicamente en una base Docker vacía, usa datos sintéticos y proveedor simulado, y elimina el contenedor al finalizar. Comprueba reservas/replay, concurrencia, reconciliación, rollback de auditoría, publicación alternativa/concurrente y propiedad de webhooks. No accede a bases configuradas ni a proveedores reales.
 
-Prueba de caché con Redis real aislado: después de compilar API, ejecutar `bash test/system-context-cache.redis.sh` desde `apps/api`. Crea y elimina un contenedor desechable; comprueba dos conexiones, renovación concurrente, TTL, invalidación durante resolución y logout. No utiliza Redis configurado ni datos de aplicación.
+Prueba de caché con Redis real aislado: después de compilar API, ejecutar `bun run test:redis` desde `apps/api`. Crea y elimina un contenedor desechable; comprueba dos conexiones, renovación concurrente, TTL, invalidación durante resolución y logout. No utiliza Redis configurado ni datos de aplicación.
 
 Ambiente integrado preparado el 2026-09-16: catálogo y concesiones reales de desarrollo, RabbitMQ habilitado, catorce casos HTTP verificados y ventana real de caída de Access. Reporte: `/Users/cristianmendez/Documents/github/identity-access/docs/migracion/ambiente-integrado-billing.md`. SDK 1.0.7 comparte clases DI entre core y NestJS y corrige el fallo de arranque. No se publicó al registro ni se configuró un proveedor fiscal real.

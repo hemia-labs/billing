@@ -6,8 +6,8 @@ import {
   BILLING_INVOICE_ISSUER_ADAPTER,
   NoopBillingInvoiceIssuerAdapter,
 } from './adapters';
-import { BillingInvoicesController } from './billing-invoices.controller';
-import { BillingInvoicesConsoleController } from './billing-invoices-console.controller';
+import { BillingInvoicesController } from './controllers/billing-invoices.controller';
+import { BillingInvoicesConsoleController } from './controllers/billing-invoices-console.controller';
 import { BillingInvoicesService } from './billing-invoices.service';
 
 @Module({

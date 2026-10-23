@@ -5,7 +5,7 @@ import * as Joi from 'joi';
 import { buildSsoConfig } from '../../config/sso.config';
 
 const url = () => Joi.string().uri({ scheme: ['http', 'https'] });
-const schema = Joi.object({
+const schema = Joi.object<Record<string, unknown>>({
   SSO_ISSUER: url().required(),
   SSO_CLIENT_ID: Joi.string().required(),
   SSO_CLIENT_SECRET: Joi.string().allow(''),
@@ -46,7 +46,12 @@ export async function resolveSsoConfig(
       throw new Error('Duplicate SSO secret key');
     normalized[name] = value;
   }
-  const { error, value } = schema.validate(normalized, { abortEarly: false });
+  const validation = schema.validate(normalized, { abortEarly: false });
+  const { error } = validation;
+  const value: Record<string, unknown> = validation.value as Record<
+    string,
+    unknown
+  >;
   if (error) {
     // Report field names only: Joi messages may contain secret values.
     throw new Error(
@@ -56,7 +61,7 @@ export async function resolveSsoConfig(
   const env: Record<string, string | undefined> = {
     NODE_ENV: config.getOrThrow<string>('app.nodeEnv'),
   };
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, item] of Object.entries(value)) {
     if (item !== '') env[key] = String(item);
   }
   const resolved = buildSsoConfig(env);

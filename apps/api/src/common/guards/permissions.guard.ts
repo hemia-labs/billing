@@ -1,7 +1,7 @@
 import { webhookOrganizationSql } from '../../modules/webhooks/webhook-organization.sql';
 import { DataSource } from 'typeorm';
 import type { BillingResourceKind } from '../decorators/billing-resource.decorator';
-import { permissionScope } from '../../modules/auth/billing-console-permissions';
+import { permissionScope } from '../../modules/auth/session/billing-console-permissions';
 import {
   CanActivate,
   ExecutionContext,

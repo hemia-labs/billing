@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { SystemContextCache } from '@hemia/auth';
-import { REDIS, RedisSessionStore } from '../auth/redis-session-store';
-import type { InvalidationTarget } from './billing-access-event.contracts';
+import { REDIS, RedisSessionStore } from '../auth/redis/redis-session-store';
+import type { InvalidationTarget } from './transport/billing-access-event.contracts';
 
 @Injectable()
 export class BillingSessionInvalidationService {

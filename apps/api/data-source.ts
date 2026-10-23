@@ -7,7 +7,7 @@ dotenv.config({ path: '.env.local' });
 
 const isProduction = process.env.NODE_ENV === 'production';
 const ext = isProduction ? 'js' : 'ts';
-const baseDir = isProduction ? 'dist' : 'src';
+const baseDir = isProduction ? 'dist/src' : 'src';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',

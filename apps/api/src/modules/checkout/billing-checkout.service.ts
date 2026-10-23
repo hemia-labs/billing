@@ -92,14 +92,15 @@ export class BillingCheckoutService {
     if (!previous && dto.provider !== BillingProvider.Paypal)
       throw new BadRequestException('Only PayPal checkout is supported');
     // No database connection or transaction is held while validating Legal.
-    const legal = previous
-      ? null
-      : await this.hemiaLegal.validateAcceptance({
-          organizationId: dto.organizationId,
-          userId: dto.userId,
-          legalAcceptanceId: dto.legalAcceptanceId,
-          productCode: dto.productCode,
-        });
+    const legal =
+      previous || dto.legalAcceptanceId === undefined
+        ? null
+        : await this.hemiaLegal.validateAcceptance({
+            organizationId: dto.organizationId,
+            userId: dto.userId,
+            legalAcceptanceId: dto.legalAcceptanceId,
+            productCode: dto.productCode,
+          });
     const creator = {
       createdByIssuer: actor.issuer,
       createdByClientId: actor.clientId,
@@ -135,7 +136,7 @@ export class BillingCheckoutService {
         this.assertSameRequest(existing, requestHash, actor);
         return this.reserveAttempt(manager, existing, actor);
       }
-      if (!legal)
+      if (previous || (dto.legalAcceptanceId !== undefined && !legal))
         throw new ConflictException(
           'Checkout changed; retry with the same idempotency key',
         );
@@ -143,6 +144,26 @@ export class BillingCheckoutService {
       if (dto.provider !== BillingProvider.Paypal) {
         throw new BadRequestException('Only PayPal checkout is supported');
       }
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`billing.subscription:${dto.organizationId}:${dto.productCode}`],
+      );
+      const renewingContracts = await manager.query<Array<{ id: string }>>(
+        `SELECT id FROM subscriptions WHERE organization_id=$1 AND product_code=$2 AND status IN ('pending','active','past_due','suspended') AND deleted_at IS NULL LIMIT 1 FOR SHARE`,
+        [dto.organizationId, dto.productCode],
+      );
+      if (renewingContracts.length)
+        throw new ConflictException(
+          'An existing provider contract must be managed or reconciled before another checkout',
+        );
+      const activeLicenses = await manager.query<Array<{ id: string }>>(
+        `SELECT id FROM licenses WHERE organization_id=$1 AND product_code=$2 AND status IN ('active','grace') AND deleted_at IS NULL AND (valid_until IS NULL OR valid_until>clock_timestamp()) LIMIT 1 FOR SHARE`,
+        [dto.organizationId, dto.productCode],
+      );
+      if (activeLicenses.length)
+        throw new ConflictException(
+          'An active paid subscription exists; use change-plan',
+        );
       const product = await this.findActiveProduct(dto.productCode, manager);
       const plan = await this.findActivePlan(product.id, dto.planCode, manager);
       const resolved = this.planResolver.resolve(
@@ -217,10 +238,13 @@ export class BillingCheckoutService {
           nextBillingTime: null,
           cancelAtPeriodEnd: false,
           graceUntil: null,
-          legalAcceptanceId: legal.legalAcceptanceId,
-          acceptedAt: new Date(legal.acceptedAt),
-          legalSnapshotHash: legal.legalSnapshotHash,
-          metadata: { ...creator, legalEvidence: legal.evidence },
+          legalAcceptanceId: legal?.legalAcceptanceId ?? null,
+          acceptedAt: legal ? new Date(legal.acceptedAt) : null,
+          legalSnapshotHash: legal?.legalSnapshotHash ?? null,
+          metadata: {
+            ...creator,
+            ...(legal ? { legalEvidence: legal.evidence } : {}),
+          },
         }),
       );
 
@@ -241,12 +265,12 @@ export class BillingCheckoutService {
           status: BillingCheckoutSessionStatus.Created,
           successUrl: dto.successUrl,
           cancelUrl: dto.cancelUrl,
-          legalAcceptanceId: legal.legalAcceptanceId,
-          acceptedAt: new Date(legal.acceptedAt),
-          legalSnapshotHash: legal.legalSnapshotHash,
+          legalAcceptanceId: legal?.legalAcceptanceId ?? null,
+          acceptedAt: legal ? new Date(legal.acceptedAt) : null,
+          legalSnapshotHash: legal?.legalSnapshotHash ?? null,
           metadata: {
             ...creator,
-            legalEvidence: legal.evidence,
+            ...(legal ? { legalEvidence: legal.evidence } : {}),
             subscriptionId: subscription.id,
             idempotencyKey: dto.idempotencyKey,
             requestHash,
@@ -256,12 +280,14 @@ export class BillingCheckoutService {
         }),
       );
 
-      const legalReference = {
-        legalAcceptanceId: legal.legalAcceptanceId,
-        evidence: legal.evidence,
-        acceptedAt: legal.acceptedAt,
-        legalSnapshotHash: legal.legalSnapshotHash,
-      };
+      const legalReference = legal
+        ? {
+            legalAcceptanceId: legal.legalAcceptanceId,
+            evidence: legal.evidence,
+            acceptedAt: legal.acceptedAt,
+            legalSnapshotHash: legal.legalSnapshotHash,
+          }
+        : undefined;
 
       await this.audit.record({
         manager,
@@ -301,7 +327,7 @@ export class BillingCheckoutService {
     // Legal's external validation rechecks the buyer's current membership and
     // contracting permission with the consumer. Pending retries must do this
     // again; persisted results and active leases return before reaching here.
-    if (previous) {
+    if (previous && preparation.checkout.legalAcceptanceId) {
       try {
         await this.hemiaLegal.validateAcceptance({
           organizationId: preparation.checkout.organizationId,
@@ -337,6 +363,118 @@ export class BillingCheckoutService {
       error = cause;
     }
     return this.completeAttempt(preparation, actor, result, error);
+  }
+
+  async preparePlanRevision(
+    subscription: BillingSubscriptionEntity,
+    targetPlan: BillingPlanEntity,
+    dto: CreateCheckoutSessionDto,
+    actor: BillingServiceActor,
+    effectiveAt: string,
+  ): Promise<BillingCheckoutSessionEntity> {
+    await this.servicePolicy.assertContext(
+      actor,
+      dto.productCode,
+      dto.organizationId,
+    );
+    await this.servicePolicy.assertReturnUrls(
+      actor,
+      dto.successUrl,
+      dto.cancelUrl,
+    );
+    const requestHash = createHash('sha256')
+      .update(
+        this.checkoutRequestHash(dto, actor) + ':revise:' + subscription.id,
+      )
+      .digest('hex');
+    const previous = await this.findExistingCheckout(
+      this.checkoutSessions,
+      dto,
+      actor,
+    );
+    if (previous) {
+      this.assertSameRequest(previous, requestHash, actor);
+      if (
+        previous.metadata.operation !== 'plan_change' ||
+        previous.metadata.subscriptionId !== subscription.id
+      )
+        throw new ConflictException(
+          'Idempotency key is bound to another operation',
+        );
+      if (previous.providerCheckoutUrl) return previous;
+    }
+    const legal =
+      dto.legalAcceptanceId === undefined
+        ? null
+        : await this.hemiaLegal.validateAcceptance({
+            organizationId: dto.organizationId,
+            userId: dto.userId,
+            legalAcceptanceId: dto.legalAcceptanceId,
+            productCode: dto.productCode,
+          });
+    return this.dataSource.transaction(async (manager) => {
+      await this.servicePolicy.assertContext(
+        actor,
+        dto.productCode,
+        dto.organizationId,
+        manager,
+      );
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [
+          `billing.checkout:${JSON.stringify([actor.issuer, actor.clientId, dto.organizationId, dto.idempotencyKey])}`,
+        ],
+      );
+      const repository = manager.getRepository(BillingCheckoutSessionEntity);
+      const existing = await this.findExistingCheckout(
+        repository,
+        dto,
+        actor,
+        true,
+      );
+      if (existing) {
+        this.assertSameRequest(existing, requestHash, actor);
+        return existing;
+      }
+      const resolved = this.planResolver.resolve(
+        targetPlan,
+        dto.provider,
+        dto.planPriceCode,
+      );
+      return repository.save(
+        repository.create({
+          organizationId: dto.organizationId,
+          userId: dto.userId,
+          productCode: dto.productCode,
+          planId: targetPlan.id,
+          plan: targetPlan,
+          planPriceId: resolved.price.id,
+          planPrice: resolved.price,
+          providerPriceId: resolved.providerPrice.id,
+          providerPrice: resolved.providerPrice,
+          planPriceCode: resolved.price.code,
+          provider: dto.provider,
+          providerCheckoutUrl: null,
+          status: BillingCheckoutSessionStatus.Created,
+          successUrl: dto.successUrl,
+          cancelUrl: dto.cancelUrl,
+          legalAcceptanceId: legal?.legalAcceptanceId ?? null,
+          acceptedAt: legal ? new Date(legal.acceptedAt) : null,
+          legalSnapshotHash: legal?.legalSnapshotHash ?? null,
+          metadata: {
+            createdByIssuer: actor.issuer,
+            createdByClientId: actor.clientId,
+            subscriptionId: subscription.id,
+            operation: 'plan_change',
+            idempotencyKey: dto.idempotencyKey,
+            requestHash,
+            effectiveAt,
+            paypalPlanId: resolved.providerPrice.providerPriceId,
+            ...(legal ? { legalEvidence: legal.evidence } : {}),
+          },
+        }),
+      );
+    });
   }
 
   private async findExistingCheckout(
@@ -670,12 +808,47 @@ export class BillingCheckoutService {
       throw new NotFoundException('Billing subscription not found');
     }
 
+    const change = subscription.metadata?.pendingPlanChange as
+      { checkoutId?: string; state?: string; effectiveAt?: string } | undefined;
+    const planChange =
+      checkoutSession.metadata.operation === 'plan_change' &&
+      change?.checkoutId === checkoutSession.id
+        ? {
+            state: change.state as
+              | 'preparing'
+              | 'awaiting_approval'
+              | 'scheduled'
+              | 'effective'
+              | 'failed',
+            effectiveAt: String(change.effectiveAt),
+          }
+        : checkoutSession.metadata.operation === 'plan_change' &&
+            typeof checkoutSession.metadata.planChangeState === 'string' &&
+            typeof checkoutSession.metadata.planChangeEffectiveAt === 'string'
+          ? {
+              state: checkoutSession.metadata.planChangeState as
+                | 'preparing'
+                | 'awaiting_approval'
+                | 'scheduled'
+                | 'effective'
+                | 'failed',
+              effectiveAt: checkoutSession.metadata.planChangeEffectiveAt,
+            }
+          : undefined;
     return {
       checkoutId: checkoutSession.id,
       subscriptionId: subscription.id,
-      checkoutStatus: checkoutSession.status,
-      subscriptionStatus: subscription.status,
+      checkoutStatus:
+        planChange?.state === 'failed'
+          ? BillingCheckoutSessionStatus.Cancelled
+          : checkoutSession.status,
+      subscriptionStatus:
+        checkoutSession.metadata.operation === 'plan_change' &&
+        planChange?.state !== 'effective'
+          ? SubscriptionStatus.Pending
+          : subscription.status,
       provider: checkoutSession.provider,
+      ...(planChange ? { planChange } : {}),
     };
   }
 
@@ -732,6 +905,12 @@ export class BillingCheckoutService {
   private toLegalReference(
     entity: BillingCheckoutSessionEntity | BillingSubscriptionEntity,
   ) {
+    if (
+      !entity.legalAcceptanceId ||
+      !entity.acceptedAt ||
+      !entity.legalSnapshotHash
+    )
+      return undefined;
     return {
       legalAcceptanceId: entity.legalAcceptanceId,
       evidence: Array.isArray(entity.metadata?.legalEvidence)

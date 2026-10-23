@@ -3,7 +3,7 @@ import {
   BillingAmountsSummary,
   BillingEntitlementsSummary,
 } from '../../entitlements';
-import { LicenseStatus } from '../../billing-shared';
+import { LicenseStatus, SubscriptionStatus } from '../../billing-shared';
 import { BillingLicenseResolveResponseDto } from '../dtos';
 
 const EMPTY_ENTITLEMENTS: BillingEntitlementsSummary = {
@@ -45,7 +45,10 @@ export class BillingLicenseMapper {
         features: {},
         subscriptionId: null,
         entitlements: calculated?.entitlements ?? EMPTY_ENTITLEMENTS,
-        billing: calculated?.billing ?? EMPTY_BILLING,
+        billing: {
+          ...(calculated?.billing ?? EMPTY_BILLING),
+          nextBillingTime: null,
+        },
       };
     }
 
@@ -66,7 +69,16 @@ export class BillingLicenseMapper {
       features: { ...license.featuresJson, ...entitlements.featureFlags },
       subscriptionId: license.subscriptionId,
       entitlements,
-      billing: calculated?.billing ?? EMPTY_BILLING,
+      billing: {
+        ...(calculated?.billing ?? EMPTY_BILLING),
+        nextBillingTime:
+          license.status === LicenseStatus.Active &&
+          this.isAccessActive(license, now) &&
+          license.subscription?.status === SubscriptionStatus.Active &&
+          !license.subscription.cancelAtPeriodEnd
+            ? (license.subscription.nextBillingTime?.toISOString() ?? null)
+            : null,
+      },
     };
   }
 

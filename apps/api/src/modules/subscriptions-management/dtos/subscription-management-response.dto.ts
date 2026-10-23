@@ -14,6 +14,21 @@ export interface BillingSubscriptionPlanSummaryDto {
 }
 
 export interface BillingSubscriptionManagementResponseDto {
+  planPriceCode: string | null;
+  cancellation: {
+    state: 'pending' | 'scheduled';
+    requestedAt: string;
+    effectiveAt: string | null;
+  } | null;
+  pendingPlanChange: {
+    state:
+      'preparing' | 'awaiting_approval' | 'scheduled' | 'effective' | 'failed';
+    targetPlanCode: string;
+    targetPlanPriceCode: string;
+    effectiveAt: string;
+    checkoutId: string | null;
+    newSubscriptionId: string | null;
+  } | null;
   id: string;
   organizationId: string;
   productCode: string;
@@ -34,6 +49,8 @@ export interface BillingSubscriptionManagementResponseDto {
 }
 
 export interface ChangePlanResponseDto {
+  effectiveAt: string;
+  state: 'awaiting_approval' | 'scheduled' | 'effective';
   subscription: BillingSubscriptionManagementResponseDto;
   checkoutId: string;
   newSubscriptionId: string;

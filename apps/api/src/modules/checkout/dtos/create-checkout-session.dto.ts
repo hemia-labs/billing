@@ -7,6 +7,7 @@ import {
   IsUUID,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { BillingProvider } from '../../billing-shared';
 import { checkoutReturnUrlOptions } from '../../../common/utils/checkout-return-url';
@@ -38,9 +39,9 @@ export class CreateCheckoutSessionDto {
   @IsEnum(BillingProvider)
   provider: BillingProvider;
 
-  @IsString()
-  @MaxLength(150)
-  legalAcceptanceId: string;
+  @ValidateIf((_, value) => value !== undefined)
+  @IsUUID()
+  legalAcceptanceId?: string;
 
   @IsUrl(checkoutReturnUrlOptions)
   successUrl: string;

@@ -8,7 +8,7 @@ Frontend del monorepo `nextjs-nestjs`. Consola Next.js (App Router) con Tailwind
 - **React 19**.
 - **Tailwind CSS v4** — vía `@tailwindcss/postcss`, tokens en `src/app/globals.css`.
 - **ZUNO 0.1.0-alpha.2** (sobre **@base-ui/react**) — componentes editables en `src/components/zuno`.
-- **shadcn** — sidebar, tablas, breadcrumbs, paginación y menús con filtros de radio. Viven en `src/components/ui`.
+- **shadcn** — sidebar, tablas, breadcrumbs y paginación. Viven en `src/components/ui`.
 - **lucide-react** — iconos.
 - **class-variance-authority**, **clsx**, **tailwind-merge** — variantes y merge de clases.
 - **TypeScript**, **ESLint**. Tema claro de Billing por defecto; el usuario puede activar el tema oscuro desde el menú de perfil. La elección se guarda en `localStorage`.
@@ -51,7 +51,7 @@ NEXT_PUBLIC_API_URL=http://localhost:3015/api/v1
 
 El cliente HTTP vive en `src/lib/api` y usa cookies con
 `credentials: "include"`. Los permisos en UI son best-effort cuando
-`/auth/session` devuelve `scopes`; el backend sigue autorizando cada acción.
+`/auth/session` devuelve `permissions`; el backend sigue autorizando cada acción.
 
 ## Scripts
 
@@ -77,3 +77,7 @@ bunx shadcn add <componente> --path src/components/ui
 ```
 
 `components.json` apunta por defecto a ZUNO. No sobrescribir componentes shadcn existentes.
+
+## Pruebas y estructura de features
+
+`bun run test` desde esta app ejecuta las pruebas Bun en `../../test/web`, con su configuración de resolución propia. Todas las pruebas Billing están en [test/](../../test/README.md). Catalog agrupa `products/`, `plans/` y `addons/`; Integrations separa `catalog/` y `service-clients/`; Copilot agrupa `chat/` y `drafts/`. Las rutas de Next y los contratos de UI se conservan.

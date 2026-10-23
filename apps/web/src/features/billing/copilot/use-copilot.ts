@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useSession } from '@/components/auth-gate';
-import type { CopilotMessage } from './copilot-chat';
+import type { CopilotMessage } from './chat/copilot-chat';
 import type { CatalogProductPayload } from '../catalog/catalog-api';
 import { ApiError, apiErrorMessage, redirectToLogin } from '@/lib/api';
 import { getCopilotSession, deleteCopilotSession, extractStreamingMessage, listCopilotAgents, listCopilotModels, streamCopilot, type CopilotModel } from './copilot-api';

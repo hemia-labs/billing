@@ -2,7 +2,7 @@
 
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/zuno/button";
-import { useOpenCopilot } from "./copilot-draft-context";
+import { useOpenCopilot } from "./drafts/copilot-draft-context";
 
 export function CopilotLauncher({
   hasContent,

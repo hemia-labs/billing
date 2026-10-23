@@ -1,5 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
-import type { BillingServiceClientPolicy } from '../../config/billing-service-clients';
+import type { BillingServiceClientPolicy } from '../types/billing-service-policy';
 import type { AuthenticatedRequest } from './authenticated-request.type';
 
 export type BillingServiceActor = { issuer: string; clientId: string };

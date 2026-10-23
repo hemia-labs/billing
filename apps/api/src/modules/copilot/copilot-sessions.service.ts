@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import type { Session } from '@fevex/core';
 import type Redis from 'ioredis';
-import { REDIS } from '../auth/redis-session-store';
+import { REDIS } from '../auth/redis/redis-session-store';
 
 const sessionTtl = 60 * 60;
 const maxSessionBytes = 256 * 1024;

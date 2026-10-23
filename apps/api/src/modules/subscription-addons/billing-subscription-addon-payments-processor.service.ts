@@ -88,7 +88,9 @@ export class BillingSubscriptionAddonPaymentsProcessorService {
     return null;
   }
 
-  private providerSubscriptionId(resource: Record<string, unknown>): string | null {
+  private providerSubscriptionId(
+    resource: Record<string, unknown>,
+  ): string | null {
     const value =
       resource.id ?? resource.subscription_id ?? resource.billing_agreement_id;
     return typeof value === 'string' && value.trim() ? value : null;

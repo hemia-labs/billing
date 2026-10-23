@@ -7,6 +7,7 @@ export interface BillingWebhookProcessorInput {
   eventId: string;
   providerEventId: string;
   eventType: string;
+  eventCreatedAt?: string;
   resource: PaypalEventResource;
 }
 

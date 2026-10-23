@@ -72,4 +72,13 @@ export class ConsoleWebhookResponseDto {
 export class ConsoleWebhookDetailResponseDto extends ConsoleWebhookResponseDto {
   transmissionId: string | null;
   references: Record<string, string>;
+  summary: Record<string, string>;
+}
+
+export class ConsoleWebhookManualRetryResponseDto {
+  id: string;
+  actorUserId: string | null;
+  reason: string | null;
+  attempt: number | null;
+  createdAt: Date;
 }

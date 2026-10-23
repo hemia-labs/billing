@@ -1,7 +1,7 @@
 import { ApiError, apiBaseUrl, apiFetch } from "@/lib/api";
 import type { CatalogProductPayload } from "@/features/billing/catalog/catalog-api";
 import type { CopilotAgent, CopilotAgentId, PlanDraft } from './copilot-types';
-import type { CopilotMessage } from './copilot-chat';
+import type { CopilotMessage } from './chat/copilot-chat';
 
 export function getCopilotSession(sessionId: string, agentId: CopilotAgentId, productId: string | null, signal: AbortSignal) {
   const query = new URLSearchParams({ sessionId, agentId, ...(productId ? { productId } : {}) });

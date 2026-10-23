@@ -1,5 +1,5 @@
 import type { FeatureAggregationStrategy, FeatureValueType } from '../catalog/catalog-api';
-import type { PlanFormDraft } from '../catalog/plan-form';
+import type { PlanFormDraft } from '../catalog/plans/plan-form';
 
 export type CopilotAgentId = 'product-draft' | 'plan-draft';
 export type CopilotAgent = { id: CopilotAgentId; label: string; requiresProduct: boolean; enabled: boolean };
@@ -9,7 +9,7 @@ export type PlanDraft = {
   features: { code: string; name: string; valueType: FeatureValueType; value: string; unit: string; aggregationStrategy: FeatureAggregationStrategy; isMetered: boolean }[];
 };
 
-export type { PlanFormDraft } from '../catalog/plan-form';
+export type { PlanFormDraft } from '../catalog/plans/plan-form';
 
 // Only editable plan fields belong in the agent context; provider mappings stay local.
 export function planForAgent(plan: PlanFormDraft): PlanDraft {

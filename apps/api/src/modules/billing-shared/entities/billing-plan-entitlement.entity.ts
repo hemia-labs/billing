@@ -13,9 +13,13 @@ import { BillingPlanVersionEntity } from './billing-plan-version.entity';
 @Entity('plan_entitlements')
 @Index('IDX_plan_entitlements_plan_version_id', ['planVersionId'])
 @Index('IDX_plan_entitlements_feature_id', ['featureId'])
-@Index('IDX_plan_entitlements_version_feature_unique', ['planVersionId', 'featureId'], {
-  unique: true,
-})
+@Index(
+  'IDX_plan_entitlements_version_feature_unique',
+  ['planVersionId', 'featureId'],
+  {
+    unique: true,
+  },
+)
 export class BillingPlanEntitlementEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -23,9 +27,13 @@ export class BillingPlanEntitlementEntity {
   @Column({ name: 'plan_version_id', type: 'uuid' })
   planVersionId: string;
 
-  @ManyToOne(() => BillingPlanVersionEntity, (version) => version.entitlements, {
-    onDelete: 'RESTRICT',
-  })
+  @ManyToOne(
+    () => BillingPlanVersionEntity,
+    (version) => version.entitlements,
+    {
+      onDelete: 'RESTRICT',
+    },
+  )
   @JoinColumn({ name: 'plan_version_id' })
   planVersion: BillingPlanVersionEntity;
 

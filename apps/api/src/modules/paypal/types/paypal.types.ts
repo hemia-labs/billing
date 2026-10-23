@@ -27,6 +27,14 @@ export interface PaypalSubscriptionDetails {
   raw: Record<string, unknown>;
 }
 
+export interface RevisePaypalSubscriptionInput {
+  providerSubscriptionId: string;
+  providerPlanId: string;
+  requestId: string;
+  returnUrl: string;
+  cancelUrl: string;
+}
+
 export interface CancelPaypalSubscriptionInput {
   providerSubscriptionId: string;
   reason?: string;

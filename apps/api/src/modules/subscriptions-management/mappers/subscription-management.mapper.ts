@@ -1,3 +1,7 @@
+import {
+  cancellationIntent,
+  pendingPlanChange,
+} from '../subscription-management-state';
 import { BillingEntitlementsResolution } from '../../entitlements';
 import { BillingSubscriptionEntity } from '../../billing-shared';
 import { BillingSubscriptionManagementResponseDto } from '../dtos';
@@ -7,7 +11,27 @@ export class SubscriptionManagementMapper {
     subscription: BillingSubscriptionEntity,
     resolution: BillingEntitlementsResolution,
   ): BillingSubscriptionManagementResponseDto {
+    const cancellation = cancellationIntent(subscription);
+    const change = pendingPlanChange(subscription);
     return {
+      planPriceCode: subscription.planPriceCode ?? null,
+      cancellation: cancellation
+        ? {
+            state: cancellation.state,
+            requestedAt: cancellation.requestedAt,
+            effectiveAt: cancellation.effectiveAt,
+          }
+        : null,
+      pendingPlanChange: change
+        ? {
+            state: change.state,
+            targetPlanCode: change.targetPlanCode,
+            targetPlanPriceCode: change.targetPlanPriceCode,
+            effectiveAt: change.effectiveAt,
+            checkoutId: change.checkoutId,
+            newSubscriptionId: subscription.id,
+          }
+        : null,
       id: subscription.id,
       organizationId: subscription.organizationId,
       productCode: subscription.productCode,
@@ -23,8 +47,10 @@ export class SubscriptionManagementMapper {
       plan: {
         id: subscription.plan.id,
         code: subscription.plan.code,
-        amount: subscription.planPrice?.amount ?? resolution.billing.baseMonthly,
-        currency: subscription.planPrice?.currency ?? resolution.billing.currency,
+        amount:
+          subscription.planPrice?.amount ?? resolution.billing.baseMonthly,
+        currency:
+          subscription.planPrice?.currency ?? resolution.billing.currency,
         billingInterval: subscription.planPrice?.billingInterval ?? '',
         seatsIncluded: resolution.entitlements.includedUsers,
       },

@@ -1,0 +1,19 @@
+{
+  "name": "hemia-payments-atlas-example",
+  "private": true,
+  "description": "A second Nest application consuming the published payments module",
+  "dependencies": {
+    "@hemia/payments": "0.2.0",
+    "@hemia/auth": "1.1.0",
+    "@nestjs/common": "11.1.6",
+    "@nestjs/core": "11.1.6",
+    "@nestjs/platform-express": "11.1.6",
+    "typeorm": "0.3.27",
+    "pg": "8.16.3",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "scripts": {
+    "test": "node --test integration.test.cjs"
+  }
+}

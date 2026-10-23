@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { BillingServiceClientEntity } from '../entities/billing-service-client.entity';
-import { parseBillingServiceClients } from '../../config/billing-service-clients';
+import { parseBillingServicePolicy } from '../types/billing-service-policy';
 
 @Injectable()
 export class BillingServiceClientRegistryService {
@@ -16,11 +16,6 @@ export class BillingServiceClientRegistryService {
       ? manager.getRepository(BillingServiceClientEntity)
       : this.clients;
     const row = await repository.findOne({ where: { clientId } });
-    // Invalid stored policies fail closed rather than falling back to environment grants.
-    return row
-      ? parseBillingServiceClients(JSON.stringify({ [clientId]: row.policy }))[
-          clientId
-        ]
-      : undefined;
+    return row ? parseBillingServicePolicy(row.policy) : undefined;
   }
 }

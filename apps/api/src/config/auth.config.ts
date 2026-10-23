@@ -1,5 +1,4 @@
 import { registerAs } from '@nestjs/config';
-import { parseBillingServiceClients } from './billing-service-clients';
 
 const optionalString = (value?: string): string | undefined => {
   const trimmed = value?.trim();
@@ -12,7 +11,4 @@ export default registerAs('auth', () => ({
   jwksUri: optionalString(process.env.AUTH_JWKS_URI),
   audience: optionalString(process.env.AUTH_AUDIENCE),
   requiredIssuer: optionalString(process.env.AUTH_REQUIRED_ISSUER),
-  serviceClients: parseBillingServiceClients(
-    process.env.BILLING_SERVICE_CLIENTS ?? '{}',
-  ),
 }));

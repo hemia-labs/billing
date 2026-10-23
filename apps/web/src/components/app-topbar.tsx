@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { apiFetch } from "@/lib/api";
 import { labelFor } from "@/lib/nav";
 import { getCatalogPlanOverview, getCatalogProduct } from "@/features/billing/catalog/catalog-api";
 
@@ -28,6 +29,20 @@ const integrationTypeLabels: Record<string, string> = {
 export function AppTopbar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const webhookId = /^\/webhooks\/([^/]+)$/.exec(pathname)?.[1];
+  const isWebhookDetail = Boolean(webhookId);
+  const [webhookCrumb, setWebhookCrumb] = useState<{ id: string; eventType: string } | null>(null);
+
+  useEffect(() => {
+    if (!webhookId) return;
+    const controller = new AbortController();
+    void apiFetch<{ eventType: string }>(`/billing/console/webhooks/${webhookId}`, { signal: controller.signal })
+      .then((event) => {
+        if (!controller.signal.aborted) setWebhookCrumb({ id: webhookId, eventType: event.eventType });
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [webhookId]);
   const isNewProduct = pathname === "/products/new";
   const isNewPlan = pathname === "/products/plans/new";
   const isNewAddon = pathname === "/products/addons/new";
@@ -102,7 +117,13 @@ export function AppTopbar() {
             </BreadcrumbLink>
           </BreadcrumbItem>
           <BreadcrumbSeparator />
-          {isIntegrationRoute ? isNewIntegrationClient || isEditIntegrationClient || integrationClientId ? (
+          {isWebhookDetail ? (
+            <>
+              <BreadcrumbItem><BreadcrumbLink render={<Link href="/webhooks" />}>Webhooks</BreadcrumbLink></BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem className="min-w-0"><BreadcrumbPage className="max-w-[40vw] truncate" title={webhookCrumb && webhookCrumb.id === webhookId ? webhookCrumb.eventType : undefined}>{webhookCrumb && webhookCrumb.id === webhookId ? webhookCrumb.eventType : webhookId}</BreadcrumbPage></BreadcrumbItem>
+            </>
+          ) : isIntegrationRoute ? isNewIntegrationClient || isEditIntegrationClient || integrationClientId ? (
             <>
               <BreadcrumbItem className="min-w-0">
                 <BreadcrumbLink render={<Link href="/integrations" />}>Integraciones</BreadcrumbLink>

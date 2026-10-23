@@ -1,5 +1,8 @@
 import { BillingInterval } from '../../billing-shared';
-import type { AddonEntitlementEffects, BillingCurrency } from '../../billing-shared';
+import type {
+  AddonEntitlementEffects,
+  BillingCurrency,
+} from '../../billing-shared';
 import {
   BillingAddonPricingModel,
   BillingProvider,

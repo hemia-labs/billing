@@ -26,13 +26,11 @@ export class SaveServiceClientDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(1000)
   @IsUUID(undefined, { each: true })
   organizationIds?: string[];
 
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(100)
   @IsString({ each: true })
   @MaxLength(2048, { each: true })
