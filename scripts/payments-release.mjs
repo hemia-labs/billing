@@ -140,6 +140,27 @@ async function readRegistry() {
   return response.json();
 }
 
+export async function waitForRegistryVisibility(version, integrity, {
+  read = readRegistry, sleep = setTimeout, now = () => performance.now(),
+} = {}) {
+  const started = now();
+  const timeout = 10 * 60_000;
+  while (true) {
+    const metadata = await read();
+    const published = metadata?.versions?.[version];
+    if (published) {
+      assert.equal(published.dist?.integrity, integrity, 'Published version has different tarball contents');
+      return;
+    }
+    const elapsed = now() - started;
+    if (elapsed >= timeout) {
+      throw new Error(`npm accepted ${packageName}@${version}, but registry visibility is still pending after 10 minutes. Wait for npm processing, then rerun the failed publish job to verify the same artifact and finish the GitHub Release.`);
+    }
+    console.log(`npm is processing ${packageName}@${version}; waiting for registry visibility (${Math.floor(elapsed / 1000)}s elapsed)`);
+    await sleep(Math.min(20_000, timeout - elapsed));
+  }
+}
+
 function loadArtifact(directory) {
   const release = readJson(join(directory, 'release.json'));
   const manifest = readJson(join(root, manifestPath));
@@ -182,15 +203,9 @@ async function publish(directory) {
   }
   requirePublishedAuth(manifest);
   execFileSync('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public', '--registry', registry], { cwd: root, stdio: 'inherit' });
-  for (let attempt = 0; attempt < 6; attempt++) {
-    decision = registryDecision(await readRegistry(), release.version, release.integrity);
-    if (decision === 'already-published') {
-      console.log(`Published and verified ${packageName}@${release.version}`);
-      return finish();
-    }
-    await setTimeout(5_000);
-  }
-  throw new Error('npm publish succeeded, but registry visibility is pending; inspect npm before retrying');
+  await waitForRegistryVisibility(release.version, release.integrity);
+  console.log(`Published and verified ${packageName}@${release.version}`);
+  return finish();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

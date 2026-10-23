@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { isReviewedVersionBatch, registryDecision, assertAuthVersions, validateArtifact, changelogNotes, createGitHubRelease } from '../../scripts/payments-release.mjs';
+import { isReviewedVersionBatch, registryDecision, assertAuthVersions, validateArtifact, changelogNotes, createGitHubRelease, waitForRegistryVisibility } from '../../scripts/payments-release.mjs';
 
 const versionFiles = ['packages/payments/package.json', 'packages/payments/CHANGELOG.md', 'bun.lock', '.changeset/payments-sdk.md'];
 const deleted = ['.changeset/payments-sdk.md'];
@@ -101,4 +101,41 @@ test('GitHub failures and a tag on another commit fail closed without rewriting 
   const noToken = githubFixture([]);
   await assert.rejects(createGitHubRelease({ ...releaseInput, token: '' }, noToken.request), /GH_TOKEN/);
   assert.equal(noToken.calls.length, 0);
+});
+
+
+test('registry visibility waits through minutes of npm processing, even when latest already advanced', async () => {
+  let elapsed = 0, reads = 0;
+  const sleeps = [];
+  await waitForRegistryVisibility('0.4.1', 'sha512-expected', {
+    now: () => elapsed,
+    sleep: async (ms) => { sleeps.push(ms); elapsed += ms; },
+    read: async () => {
+      reads++;
+      return elapsed < 180_000
+        ? { 'dist-tags': { latest: '0.4.1' }, versions: {} }
+        : { versions: { '0.4.1': { dist: { integrity: 'sha512-expected' } } } };
+    },
+  });
+  assert.equal(elapsed, 180_000);
+  assert.equal(reads, 10);
+  assert(sleeps.every(ms => ms === 20_000));
+});
+
+test('registry visibility refuses different bytes immediately and never waits after confirmation', async () => {
+  const sleep = async () => assert.fail('Unexpected wait');
+  const read = async () => ({ versions: { '0.4.1': { dist: { integrity: 'sha512-actual' } } } });
+  await assert.rejects(waitForRegistryVisibility('0.4.1', 'sha512-wrong', { read, sleep }), /different tarball/);
+  await waitForRegistryVisibility('0.4.1', 'sha512-actual', { read, sleep });
+});
+
+test('registry visibility times out with recovery instructions without publishing or creating a release', async () => {
+  let elapsed = 0, reads = 0;
+  await assert.rejects(waitForRegistryVisibility('0.4.1', 'sha512-expected', {
+    now: () => elapsed,
+    sleep: async (ms) => { elapsed += ms; },
+    read: async () => { reads++; return null; },
+  }), /after 10 minutes.*rerun the failed publish job/);
+  assert.equal(elapsed, 600_000);
+  assert.equal(reads, 31);
 });

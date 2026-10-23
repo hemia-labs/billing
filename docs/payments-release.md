@@ -83,3 +83,15 @@ La instalación congelada debe pasar desde un checkout limpio. Las verificacione
 ## Consumo desde npm
 
 Balanz instala `@hemia/payments@0.2.0` y `@hemia/auth@1.1.0`; Console usa Auth 1.1.0. Billing desarrolla su SDK contra Auth 1.1.0 de npm. Los tarballs de release se generan y conservan como artifacts para validar sus bytes antes de publicar.
+
+## npm processing delays
+
+npm may accept a package before it becomes visible in the registry. After a successful
+`npm publish`, CI checks visibility every 20 seconds for up to 10 minutes. It does not
+publish again during this wait. The publish job has a 20-minute budget, and the GitHub
+Release is created only after the registry reports the exact validated tarball integrity.
+
+If npm processing exceeds that window, wait until the version is available and rerun
+only the failed publish job from the original workflow run. Its preflight checks the
+same artifact and skips npm publication when that version and integrity already exist.
+Do not bump the version or rebuild the artifact to recover a visibility-only failure.
