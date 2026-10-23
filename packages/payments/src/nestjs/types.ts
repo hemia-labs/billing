@@ -8,7 +8,11 @@ export type PaymentsContext = {
   membershipId?: string;
 };
 export type PaymentsOperation =
-  "plans.read" | "checkout.manage" | "license.read" | "legal.accept";
+  | "plans.read"
+  | "checkout.manage"
+  | "subscription.manage"
+  | "license.read"
+  | "legal.accept";
 export type PaymentsTransactionScope = {
   kind: "user" | "webhook";
   context?: PaymentsContext;
@@ -72,6 +76,7 @@ export type CreateCheckoutAttemptInput = {
   planCode: string;
   planPriceCode: string;
   legalAcceptanceId?: string;
+  expectedSubscriptionId?: string;
 };
 export type CheckoutAttemptResponse = {
   attemptId: string;
@@ -87,6 +92,7 @@ export type CheckoutAttemptResponse = {
   statusFresh: boolean;
   retryAfterSeconds?: number;
   errorCode?: string;
+  planChange?: import("../index").PlanChangeState;
 };
 export type LicenseAccess = {
   active: boolean;
@@ -136,4 +142,10 @@ export type PaymentsRuntimeOptions = Omit<
   dataSource: DataSource;
   legal?: PaymentsLegalOptions;
   receiver: Required<PaymentsReceiverOptions>;
+};
+
+export type CancelSubscriptionRequest = {
+  idempotencyKey: string;
+  expectedSubscriptionId: string;
+  reason?: string;
 };

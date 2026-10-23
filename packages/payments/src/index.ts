@@ -37,6 +37,53 @@ export type CheckoutInput = {
   successUrl?: string;
   cancelUrl?: string;
 };
+export type Subscription = {
+  id: string;
+  organizationId: string;
+  productCode: string;
+  planCode: string;
+  planPriceCode: string | null;
+  status:
+    "pending" | "active" | "past_due" | "suspended" | "cancelled" | "expired";
+  currentPeriodEnd: string | null;
+  nextBillingTime: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancellation: {
+    state: "pending" | "scheduled";
+    requestedAt: string;
+    effectiveAt: string | null;
+  } | null;
+  pendingPlanChange: {
+    state:
+      "preparing" | "awaiting_approval" | "scheduled" | "effective" | "failed";
+    targetPlanCode: string;
+    targetPlanPriceCode: string;
+    effectiveAt: string;
+    checkoutId: string | null;
+    newSubscriptionId: string | null;
+    attemptId?: string;
+    checkoutUrl?: string;
+  } | null;
+};
+export type CancelSubscriptionInput = {
+  idempotencyKey: string;
+  actorUserId: string;
+  reason?: string;
+};
+export type PlanChangeState = {
+  state:
+    "preparing" | "awaiting_approval" | "scheduled" | "effective" | "failed";
+  effectiveAt: string;
+};
+export type ChangePlan = {
+  subscription: Subscription;
+  checkoutId: string;
+  newSubscriptionId: string;
+  checkoutUrl: string;
+  targetPlanCode: string;
+  effectiveAt: string;
+  state: "awaiting_approval" | "scheduled" | "effective";
+};
 export type Checkout = {
   checkoutId: string;
   subscriptionId: string;
@@ -49,6 +96,7 @@ export type CheckoutStatus = {
   checkoutStatus: string;
   subscriptionStatus: string;
   provider: string;
+  planChange?: PlanChangeState;
 };
 export type PlanPrice = {
   code: string;
@@ -105,6 +153,7 @@ const permissions = {
   create: "billing.integration.checkout.create",
   status: "billing.integration.checkout.read",
   licenses: "billing.integration.licenses.read",
+  subscriptions: "billing.subscriptions.manage",
 };
 const statuses = [
   "created",
@@ -190,12 +239,13 @@ export function createPaymentsClient(config: PaymentsConfig) {
     path: string,
     permission: string,
     payload?: unknown,
+    management = false,
   ): Promise<unknown> {
     let response: Response;
     try {
       response = await machine.request(
         "billing",
-        `billing/integrations/v1/${path}`,
+        management ? `billing/${path}` : `billing/integrations/v1/${path}`,
         {
           method: payload === undefined ? "GET" : "POST",
           scopes: [permission],
@@ -245,7 +295,8 @@ export function createPaymentsClient(config: PaymentsConfig) {
         !identifier(input.planCode) ||
         !identifier(input.planPriceCode) ||
         (input.legalAcceptanceId !== undefined &&
-          (typeof input.legalAcceptanceId !== "string" || !uuid.test(input.legalAcceptanceId)))
+          (typeof input.legalAcceptanceId !== "string" ||
+            !uuid.test(input.legalAcceptanceId)))
       )
         throw new PaymentsError("configuration");
       const successValue = input.successUrl ?? success?.href;
@@ -273,7 +324,9 @@ export function createPaymentsClient(config: PaymentsConfig) {
         planCode: input.planCode,
         planPriceCode: input.planPriceCode,
         provider: "paypal",
-        ...(input.legalAcceptanceId === undefined ? {} : { legalAcceptanceId: input.legalAcceptanceId }),
+        ...(input.legalAcceptanceId === undefined
+          ? {}
+          : { legalAcceptanceId: input.legalAcceptanceId }),
         successUrl: successUrl.href,
         cancelUrl: cancelUrl.href,
         ...(input.billingEmail === undefined
@@ -330,8 +383,31 @@ export function createPaymentsClient(config: PaymentsConfig) {
         value.provider !== "paypal"
       )
         throw new PaymentsError("contract");
+      const change = value.planChange;
+      if (
+        change !== undefined &&
+        (!record(change) ||
+          ![
+            "preparing",
+            "awaiting_approval",
+            "scheduled",
+            "effective",
+            "failed",
+          ].includes(String(change.state)) ||
+          !date(change.effectiveAt) ||
+          change.effectiveAt === null)
+      )
+        throw new PaymentsError("contract");
       return {
         checkoutId,
+        ...(record(change)
+          ? {
+              planChange: {
+                state: change.state,
+                effectiveAt: change.effectiveAt,
+              } as PlanChangeState,
+            }
+          : {}),
         subscriptionId: value.subscriptionId as string,
         checkoutStatus: value.checkoutStatus as string,
         subscriptionStatus: value.subscriptionStatus as string,
@@ -350,6 +426,152 @@ export function createPaymentsClient(config: PaymentsConfig) {
       },
     },
     checkout,
+    subscriptions: {
+      async current(organizationId: string): Promise<Subscription | null> {
+        if (!uuid.test(organizationId))
+          throw new PaymentsError("configuration");
+        let value: unknown;
+        try {
+          value = await request(
+            `subscriptions/current?${new URLSearchParams({ organization_id: organizationId, product_code: productCode })}`,
+            permissions.subscriptions,
+            undefined,
+            true,
+          );
+        } catch (error) {
+          if (error instanceof PaymentsError && error.status === 404)
+            return null;
+          throw error;
+        }
+        return subscription(value, productCode, organizationId);
+      },
+      async cancel(
+        subscriptionId: string,
+        input: CancelSubscriptionInput,
+      ): Promise<Subscription> {
+        if (
+          !uuid.test(subscriptionId) ||
+          !input ||
+          !identifier(input.idempotencyKey) ||
+          !uuid.test(input.actorUserId) ||
+          (input.reason !== undefined &&
+            (!string(input.reason, 500) || !input.reason.trim()))
+        )
+          throw new PaymentsError("configuration");
+        const value = await request(
+          `subscriptions/${subscriptionId}/cancel`,
+          permissions.subscriptions,
+          {
+            idempotencyKey: input.idempotencyKey,
+            actorUserId: input.actorUserId,
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+          },
+          true,
+        );
+        const result = subscription(value, productCode);
+        if (result.id !== subscriptionId) throw new PaymentsError("contract");
+        return result;
+      },
+      async changePlan(
+        subscriptionId: string,
+        input: CheckoutInput,
+      ): Promise<ChangePlan> {
+        if (
+          !uuid.test(subscriptionId) ||
+          !input ||
+          !uuid.test(input.organizationId) ||
+          !uuid.test(input.userId) ||
+          !identifier(input.idempotencyKey) ||
+          !identifier(input.planCode) ||
+          !identifier(input.planPriceCode) ||
+          (input.legalAcceptanceId !== undefined &&
+            !uuid.test(input.legalAcceptanceId))
+        )
+          throw new PaymentsError("configuration");
+        const successValue = input.successUrl ?? success?.href;
+        const cancelValue = input.cancelUrl ?? cancel?.href;
+        if (!successValue || !cancelValue)
+          throw new PaymentsError("configuration");
+        const successUrl = endpoint(
+          successValue,
+          config.allowHttpLoopback === true,
+        );
+        const cancelUrl = endpoint(
+          cancelValue,
+          config.allowHttpLoopback === true,
+        );
+        if (
+          (success && successUrl.origin !== success.origin) ||
+          (cancel && cancelUrl.origin !== cancel.origin)
+        )
+          throw new PaymentsError("configuration");
+        const value = await request(
+          `subscriptions/${subscriptionId}/change-plan`,
+          permissions.subscriptions,
+          {
+            idempotencyKey: input.idempotencyKey,
+            actorUserId: input.userId,
+            targetPlanCode: input.planCode,
+            targetPlanPriceCode: input.planPriceCode,
+            ...(input.legalAcceptanceId === undefined
+              ? {}
+              : { legalAcceptanceId: input.legalAcceptanceId }),
+            successUrl: successUrl.href,
+            cancelUrl: cancelUrl.href,
+            ...(input.billingEmail === undefined
+              ? {}
+              : { billingEmail: input.billingEmail }),
+          },
+          true,
+        );
+        if (
+          !record(value) ||
+          !uuid.test(String(value.checkoutId)) ||
+          !uuid.test(String(value.newSubscriptionId)) ||
+          value.targetPlanCode !== input.planCode ||
+          !date(value.effectiveAt) ||
+          value.effectiveAt === null ||
+          !["awaiting_approval", "scheduled", "effective"].includes(
+            String(value.state),
+          ) ||
+          !string(value.checkoutUrl)
+        )
+          throw new PaymentsError("contract");
+        const source = subscription(
+          value.subscription,
+          productCode,
+          input.organizationId,
+        );
+        if (source.id !== subscriptionId) throw new PaymentsError("contract");
+        let approval: URL;
+        try {
+          approval = new URL(value.checkoutUrl);
+        } catch {
+          throw new PaymentsError("contract");
+        }
+        const paypalApproval =
+          approval.protocol === "https:" &&
+          !approval.username &&
+          !approval.password &&
+          ["www.paypal.com", "www.sandbox.paypal.com"].includes(
+            approval.hostname,
+          );
+        const confirmedReturn =
+          ["scheduled", "effective"].includes(String(value.state)) &&
+          approval.href === successUrl.href;
+        if (!paypalApproval && !confirmedReturn)
+          throw new PaymentsError("contract");
+        return {
+          subscription: source,
+          checkoutId: value.checkoutId as string,
+          newSubscriptionId: value.newSubscriptionId as string,
+          checkoutUrl: value.checkoutUrl,
+          targetPlanCode: input.planCode,
+          effectiveAt: value.effectiveAt,
+          state: value.state as ChangePlan["state"],
+        };
+      },
+    },
     licenses: {
       async resolve(organizationId: string): Promise<License> {
         if (!uuid.test(organizationId))
@@ -484,4 +706,94 @@ function plans(value: unknown, productCode: string): Plan[] {
       },
     ];
   });
+}
+
+function subscription(
+  value: unknown,
+  productCode: string,
+  organizationId?: string,
+): Subscription {
+  if (
+    !record(value) ||
+    !uuid.test(String(value.id)) ||
+    !uuid.test(String(value.organizationId)) ||
+    (organizationId !== undefined && value.organizationId !== organizationId) ||
+    value.productCode !== productCode ||
+    !identifier(value.planCode) ||
+    !(value.planPriceCode === null || identifier(value.planPriceCode)) ||
+    ![
+      "pending",
+      "active",
+      "past_due",
+      "suspended",
+      "cancelled",
+      "expired",
+    ].includes(String(value.status)) ||
+    !date(value.currentPeriodEnd) ||
+    !date(value.nextBillingTime) ||
+    typeof value.cancelAtPeriodEnd !== "boolean"
+  )
+    throw new PaymentsError("contract");
+  const cancellation = value.cancellation;
+  if (
+    cancellation !== null &&
+    (!record(cancellation) ||
+      !["pending", "scheduled"].includes(String(cancellation.state)) ||
+      !date(cancellation.requestedAt) ||
+      cancellation.requestedAt === null ||
+      !date(cancellation.effectiveAt))
+  )
+    throw new PaymentsError("contract");
+  const change = value.pendingPlanChange;
+  if (
+    change !== null &&
+    (!record(change) ||
+      ![
+        "preparing",
+        "awaiting_approval",
+        "scheduled",
+        "effective",
+        "failed",
+      ].includes(String(change.state)) ||
+      !identifier(change.targetPlanCode) ||
+      !identifier(change.targetPlanPriceCode) ||
+      !date(change.effectiveAt) ||
+      change.effectiveAt === null ||
+      !(change.checkoutId === null || uuid.test(String(change.checkoutId))) ||
+      !(
+        change.newSubscriptionId === null ||
+        uuid.test(String(change.newSubscriptionId))
+      ))
+  )
+    throw new PaymentsError("contract");
+  return {
+    id: value.id as string,
+    organizationId: value.organizationId as string,
+    productCode,
+    planCode: value.planCode,
+    planPriceCode: value.planPriceCode,
+    status: value.status as Subscription["status"],
+    currentPeriodEnd: value.currentPeriodEnd,
+    nextBillingTime: value.nextBillingTime,
+    cancelAtPeriodEnd: value.cancelAtPeriodEnd,
+    cancellation:
+      cancellation === null
+        ? null
+        : ({
+            state: cancellation.state,
+            requestedAt: cancellation.requestedAt,
+            effectiveAt: cancellation.effectiveAt,
+          } as Subscription["cancellation"]),
+    pendingPlanChange:
+      change === null
+        ? null
+        : ({
+            state: change.state,
+            targetPlanCode: change.targetPlanCode,
+            targetPlanPriceCode: change.targetPlanPriceCode,
+            effectiveAt: change.effectiveAt,
+            checkoutId: change.checkoutId,
+            newSubscriptionId: change.newSubscriptionId,
+          } as Subscription["pendingPlanChange"]),
+  };
 }
