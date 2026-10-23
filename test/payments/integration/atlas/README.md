@@ -1,16 +1,13 @@
-# Integración del SDK de pagos en un host independiente
+# Pruebas de consumidores de pagos
 
-Esta suite conserva Atlas como fixture de regresión fuera del paquete publicable. No es una aplicación de producto ni un login de producción. Las instrucciones de integración están en `packages/payments/README.md`.
+La suite vigente verifica Node puro y Nest sin tablas obligatorias, y la copia opcional con MySQL/PostgreSQL. La persistencia e idempotencia centrales se verifican por separado en Billing.
 
-Desde la raíz Billing, con Node20.19+, npm y Docker:
+Desde la raíz de Billing:
 
 ```sh
 bun run --cwd packages/payments build
-bash test/payments/integration/atlas/verify.sh
+bash test/payments/integration/database-optional/verify.sh
+bash test/api/integration/payment-attempts/central-payment-attempts.docker.sh
 ```
 
-El runner empaqueta el SDK actual o usa `PAYMENTS_TARBALL=/ruta/paquete.tgz`, instala el artefacto en una carpeta temporal y crea PostgreSQL18.4 desechable. Limpia carpeta, contenedor y volumen al terminar; no lee `.env` ni usa bases residentes.
-
-Comprueba el módulo Nest instalado con conexión JSON y DataSource del host, ausencia de migraciones al arrancar, migración explícita, autorización/origen, aislamiento, recibos durables, reinicio, concurrencia y reintentos, firma/introspección de tokens y actualizaciones de licencia. Incluye pagos sin Legal y la variante opcional con callback de contexto.
-
-`app.cjs` es el host mínimo; `authorization.cjs` contiene sesiones de prueba; `migrate.cjs` aplica el esquema explícitamente. `upstream.fixture.cjs` simula Identity, Billing y Legal por HTTP. Nest, SDK, guards, firmas JWT y PostgreSQL son reales; no hay cobros PayPal ni SSO comercial.
+El antiguo comando `atlas/verify.sh` ejecuta la matriz vigente. Los fixtures que exigían una migración PostgreSQL en el producto fueron sustituidos por estos casos. Las bases son desechables; no se utilizan bases residentes ni se crean cobros PayPal.

@@ -1,6 +1,5 @@
 import { Module, type DynamicModule } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { DataSource } from "typeorm";
 import { createPaymentsClient, type PaymentsConnection } from "../index";
 import { endpoint, record } from "./validation";
 import {
@@ -10,7 +9,6 @@ import {
   PaymentsMachineGuard,
 } from "./controllers";
 import { PaymentsService } from "./payments.service";
-import { PaymentsStorage } from "./storage";
 import { PaymentsServiceTokens } from "./service-tokens";
 import { PaymentsLegalService } from "./legal.service";
 import {
@@ -21,7 +19,17 @@ import {
 } from "./types";
 export * from "./types";
 export { PaymentsService } from "./payments.service";
-export { PaymentsSchema1792886400000 } from "./schema";
+import { PaymentsSchema1792886400000 as HistoricalPaymentsSchema } from "./schema";
+/** Historical migration only; no ORM types are required by the active adapter's public declarations. */
+export const PaymentsSchema1792886400000: new () => {
+  name: string;
+  up(runner: {
+    query(sql: string, parameters?: any[]): Promise<any>;
+  }): Promise<void>;
+  down(runner: {
+    query(sql: string, parameters?: any[]): Promise<any>;
+  }): Promise<void>;
+} = HistoricalPaymentsSchema;
 @Module({})
 export class PaymentsModule {
   static forRootAsync(options: PaymentsAsyncOptions): DynamicModule {
@@ -36,12 +44,8 @@ export class PaymentsModule {
       providers: [
         {
           provide: PAYMENTS_OPTIONS,
-          inject: [
-            { token: DataSource, optional: true },
-            ...(options.inject ?? []),
-          ],
+          inject: options.inject ?? [],
           useFactory: async (
-            hostDataSource: DataSource | undefined,
             ...dependencies: unknown[]
           ): Promise<PaymentsRuntimeOptions> => {
             const value = await options.useFactory(...dependencies);
@@ -57,10 +61,12 @@ export class PaymentsModule {
             } catch {
               throw new Error("Invalid PAYMENTS_CONNECTION or client secret");
             }
-            const dataSource = value.dataSource ?? hostDataSource;
-            if (!dataSource)
+            if (
+              value.onSnapshot !== undefined &&
+              typeof value.onSnapshot !== "function"
+            )
               throw new Error(
-                "Payments requires the host TypeORM DataSource; import your database module or provide dataSource explicitly",
+                "Payments onSnapshot must be an atomic host callback",
               );
             if (typeof value.authorize !== "function")
               throw new Error("Payments requires an authorize callback");
@@ -95,7 +101,6 @@ export class PaymentsModule {
             return {
               ...value,
               connection: c,
-              dataSource,
               legal,
               receiver: {
                 audience: receiver?.audience ?? "",
@@ -111,7 +116,6 @@ export class PaymentsModule {
           },
         },
         Reflector,
-        PaymentsStorage,
         PaymentsServiceTokens,
         PaymentsMachineGuard,
         PaymentsLegalService,

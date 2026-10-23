@@ -1,3 +1,14 @@
+import type {
+  PaymentAttemptInput,
+  PaymentAttemptContext,
+  CheckoutAttemptResponse,
+  PaymentSnapshot,
+} from "./contracts";
+import { webhookInput } from "./validation";
+import { PaymentsError } from "./errors";
+export * from "./contracts";
+export { createPaymentsReceiver } from "./receiver";
+export { createPaymentsLegalClient } from "./legal";
 import { MachineClient, MachineClientError } from "@hemia/auth";
 
 export type PaymentsConnection = {
@@ -144,10 +155,12 @@ export type Plan = {
   }[];
 };
 export type License = {
+  entitlements?: Record<string, unknown>;
+  billing?: Record<string, unknown>;
   active: boolean;
   productCode: string;
   planCode: string | null;
-  licenseStatus: "active" | "grace" | "suspended" | "revoked";
+  licenseStatus: "active" | "grace" | "suspended" | "revoked" | "expired";
   validUntil: string | null;
   seatsLimit: number;
   usageLimit: number | null;
@@ -155,23 +168,7 @@ export type License = {
   features: Record<string, unknown>;
 };
 
-/** Safe diagnostic metadata only; never includes upstream payloads or credentials. */
-export class PaymentsError extends Error {
-  constructor(
-    public readonly code:
-      | "configuration"
-      | "transport"
-      | "authentication"
-      | "http"
-      | "contract"
-      | "CHECKOUT_IN_PROGRESS",
-    public readonly status?: number,
-    public readonly retryAfterSeconds?: number,
-  ) {
-    super(`Payments ${code}${status ? ` (${status})` : ""}`);
-    this.name = "PaymentsError";
-  }
-}
+export { PaymentsError } from "./errors";
 
 const permissions = {
   catalog: "billing.integration.catalog.read",
@@ -262,7 +259,7 @@ export function createPaymentsClient(config: PaymentsConfig) {
   const productCode = config.productCode;
   async function request(
     path: string,
-    permission: string,
+    permission: string | string[],
     payload?: unknown,
     management = false,
   ): Promise<unknown> {
@@ -273,7 +270,7 @@ export function createPaymentsClient(config: PaymentsConfig) {
         management ? `billing/${path}` : `billing/integrations/v1/${path}`,
         {
           method: payload === undefined ? "GET" : "POST",
-          scopes: [permission],
+          scopes: typeof permission === "string" ? [permission] : permission,
           headers: {
             Accept: "application/json",
             ...(payload === undefined
@@ -293,6 +290,13 @@ export function createPaymentsClient(config: PaymentsConfig) {
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       if (
+        response.status === 422 &&
+        record(value) &&
+        value.status === "rejected" &&
+        uuid.test(String(value.attemptId))
+      )
+        return value;
+      if (
         response.status === 409 &&
         record(value) &&
         value.code === "CHECKOUT_IN_PROGRESS"
@@ -310,6 +314,123 @@ export function createPaymentsClient(config: PaymentsConfig) {
     }
     return value;
   }
+  function attemptContext(id: string, c: PaymentAttemptContext) {
+    if (
+      !uuid.test(id) ||
+      !c ||
+      !uuid.test(c.organizationId) ||
+      !uuid.test(c.userId)
+    )
+      throw new PaymentsError("configuration", 400);
+    return new URLSearchParams({
+      organizationId: c.organizationId.toLowerCase(),
+      userId: c.userId.toLowerCase(),
+      productCode,
+    });
+  }
+  const attempts = {
+    async create(input: PaymentAttemptInput): Promise<CheckoutAttemptResponse> {
+      if (
+        !input ||
+        !uuid.test(input.idempotencyKey) ||
+        !uuid.test(input.organizationId) ||
+        !uuid.test(input.userId) ||
+        !identifier(input.planCode) ||
+        !identifier(input.planPriceCode) ||
+        !["checkout", "change_plan"].includes(input.operation) ||
+        (input.operation === "change_plan"
+          ? !uuid.test(String(input.expectedSubscriptionId))
+          : input.expectedSubscriptionId !== undefined) ||
+        (input.expectedAmountDueNow !== undefined &&
+          !money(input.expectedAmountDueNow)) ||
+        (input.legalAcceptanceId !== undefined &&
+          !uuid.test(input.legalAcceptanceId))
+      )
+        throw new PaymentsError("configuration", 400);
+      const successValue = input.successUrl ?? success?.href;
+      const cancelValue = input.cancelUrl ?? cancel?.href;
+      if (!successValue || !cancelValue)
+        throw new PaymentsError("configuration");
+      const successUrl = endpoint(
+        successValue,
+        config.allowHttpLoopback === true,
+      );
+      const cancelUrl = endpoint(
+        cancelValue,
+        config.allowHttpLoopback === true,
+      );
+      if (
+        (success && successUrl.origin !== success.origin) ||
+        (cancel && cancelUrl.origin !== cancel.origin)
+      )
+        throw new PaymentsError("configuration");
+      const scopes =
+        input.operation === "change_plan"
+          ? [permissions.create, permissions.subscriptions]
+          : [permissions.create];
+      return parseAttempt(
+        await request("payment-attempts", scopes, {
+          ...input,
+          organizationId: input.organizationId.toLowerCase(),
+          userId: input.userId.toLowerCase(),
+          idempotencyKey: input.idempotencyKey.toLowerCase(),
+          ...(input.expectedSubscriptionId
+            ? {
+                expectedSubscriptionId:
+                  input.expectedSubscriptionId.toLowerCase(),
+              }
+            : {}),
+          productCode,
+          successUrl: successUrl.href,
+          cancelUrl: cancelUrl.href,
+        }),
+        input.idempotencyKey,
+      );
+    },
+    async get(
+      id: string,
+      c: PaymentAttemptContext,
+    ): Promise<CheckoutAttemptResponse> {
+      return parseAttempt(
+        await request(
+          `payment-attempts/${id}?${attemptContext(id, c)}`,
+          permissions.status,
+        ),
+        id,
+      );
+    },
+    async retry(
+      id: string,
+      c: PaymentAttemptContext,
+    ): Promise<CheckoutAttemptResponse> {
+      const current = await attempts.get(id, c);
+      const scopes =
+        current.operation === "change_plan"
+          ? [permissions.create, permissions.subscriptions]
+          : [permissions.create];
+      return parseAttempt(
+        await request(
+          `payment-attempts/${id}/retry?${attemptContext(id, c)}`,
+          scopes,
+          {},
+        ),
+        id,
+      );
+    },
+    async confirm(
+      id: string,
+      c: PaymentAttemptContext,
+    ): Promise<CheckoutAttemptResponse> {
+      return parseAttempt(
+        await request(
+          `payment-attempts/${id}/confirm?${attemptContext(id, c)}`,
+          permissions.subscriptions,
+          {},
+        ),
+        id,
+      );
+    },
+  };
   const checkout = {
     async create(input: CheckoutInput): Promise<Checkout> {
       if (
@@ -416,6 +537,26 @@ export function createPaymentsClient(config: PaymentsConfig) {
       },
     },
     checkout,
+    attempts,
+    snapshots: {
+      async current(organizationId: string): Promise<PaymentSnapshot> {
+        if (!uuid.test(organizationId))
+          throw new PaymentsError("configuration", 400);
+        organizationId = organizationId.toLowerCase();
+        const query = new URLSearchParams({
+          organization_id: organizationId,
+          product_code: productCode,
+        });
+        return parsePaymentSnapshot(
+          await request(`snapshots?${query}`, [
+            permissions.licenses,
+            permissions.subscriptions,
+          ]),
+          productCode,
+          organizationId,
+        );
+      },
+    },
     subscriptions: {
       async planChangeQuote(
         subscriptionId: string,
@@ -607,7 +748,7 @@ export function createPaymentsClient(config: PaymentsConfig) {
           typeof value.active !== "boolean" ||
           value.productCode !== productCode ||
           !(value.planCode === null || string(value.planCode)) ||
-          !["active", "grace", "suspended", "revoked"].includes(
+          !["active", "grace", "suspended", "revoked", "expired"].includes(
             String(value.licenseStatus),
           ) ||
           !date(value.validUntil) ||
@@ -617,7 +758,15 @@ export function createPaymentsClient(config: PaymentsConfig) {
             value.subscriptionId === null ||
             uuid.test(String(value.subscriptionId))
           ) ||
-          !record(value.features)
+          (value.active &&
+            (!uuid.test(String(value.subscriptionId)) ||
+              !identifier(value.planCode) ||
+              !["active", "grace"].includes(String(value.licenseStatus)) ||
+              (value.licenseStatus === "grace" &&
+                value.validUntil === null))) ||
+          !record(value.features) ||
+          (value.entitlements !== undefined && !record(value.entitlements)) ||
+          (value.billing !== undefined && !record(value.billing))
         )
           throw new PaymentsError("contract");
         return {
@@ -630,6 +779,10 @@ export function createPaymentsClient(config: PaymentsConfig) {
           usageLimit: value.usageLimit,
           subscriptionId: value.subscriptionId as string | null,
           features: value.features,
+          ...(value.entitlements === undefined
+            ? {}
+            : { entitlements: value.entitlements }),
+          ...(value.billing === undefined ? {} : { billing: value.billing }),
         };
       },
     },
@@ -777,6 +930,8 @@ function subscription(
         "effective",
         "failed",
       ].includes(String(change.state)) ||
+      (change.attemptId !== undefined &&
+        !uuid.test(String(change.attemptId))) ||
       !identifier(change.targetPlanCode) ||
       !identifier(change.targetPlanPriceCode) ||
       !date(change.effectiveAt) ||
@@ -812,6 +967,9 @@ function subscription(
         ? null
         : ({
             ...changeDetails,
+            ...(change.attemptId === undefined
+              ? {}
+              : { attemptId: String(change.attemptId).toLowerCase() }),
             state: change.state,
             targetPlanCode: change.targetPlanCode,
             targetPlanPriceCode: change.targetPlanPriceCode,
@@ -945,5 +1103,174 @@ function pendingChangeDetails(
     ...(v.checkoutUrl === undefined
       ? {}
       : { checkoutUrl: v.checkoutUrl as string | null }),
+  };
+}
+
+function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
+  id = id.toLowerCase();
+  if (
+    !record(v) ||
+    v.attemptId !== id ||
+    !["pending", "processing", "ready", "rejected"].includes(
+      String(v.status),
+    ) ||
+    !["checkout", "change_plan"].includes(String(v.operation)) ||
+    typeof v.statusFresh !== "boolean" ||
+    (v.checkoutId !== undefined && !uuid.test(String(v.checkoutId))) ||
+    (v.subscriptionId !== undefined && !uuid.test(String(v.subscriptionId))) ||
+    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl)) ||
+    (v.statusCheckedAt !== undefined && !date(v.statusCheckedAt)) ||
+    (v.retryAfterSeconds !== undefined &&
+      (!count(v.retryAfterSeconds) || v.retryAfterSeconds < 1)) ||
+    (v.checkoutStatus !== undefined &&
+      v.checkoutStatus !== null &&
+      !statuses.includes(String(v.checkoutStatus))) ||
+    (v.subscriptionStatus !== undefined &&
+      v.subscriptionStatus !== null &&
+      ![
+        "pending",
+        "active",
+        "past_due",
+        "suspended",
+        "cancelled",
+        "expired",
+      ].includes(String(v.subscriptionStatus)))
+  )
+    throw new PaymentsError("contract");
+  const change =
+    v.planChange === undefined ? undefined : planChangeState(v.planChange);
+  const canonicalUrl =
+    change &&
+    (["scheduled", "effective", "failed"].includes(change.state) ||
+      change.action === "none" ||
+      change.checkoutUrl === null ||
+      (change.action === "approve_payment" && !change.checkoutUrl))
+      ? undefined
+      : (change?.checkoutUrl ?? v.checkoutUrl);
+  return {
+    attemptId: id,
+    operation: v.operation as "checkout" | "change_plan",
+    status: v.status as CheckoutAttemptResponse["status"],
+    statusFresh: v.statusFresh,
+    ...(identifier(v.planCode) ? { planCode: v.planCode } : {}),
+    ...(identifier(v.planPriceCode) ? { planPriceCode: v.planPriceCode } : {}),
+    ...(v.checkoutId === undefined
+      ? {}
+      : { checkoutId: v.checkoutId as string }),
+    ...(v.subscriptionId === undefined
+      ? {}
+      : { subscriptionId: v.subscriptionId as string }),
+    ...(typeof canonicalUrl === "string" ? { checkoutUrl: canonicalUrl } : {}),
+    ...(change ? { planChange: change } : {}),
+    ...(v.checkoutStatus === undefined
+      ? {}
+      : { checkoutStatus: v.checkoutStatus as string | null }),
+    ...(v.subscriptionStatus === undefined
+      ? {}
+      : { subscriptionStatus: v.subscriptionStatus as string | null }),
+    ...(typeof v.statusCheckedAt === "string"
+      ? { statusCheckedAt: v.statusCheckedAt }
+      : {}),
+    ...(v.retryAfterSeconds === undefined
+      ? {}
+      : { retryAfterSeconds: v.retryAfterSeconds as number }),
+    ...(identifier(v.errorCode) ? { errorCode: v.errorCode } : {}),
+  };
+}
+export function parsePaymentSnapshot(
+  v: unknown,
+  productCode: string,
+  organizationId?: string,
+): PaymentSnapshot {
+  if (
+    !record(v) ||
+    !uuid.test(String(v.organizationId)) ||
+    (organizationId !== undefined &&
+      String(v.organizationId).toLowerCase() !==
+        organizationId.toLowerCase()) ||
+    v.productCode !== productCode ||
+    !date(v.confirmedAt) ||
+    v.confirmedAt === null ||
+    Date.parse(v.confirmedAt) > Date.now() + 300000
+  )
+    throw new PaymentsError("contract");
+  const verified = webhookInput(
+    {
+      type: "billing.license.updated",
+      organizationId: v.organizationId,
+      productCode,
+      revision: v.revision,
+      license: v.license,
+      checkouts: [],
+    },
+    productCode,
+  );
+  const sub =
+    v.subscription === null
+      ? null
+      : subscription(v.subscription, productCode, String(v.organizationId));
+  if (
+    verified.license.active &&
+    (!sub ||
+      verified.license.subscriptionId !== sub.id ||
+      verified.license.planCode !== sub.planCode)
+  )
+    throw new PaymentsError("contract");
+  return {
+    organizationId: String(v.organizationId),
+    productCode,
+    revision: verified.revision as string,
+    confirmedAt: v.confirmedAt,
+    license: verified.license as unknown as PaymentSnapshot["license"],
+    subscription: sub,
+  };
+}
+
+/** Access from an optional copy expires; replaying an old revision never refreshes confirmedAt. */
+export function snapshotAccess(
+  snapshot: PaymentSnapshot | null | undefined,
+): import("./contracts").LicenseAccess {
+  if (!snapshot)
+    return {
+      active: false,
+      source: null,
+      validUntil: null,
+      confirmedAt: null,
+      subscriptionId: null,
+      planCode: null,
+      licenseStatus: null,
+      reason: "not_confirmed",
+      entitlements: {},
+    };
+  const verified = parsePaymentSnapshot(
+    snapshot,
+    snapshot.productCode,
+    snapshot.organizationId,
+  );
+  const license = verified.license;
+  const end = Math.min(
+    Date.parse(verified.confirmedAt) + 86400000,
+    license.validUntil === null ? Infinity : Date.parse(license.validUntil),
+  );
+  const active =
+    license.active &&
+    ["active", "grace"].includes(license.licenseStatus) &&
+    end > Date.now();
+  return {
+    active,
+    source: active ? "billing" : null,
+    validUntil: active ? new Date(end).toISOString() : null,
+    confirmedAt: verified.confirmedAt,
+    subscriptionId: license.subscriptionId,
+    planCode: license.planCode,
+    licenseStatus: license.licenseStatus,
+    reason: active
+      ? "active"
+      : license.active && end <= Date.now()
+        ? "confirmation_expired"
+        : "billing_inactive",
+    entitlements: active
+      ? { ...license.entitlements, features: license.features }
+      : {},
   };
 }

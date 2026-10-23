@@ -186,10 +186,13 @@ test("DTO boundaries forbid caller-supplied identity, empty Legal evidence and c
   };
   assert.deepEqual(attemptInput(dto), dto);
   assert.throws(() => attemptInput({ ...dto, organizationId: org }));
-  assert.deepEqual(attemptInput({ ...dto, legalAcceptanceId: undefined }), { ...dto, legalAcceptanceId: undefined });
+  assert.deepEqual(attemptInput({ ...dto, legalAcceptanceId: undefined }), {
+    ...dto,
+    legalAcceptanceId: undefined,
+  });
   const { legalAcceptanceId, ...paymentsOnly } = dto;
   assert.deepEqual(attemptInput(paymentsOnly), paymentsOnly);
-  for (const invalid of [null, '', 'invalid'])
+  for (const invalid of [null, "", "invalid"])
     assert.throws(() => attemptInput({ ...dto, legalAcceptanceId: invalid }));
   const event = {
     type: "billing.license.updated",
@@ -252,76 +255,50 @@ test("async module permits catalog-only settings and derives service endpoints f
   assert.doesNotThrow(() => new PaymentsService(normalized, {}));
 });
 
-test("GET status repair cannot overwrite a newer webhook and never queries Billing for a different organization", async () => {
+test("GET status delegates to the buyer-bound central receipt and never reads the legacy provider or local state", async () => {
   const { PaymentsService } = require("../../dist/nestjs");
-  const id = crypto.randomUUID(),
-    checkout = crypto.randomUUID(),
-    subscription = crypto.randomUUID();
-  let calls = 0;
-  const row = {
-    id,
-    organization_id: org,
-    subject_id: subject,
-    product_code: "atlas",
+  const { PaymentsError } = require("../../dist");
+  const context = { organizationId: org, subjectId: subject };
+  const service = new PaymentsService({
+    ...options,
+    authorize: async () => context,
+  });
+  const attemptId = crypto.randomUUID();
+  const canonical = {
+    attemptId,
+    operation: "checkout",
     status: "ready",
-    checkout_id: checkout,
-    subscription_id: subscription,
-    checkout_url: "https://www.sandbox.paypal.com/checkout",
-    checkout_status: "pending",
-    subscription_status: "pending",
-    status_checked_at: null,
-    request_payload: { planCode: "basic", planPriceCode: "monthly" },
+    statusFresh: true,
+    checkoutId: crypto.randomUUID(),
+    subscriptionId: crypto.randomUUID(),
+    checkoutStatus: "approved",
+    subscriptionStatus: "active",
   };
-  const manager = {
-    query: async (sql, args) => {
-      assert.match(sql, /status_checked_at IS NULL/);
-      if (row.status_checked_at === null) {
-        row.checkout_status = args[3];
-        row.subscription_status = args[4];
-        row.status_checked_at = new Date();
-      }
-      return [];
-    },
-  };
-  const store = {
-    transaction: async (scope, work) => work(manager),
-    byId: async (manager, organization, id) =>
-      organization === org ? row : null,
-  };
-  const service = new PaymentsService(
-    {
-      ...options,
-      dataSource: {},
-      authorize: async () => ({ organizationId: org, subjectId: subject }),
-    },
-    store,
-  );
-  service.client.checkout.status = async () => {
+  let calls = 0;
+  service.client.checkout.status = async () =>
+    assert.fail("GET must not invoke old consumer repair/provider flow");
+  service.client.attempts.get = async (id, buyer) => {
     calls++;
-    row.checkout_status = "approved";
-    row.subscription_status = "active";
-    row.status_checked_at = new Date();
-    return {
-      checkoutId: checkout,
-      subscriptionId: subscription,
-      checkoutStatus: "pending",
-      subscriptionStatus: "pending",
-      provider: "paypal",
-    };
+    assert.equal(id, attemptId);
+    if (buyer.organizationId !== org || buyer.userId !== subject)
+      throw new PaymentsError("http", 404);
+    return canonical;
   };
+  assert.deepEqual(await service.getAttempt(context, attemptId), canonical);
+  assert.equal(calls, 1);
   await assert.rejects(
     service.getAttempt(
-      { organizationId: crypto.randomUUID(), subjectId: subject },
-      id,
+      { ...context, organizationId: crypto.randomUUID() },
+      attemptId,
     ),
+    (error) => error.getStatus() === 404,
   );
-  assert.equal(calls, 0);
-  const repaired = await service.getAttempt(
-    { organizationId: org, subjectId: subject },
-    id,
+  await assert.rejects(
+    service.getAttempt(
+      { ...context, subjectId: crypto.randomUUID() },
+      attemptId,
+    ),
+    (error) => error.getStatus() === 404,
   );
-  assert.equal(repaired.checkoutStatus, "approved");
-  assert.equal(repaired.subscriptionStatus, "active");
-  assert.equal(repaired.statusFresh, true);
-  assert.equal(calls, 1);
+  assert.equal(calls, 3);
 });

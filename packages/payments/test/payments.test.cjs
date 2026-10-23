@@ -517,6 +517,7 @@ test("quotes retain decimal amounts and confirmation is an explicit POST with va
 
 test("subscription summaries preserve validated pending upgrade amounts and nullable approval action", async () => {
   const pending = {
+    attemptId: id,
     state: "awaiting_approval",
     targetPlanCode: "pro",
     targetPlanPriceCode: "monthly",
@@ -546,6 +547,15 @@ test("subscription summaries preserve validated pending upgrade amounts and null
         ...pending,
         checkoutUrl: "https://attacker.test/pay",
       },
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {
+    code: "contract",
+  });
+  mock(() =>
+    Response.json({
+      ...subscriptionSummary(),
+      pendingPlanChange: { ...pending, attemptId: "not-a-uuid" },
     }),
   );
   await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {

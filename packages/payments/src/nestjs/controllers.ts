@@ -18,8 +18,10 @@ import {
   NotFoundException,
   ServiceUnavailableException,
   UseGuards,
+  UseFilters,
   type CanActivate,
 } from "@nestjs/common";
+import { PaymentsExceptionFilter } from "./errors";
 import { Reflector } from "@nestjs/core";
 import { PaymentsService } from "./payments.service";
 import { PaymentsServiceTokens } from "./service-tokens";
@@ -55,6 +57,8 @@ export class PaymentsMachineGuard implements CanActivate {
       ctx.getHandler(),
       ctx.getClass(),
     ]);
+    if (kind === "billing" && !this.options.onSnapshot)
+      throw new NotFoundException("Local synchronization is disabled");
     if (kind === "legal" && !this.options.legal)
       throw new NotFoundException("Legal integration is disabled");
     const r = ctx
@@ -100,6 +104,7 @@ function receipt(value: CheckoutAttemptResponse, response: ResponseStatus) {
   } else if (value.status === "rejected") response.status(422);
   return value;
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments")
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
@@ -210,6 +215,7 @@ export class PaymentsController {
     );
   }
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments")
 @SetMetadata(SERVICE_AUTHENTICATED_METADATA, true)
 @UseGuards(PaymentsMachineGuard)
@@ -239,6 +245,7 @@ export class PaymentsMachineController {
     return this.payments.receiveLicense(body);
   }
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments/legal")
 export class PaymentsLegalController {
   constructor(
