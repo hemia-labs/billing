@@ -68,7 +68,7 @@ function fixture() {
       if (sql.includes("request_payload=jsonb_set")) {
         row.request_payload.planChange = JSON.parse(args[5]);
         row.status_checked_at = new Date();
-        if (args[9]) row.checkout_url = args[10];
+        if (args[9] && args[10] !== null) row.checkout_url = args[10];
         return [];
       }
       throw new Error("Unexpected SQL: " + sql);
@@ -281,6 +281,21 @@ test("cross-device resume exposes an approval link only for the canonical checko
     (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
     null,
   );
+  delete summary.pendingPlanChange.action;
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    null,
+  );
+  delete summary.pendingPlanChange.checkoutUrl;
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    "https://www.sandbox.paypal.com/approve",
+  );
+  summary.pendingPlanChange.state = "scheduled";
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    null,
+  );
   summary.pendingPlanChange.action = "none";
   assert.equal(
     (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
@@ -419,6 +434,17 @@ test("prorated attempt binds approved amount and only POST confirmation can adva
   const done = await f.service.confirmAttempt(c, initial.attemptId);
   assert.equal(done.planChange.state, "effective");
   assert.equal(done.checkoutUrl, undefined);
+  assert.equal(f.row().checkout_url, "https://www.sandbox.paypal.com/pay");
+  const cached = await f.service.retryAttempt(c, initial.attemptId);
+  assert.equal(cached.checkoutUrl, undefined);
+  assert.equal(cached.planChange.checkoutUrl, null);
+  f.service.client.checkout.status = async () => {
+    throw new Error("Billing unavailable");
+  };
+  const unavailable = await f.service.getAttempt(c, initial.attemptId);
+  assert.equal(unavailable.statusFresh, false);
+  assert.equal(unavailable.errorCode, "BILLING_STATUS_UNAVAILABLE");
+  assert.equal(unavailable.checkoutUrl, undefined);
   await assert.rejects(
     f.service.confirmAttempt(
       { ...c, subjectId: randomUUID() },

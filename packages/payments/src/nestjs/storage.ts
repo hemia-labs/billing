@@ -47,7 +47,8 @@ export class PaymentsStorage {
     lock = false,
   ): Promise<AttemptRow | null> {
     const rows: AttemptRow[] = await manager.query(
-      `SELECT * FROM public.payments_checkout_attempts WHERE organization_id=$1 AND product_code=$2 AND id=$3${lock ? " FOR UPDATE" : ""}`,
+      // pg parses timestamptz as Date and drops microseconds needed by the status update's compare-and-swap.
+      `SELECT *,status_checked_at::text AS status_checked_at FROM public.payments_checkout_attempts WHERE organization_id=$1 AND product_code=$2 AND id=$3${lock ? " FOR UPDATE" : ""}`,
       [organizationId, this.options.connection.productCode, id],
     );
     return rows[0] ?? null;

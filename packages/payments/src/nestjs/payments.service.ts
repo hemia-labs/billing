@@ -93,15 +93,11 @@ export class PaymentsService {
             pendingPlanChange: {
               ...current.pendingPlanChange,
               attemptId: attempt.id,
-              ...(current.pendingPlanChange.action === "none" ||
-              (current.pendingPlanChange.action === "approve_payment" &&
-                !current.pendingPlanChange.checkoutUrl)
-                ? { checkoutUrl: null }
-                : current.pendingPlanChange.checkoutUrl
-                  ? { checkoutUrl: current.pendingPlanChange.checkoutUrl }
-                  : attempt.checkout_url
-                    ? { checkoutUrl: attempt.checkout_url }
-                    : {}),
+              checkoutUrl:
+                this.approvalUrl(
+                  current.pendingPlanChange,
+                  attempt.checkout_url,
+                ) ?? null,
             },
           }
         : current;
@@ -442,7 +438,7 @@ export class PaymentsService {
         { kind: "user", context: c },
         async (m) => {
           await m.query(
-            `UPDATE public.payments_checkout_attempts SET checkout_status=$4,subscription_status=$5,status_checked_at=clock_timestamp(),request_payload=jsonb_set(request_payload,'{planChange}',$6::jsonb),checkout_url=CASE WHEN $10::boolean THEN $11 ELSE checkout_url END,updated_at=clock_timestamp() WHERE id=$1 AND organization_id=$2 AND product_code=$3 AND checkout_id=$7 AND subscription_id=$8 AND status_checked_at IS NOT DISTINCT FROM $9::timestamptz`,
+            `UPDATE public.payments_checkout_attempts SET checkout_status=$4,subscription_status=$5,status_checked_at=clock_timestamp(),request_payload=jsonb_set(request_payload,'{planChange}',$6::jsonb),checkout_url=CASE WHEN $10::boolean THEN COALESCE($11,checkout_url) ELSE checkout_url END,updated_at=clock_timestamp() WHERE id=$1 AND organization_id=$2 AND product_code=$3 AND checkout_id=$7 AND subscription_id=$8 AND status_checked_at IS NOT DISTINCT FROM $9::timestamptz`,
             [
               row.id,
               c.organizationId,
@@ -645,7 +641,26 @@ export class PaymentsService {
       };
     });
   }
+  private approvalUrl(
+    change: PlanChangeState | undefined,
+    savedUrl: string | null,
+  ): string | undefined {
+    if (
+      change &&
+      (["scheduled", "effective", "failed"].includes(change.state) ||
+        change.action === "none" ||
+        change.checkoutUrl === null ||
+        (change.action === "approve_payment" && !change.checkoutUrl))
+    )
+      return undefined;
+    return change?.checkoutUrl ?? savedUrl ?? undefined;
+  }
   private receipt(r: AttemptRow): CheckoutAttemptResponse {
+    const change =
+      r.request_payload.operation === "change_plan"
+        ? (r.request_payload.planChange as PlanChangeState | undefined)
+        : undefined;
+    const checkoutUrl = this.approvalUrl(change, r.checkout_url);
     return {
       attemptId: r.id,
       status: r.status,
@@ -661,7 +676,7 @@ export class PaymentsService {
         : {}),
       ...(r.checkout_id ? { checkoutId: r.checkout_id } : {}),
       ...(r.subscription_id ? { subscriptionId: r.subscription_id } : {}),
-      ...(r.checkout_url ? { checkoutUrl: r.checkout_url } : {}),
+      ...(checkoutUrl ? { checkoutUrl } : {}),
       ...(r.checkout_status ? { checkoutStatus: r.checkout_status } : {}),
       ...(r.subscription_status
         ? { subscriptionStatus: r.subscription_status }
