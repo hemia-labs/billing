@@ -39,9 +39,13 @@ export function attemptInput(v: unknown): CreateCheckoutAttemptInput {
     "planPriceCode",
     "legalAcceptanceId",
     "expectedSubscriptionId",
+    "expectedAmountDueNow",
   ]);
   if (
     !uuid(v.idempotencyKey) ||
+    (v.expectedAmountDueNow !== undefined &&
+      (typeof v.expectedAmountDueNow !== "string" ||
+        !/^(0|[1-9]\d{0,17})(\.\d{1,2})?$/.test(v.expectedAmountDueNow))) ||
     !text(v.planCode, 100) ||
     /\s/.test(v.planCode) ||
     !text(v.planPriceCode, 100) ||
@@ -238,4 +242,19 @@ export function cancellationInput(v: unknown): CancelSubscriptionRequest {
   )
     throw new BadRequestException("Invalid cancellation request");
   return v as CancelSubscriptionRequest;
+}
+
+export function planChangeQuoteInput(v: unknown) {
+  exact(v, ["targetPlanCode", "targetPlanPriceCode"]);
+  if (
+    !text(v.targetPlanCode, 100) ||
+    /\s/.test(v.targetPlanCode) ||
+    !text(v.targetPlanPriceCode, 100) ||
+    /\s/.test(v.targetPlanPriceCode)
+  )
+    throw new BadRequestException("Invalid plan change quote request");
+  return {
+    targetPlanCode: v.targetPlanCode,
+    targetPlanPriceCode: v.targetPlanPriceCode,
+  };
 }

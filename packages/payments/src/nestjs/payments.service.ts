@@ -93,9 +93,15 @@ export class PaymentsService {
             pendingPlanChange: {
               ...current.pendingPlanChange,
               attemptId: attempt.id,
-              ...(attempt.checkout_url
-                ? { checkoutUrl: attempt.checkout_url }
-                : {}),
+              ...(current.pendingPlanChange.action === "none" ||
+              (current.pendingPlanChange.action === "approve_payment" &&
+                !current.pendingPlanChange.checkoutUrl)
+                ? { checkoutUrl: null }
+                : current.pendingPlanChange.checkoutUrl
+                  ? { checkoutUrl: current.pendingPlanChange.checkoutUrl }
+                  : attempt.checkout_url
+                    ? { checkoutUrl: attempt.checkout_url }
+                    : {}),
             },
           }
         : current;
@@ -230,6 +236,9 @@ export class PaymentsService {
           dto.planCode,
           dto.planPriceCode,
           dto.legalAcceptanceId,
+          ...(dto.expectedAmountDueNow === undefined
+            ? []
+            : [dto.expectedAmountDueNow]),
           ...(operation === "change_plan"
             ? [operation, dto.expectedSubscriptionId]
             : []),
@@ -363,14 +372,48 @@ export class PaymentsService {
       throw new ServiceUnavailableException("Checkout reservation failed");
     return this.requestCheckout(c, row);
   }
+  async planChangeQuote(
+    c: PaymentsContext,
+    input: { targetPlanCode: string; targetPlanPriceCode: string },
+  ) {
+    context(c);
+    const source = await this.getSubscription(c);
+    if (!source) throw new NotFoundException("Subscription not found");
+    try {
+      return await this.client.subscriptions.planChangeQuote(
+        source.id,
+        input.targetPlanCode,
+        input.targetPlanPriceCode,
+      );
+    } catch (error) {
+      if (error instanceof PaymentsError && error.status === 409)
+        throw new ConflictException("SUBSCRIPTION_CANNOT_CHANGE");
+      throw new ServiceUnavailableException("Plan change quote unavailable");
+    }
+  }
+  async confirmAttempt(c: PaymentsContext, id: string) {
+    return this.readAttempt(c, id, true);
+  }
   async getAttempt(c: PaymentsContext, id: string) {
+    return this.readAttempt(c, id, false);
+  }
+  private async readAttempt(c: PaymentsContext, id: string, confirm: boolean) {
     context(c);
     if (!uuid(id)) throw new BadRequestException("Invalid attempt ID");
     const row = await this.storage.transaction(
       { kind: "user", context: c },
       (m) => this.storage.byId(m, c.organizationId, id),
     );
-    if (!row) throw new NotFoundException("Checkout attempt not found");
+    if (!row || row.subject_id !== c.subjectId)
+      throw new NotFoundException("Checkout attempt not found");
+    if (
+      confirm &&
+      (row.request_payload.operation !== "change_plan" ||
+        row.status !== "ready" ||
+        !row.checkout_id ||
+        !row.subscription_id)
+    )
+      throw new ConflictException("PLAN_CHANGE_NOT_READY");
     if (
       row.request_payload.operation === "change_plan" &&
       row.status === "ready" &&
@@ -379,7 +422,9 @@ export class PaymentsService {
     ) {
       let status;
       try {
-        status = await this.client.checkout.status(row.checkout_id);
+        status = confirm
+          ? await this.client.checkout.verify(row.checkout_id)
+          : await this.client.checkout.status(row.checkout_id);
       } catch {
         return {
           ...this.receipt(row),
@@ -397,7 +442,7 @@ export class PaymentsService {
         { kind: "user", context: c },
         async (m) => {
           await m.query(
-            `UPDATE public.payments_checkout_attempts SET checkout_status=$4,subscription_status=$5,status_checked_at=clock_timestamp(),request_payload=jsonb_set(request_payload,'{planChange}',$6::jsonb),updated_at=clock_timestamp() WHERE id=$1 AND organization_id=$2 AND product_code=$3 AND checkout_id=$7 AND subscription_id=$8 AND status_checked_at IS NOT DISTINCT FROM $9::timestamptz`,
+            `UPDATE public.payments_checkout_attempts SET checkout_status=$4,subscription_status=$5,status_checked_at=clock_timestamp(),request_payload=jsonb_set(request_payload,'{planChange}',$6::jsonb),checkout_url=CASE WHEN $10::boolean THEN $11 ELSE checkout_url END,updated_at=clock_timestamp() WHERE id=$1 AND organization_id=$2 AND product_code=$3 AND checkout_id=$7 AND subscription_id=$8 AND status_checked_at IS NOT DISTINCT FROM $9::timestamptz`,
             [
               row.id,
               c.organizationId,
@@ -408,6 +453,8 @@ export class PaymentsService {
               row.checkout_id,
               row.subscription_id,
               row.status_checked_at,
+              status.planChange?.checkoutUrl !== undefined,
+              status.planChange?.checkoutUrl ?? null,
             ],
           );
           const current = await this.storage.byId(m, c.organizationId, row.id);
@@ -505,7 +552,10 @@ export class PaymentsService {
           row.request_payload.sourceSubscriptionId,
           row.request_payload as unknown as CheckoutInput,
         );
-        planChange = { state: changed.state, effectiveAt: changed.effectiveAt };
+        planChange = changed.planChange ?? {
+          state: changed.state,
+          effectiveAt: changed.effectiveAt,
+        };
         result = {
           checkoutId: changed.checkoutId,
           subscriptionId: changed.newSubscriptionId,

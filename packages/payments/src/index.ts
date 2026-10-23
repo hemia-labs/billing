@@ -33,6 +33,7 @@ export type CheckoutInput = {
   planPriceCode: string;
   legalAcceptanceId?: string;
   idempotencyKey: string;
+  expectedAmountDueNow?: string;
   billingEmail?: string;
   successUrl?: string;
   cancelUrl?: string;
@@ -53,29 +54,52 @@ export type Subscription = {
     requestedAt: string;
     effectiveAt: string | null;
   } | null;
-  pendingPlanChange: {
-    state:
-      "preparing" | "awaiting_approval" | "scheduled" | "effective" | "failed";
-    targetPlanCode: string;
-    targetPlanPriceCode: string;
-    effectiveAt: string;
-    checkoutId: string | null;
-    newSubscriptionId: string | null;
-    attemptId?: string;
-    checkoutUrl?: string;
-  } | null;
+  pendingPlanChange:
+    | (Partial<PlanChangeQuote> & {
+        action?: "approve_subscription" | "approve_payment" | "none";
+        state:
+          | "preparing"
+          | "awaiting_approval"
+          | "scheduled"
+          | "effective"
+          | "failed";
+        targetPlanCode: string;
+        targetPlanPriceCode: string;
+        effectiveAt: string;
+        checkoutId: string | null;
+        newSubscriptionId: string | null;
+        attemptId?: string;
+        checkoutUrl?: string | null;
+      })
+    | null;
 };
 export type CancelSubscriptionInput = {
   idempotencyKey: string;
   actorUserId: string;
   reason?: string;
 };
+export type PlanChangeQuote = {
+  kind: "upgrade" | "downgrade";
+  amountDueNow: string;
+  currency: string;
+  effectiveAt: string;
+  nextBillingAt: string;
+  recurringAmount: string;
+};
 export type PlanChangeState = {
+  kind?: "upgrade" | "downgrade";
+  amountDueNow?: string;
+  currency?: string;
+  recurringAmount?: string;
+  nextBillingAt?: string;
+  action?: "approve_subscription" | "approve_payment" | "none";
+  checkoutUrl?: string | null;
   state:
     "preparing" | "awaiting_approval" | "scheduled" | "effective" | "failed";
   effectiveAt: string;
 };
 export type ChangePlan = {
+  planChange?: PlanChangeState;
   subscription: Subscription;
   checkoutId: string;
   newSubscriptionId: string;
@@ -91,6 +115,7 @@ export type Checkout = {
   status: string;
 };
 export type CheckoutStatus = {
+  checkoutUrl?: string | null;
   checkoutId: string;
   subscriptionId: string;
   checkoutStatus: string;
@@ -367,52 +392,17 @@ export function createPaymentsClient(config: PaymentsConfig) {
         `checkout/sessions/${checkoutId}/status`,
         permissions.status,
       );
-      if (
-        !record(value) ||
-        value.checkoutId !== checkoutId ||
-        !uuid.test(String(value.subscriptionId)) ||
-        !statuses.includes(String(value.checkoutStatus)) ||
-        ![
-          "pending",
-          "active",
-          "past_due",
-          "suspended",
-          "cancelled",
-          "expired",
-        ].includes(String(value.subscriptionStatus)) ||
-        value.provider !== "paypal"
-      )
-        throw new PaymentsError("contract");
-      const change = value.planChange;
-      if (
-        change !== undefined &&
-        (!record(change) ||
-          ![
-            "preparing",
-            "awaiting_approval",
-            "scheduled",
-            "effective",
-            "failed",
-          ].includes(String(change.state)) ||
-          !date(change.effectiveAt) ||
-          change.effectiveAt === null)
-      )
-        throw new PaymentsError("contract");
-      return {
-        checkoutId,
-        ...(record(change)
-          ? {
-              planChange: {
-                state: change.state,
-                effectiveAt: change.effectiveAt,
-              } as PlanChangeState,
-            }
-          : {}),
-        subscriptionId: value.subscriptionId as string,
-        checkoutStatus: value.checkoutStatus as string,
-        subscriptionStatus: value.subscriptionStatus as string,
-        provider: value.provider,
-      };
+      return checkoutStatus(value, checkoutId);
+    },
+    async verify(checkoutId: string): Promise<CheckoutStatus> {
+      if (!uuid.test(checkoutId)) throw new PaymentsError("configuration");
+      const value = await request(
+        `checkout/sessions/${checkoutId}/verify`,
+        permissions.subscriptions,
+        {},
+        true,
+      );
+      return checkoutStatus(value, checkoutId);
     },
   };
   return {
@@ -427,6 +417,30 @@ export function createPaymentsClient(config: PaymentsConfig) {
     },
     checkout,
     subscriptions: {
+      async planChangeQuote(
+        subscriptionId: string,
+        targetPlanCode: string,
+        targetPlanPriceCode: string,
+      ): Promise<PlanChangeQuote> {
+        if (
+          !uuid.test(subscriptionId) ||
+          !identifier(targetPlanCode) ||
+          !identifier(targetPlanPriceCode)
+        )
+          throw new PaymentsError("configuration");
+        const query = new URLSearchParams({
+          target_plan_code: targetPlanCode,
+          target_plan_price_code: targetPlanPriceCode,
+        });
+        return planChangeQuote(
+          await request(
+            `subscriptions/${subscriptionId}/plan-change-quote?${query}`,
+            permissions.subscriptions,
+            undefined,
+            true,
+          ),
+        );
+      },
       async current(organizationId: string): Promise<Subscription | null> {
         if (!uuid.test(organizationId))
           throw new PaymentsError("configuration");
@@ -481,6 +495,8 @@ export function createPaymentsClient(config: PaymentsConfig) {
           !input ||
           !uuid.test(input.organizationId) ||
           !uuid.test(input.userId) ||
+          (input.expectedAmountDueNow !== undefined &&
+            !money(input.expectedAmountDueNow)) ||
           !identifier(input.idempotencyKey) ||
           !identifier(input.planCode) ||
           !identifier(input.planPriceCode) ||
@@ -513,6 +529,9 @@ export function createPaymentsClient(config: PaymentsConfig) {
             actorUserId: input.userId,
             targetPlanCode: input.planCode,
             targetPlanPriceCode: input.planPriceCode,
+            ...(input.expectedAmountDueNow === undefined
+              ? {}
+              : { expectedAmountDueNow: input.expectedAmountDueNow }),
             ...(input.legalAcceptanceId === undefined
               ? {}
               : { legalAcceptanceId: input.legalAcceptanceId }),
@@ -562,6 +581,9 @@ export function createPaymentsClient(config: PaymentsConfig) {
         if (!paypalApproval && !confirmedReturn)
           throw new PaymentsError("contract");
         return {
+          ...(value.planChange === undefined
+            ? {}
+            : { planChange: planChangeState(value.planChange) }),
           subscription: source,
           checkoutId: value.checkoutId as string,
           newSubscriptionId: value.newSubscriptionId as string,
@@ -766,6 +788,7 @@ function subscription(
       ))
   )
     throw new PaymentsError("contract");
+  const changeDetails = record(change) ? pendingChangeDetails(change) : {};
   return {
     id: value.id as string,
     organizationId: value.organizationId as string,
@@ -788,6 +811,7 @@ function subscription(
       change === null
         ? null
         : ({
+            ...changeDetails,
             state: change.state,
             targetPlanCode: change.targetPlanCode,
             targetPlanPriceCode: change.targetPlanPriceCode,
@@ -795,5 +819,131 @@ function subscription(
             checkoutId: change.checkoutId,
             newSubscriptionId: change.newSubscriptionId,
           } as Subscription["pendingPlanChange"]),
+  };
+}
+
+const money = (v: unknown): v is string =>
+  typeof v === "string" && /^(0|[1-9]\d{0,17})(\.\d{1,2})?$/.test(v);
+function paypalUrl(v: unknown): v is string | null {
+  if (v === null) return true;
+  if (!string(v)) return false;
+  try {
+    const u = new URL(v);
+    return (
+      u.protocol === "https:" &&
+      !u.username &&
+      !u.password &&
+      ["www.paypal.com", "www.sandbox.paypal.com"].includes(u.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+function planChangeQuote(v: unknown): PlanChangeQuote {
+  if (
+    !record(v) ||
+    !["upgrade", "downgrade"].includes(String(v.kind)) ||
+    !money(v.amountDueNow) ||
+    !money(v.recurringAmount) ||
+    typeof v.currency !== "string" ||
+    !/^[A-Z]{3}$/.test(v.currency) ||
+    !date(v.effectiveAt) ||
+    v.effectiveAt === null ||
+    !date(v.nextBillingAt) ||
+    v.nextBillingAt === null
+  )
+    throw new PaymentsError("contract");
+  return {
+    kind: v.kind,
+    amountDueNow: v.amountDueNow,
+    currency: v.currency,
+    recurringAmount: v.recurringAmount,
+    effectiveAt: v.effectiveAt,
+    nextBillingAt: v.nextBillingAt,
+  } as PlanChangeQuote;
+}
+function planChangeState(v: unknown): PlanChangeState {
+  if (
+    !record(v) ||
+    ![
+      "preparing",
+      "awaiting_approval",
+      "scheduled",
+      "effective",
+      "failed",
+    ].includes(String(v.state)) ||
+    !date(v.effectiveAt) ||
+    v.effectiveAt === null
+  )
+    throw new PaymentsError("contract");
+  if (v.kind === undefined)
+    return { state: v.state, effectiveAt: v.effectiveAt } as PlanChangeState;
+  const quote = planChangeQuote(v);
+  if (
+    !["approve_subscription", "approve_payment", "none"].includes(
+      String(v.action),
+    ) ||
+    !paypalUrl(v.checkoutUrl) ||
+    (v.action === "approve_subscription" && v.checkoutUrl === null)
+  )
+    throw new PaymentsError("contract");
+  return {
+    ...quote,
+    state: v.state,
+    action: v.action,
+    checkoutUrl: v.checkoutUrl,
+  } as PlanChangeState;
+}
+function checkoutStatus(v: unknown, id: string): CheckoutStatus {
+  if (
+    !record(v) ||
+    v.checkoutId !== id ||
+    !uuid.test(String(v.subscriptionId)) ||
+    !statuses.includes(String(v.checkoutStatus)) ||
+    ![
+      "pending",
+      "active",
+      "past_due",
+      "suspended",
+      "cancelled",
+      "expired",
+    ].includes(String(v.subscriptionStatus)) ||
+    v.provider !== "paypal" ||
+    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl))
+  )
+    throw new PaymentsError("contract");
+  return {
+    checkoutId: id,
+    subscriptionId: v.subscriptionId,
+    checkoutStatus: v.checkoutStatus,
+    subscriptionStatus: v.subscriptionStatus,
+    provider: v.provider,
+    ...(v.planChange === undefined
+      ? {}
+      : { planChange: planChangeState(v.planChange) }),
+    ...(v.checkoutUrl === undefined ? {} : { checkoutUrl: v.checkoutUrl }),
+  } as CheckoutStatus;
+}
+
+function pendingChangeDetails(
+  v: Record<string, unknown>,
+): Partial<PlanChangeQuote> & Pick<PlanChangeState, "action" | "checkoutUrl"> {
+  const quote = v.kind === undefined ? {} : planChangeQuote(v);
+  if (
+    (v.action !== undefined &&
+      !["approve_subscription", "approve_payment", "none"].includes(
+        String(v.action),
+      )) ||
+    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl))
+  )
+    throw new PaymentsError("contract");
+  return {
+    ...quote,
+    ...(v.action === undefined
+      ? {}
+      : { action: v.action as PlanChangeState["action"] }),
+    ...(v.checkoutUrl === undefined
+      ? {}
+      : { checkoutUrl: v.checkoutUrl as string | null }),
   };
 }

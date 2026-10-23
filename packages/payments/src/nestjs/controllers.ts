@@ -36,6 +36,7 @@ import {
   attemptInput,
   legalContextInput,
   prepareInput,
+  planChangeQuoteInput,
 } from "./validation";
 const MACHINE_KIND = "hemia.payments.machine-kind";
 const machine = (kind: "billing" | "console" | "legal") =>
@@ -119,6 +120,14 @@ export class PaymentsController {
       await this.payments.authorize(request, "subscription.manage"),
     );
   }
+  @Get("subscription/plan-change-quote")
+  @Header("Cache-Control", "no-store")
+  async planChangeQuote(@Req() request: unknown, @Query() input: unknown) {
+    return this.payments.planChangeQuote(
+      await this.payments.authorize(request, "subscription.manage"),
+      planChangeQuoteInput(input),
+    );
+  }
   @Post("subscription/cancel")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
@@ -164,6 +173,15 @@ export class PaymentsController {
     @Param("id") id: string,
   ) {
     return this.payments.getAttempt(
+      await this.payments.authorizeAttempt(request, id),
+      id,
+    );
+  }
+  @Post("checkout-attempts/:id/confirm")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async confirm(@Req() request: unknown, @Param("id") id: string) {
+    return this.payments.confirmAttempt(
       await this.payments.authorizeAttempt(request, id),
       id,
     );
