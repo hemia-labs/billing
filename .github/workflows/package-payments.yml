@@ -4,14 +4,21 @@ on:
   pull_request:
     branches: [develop, main]
   push:
-    branches: [develop, main]
+    branches: [develop]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      preserve-release-artifact:
+        description: Preserve the validated tarball for the release job
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: payments-package-${{ github.event.pull_request.number || github.ref }}
+  group: payments-package-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -48,4 +55,14 @@ jobs:
       - run: bun run --cwd packages/payments build
       - run: bun run --cwd packages/payments test
       - run: bun run --cwd packages/payments test:nest
-      - run: node test/payments/package/check-payments-tarball.mjs
+      - name: Validate the npm tarball
+        env:
+          PAYMENTS_RELEASE_DIR: ${{ inputs.preserve-release-artifact && format('{0}/payments-release', runner.temp) || '' }}
+        run: node test/payments/package/check-payments-tarball.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.preserve-release-artifact
+        with:
+          name: payments-release
+          path: ${{ runner.temp }}/payments-release/
+          if-no-files-found: error
+          retention-days: 7
