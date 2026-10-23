@@ -237,3 +237,25 @@ bun run test:payments:tarball
 The disposable PostgreSQL integration suite is at
 `test/payments/integration/atlas/verify.sh`. Releases use Changesets and a separate
 version PR; see [release operations](https://github.com/hemia-labs/billing/blob/main/docs/payments-release.md).
+
+## Prorated plan changes
+
+`subscriptions.planChangeQuote(subscriptionId, targetPlanCode, targetPlanPriceCode)`
+returns decimal-string `amountDueNow` and `recurringAmount`, `currency`, `kind`,
+`effectiveAt` and `nextBillingAt`. Upgrades require `expectedAmountDueNow` on
+`changePlan` / the Nest attempt request: Billing rejects a newly computed amount
+above this accepted ceiling and freezes the actual authoritative charge.
+
+The Nest adapter exposes authenticated `GET /payments/subscription/plan-change-quote`
+with `targetPlanCode` and `targetPlanPriceCode` query parameters, and
+`POST /payments/checkout-attempts/:id/confirm` after each PayPal approval return.
+Only this POST invokes provider reconciliation and capture. GET attempt polling
+never creates or captures a payment. Follow `planChange.action` and the refreshed
+`checkoutUrl`: `approve_subscription` authorizes the recurring agreement,
+`approve_payment` authorizes the one-time prorated order, and `none` has no
+further approval. Activate access only from canonical license updates.
+
+Publish the SDK release through the existing npm release workflow before pinning
+consuming applications to that release; source changes do not update installed
+`@hemia/payments` packages. Sandbox verification of both approval steps is required
+before enabling the flow in production.

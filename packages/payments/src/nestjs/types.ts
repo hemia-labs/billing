@@ -72,6 +72,7 @@ export type PaymentsAsyncOptions = Pick<ModuleMetadata, "imports"> & {
   ) => PaymentsModuleOptions | Promise<PaymentsModuleOptions>;
 };
 export type CreateCheckoutAttemptInput = {
+  expectedAmountDueNow?: string;
   idempotencyKey: string;
   planCode: string;
   planPriceCode: string;

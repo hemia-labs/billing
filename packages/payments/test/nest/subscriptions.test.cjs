@@ -68,6 +68,7 @@ function fixture() {
       if (sql.includes("request_payload=jsonb_set")) {
         row.request_payload.planChange = JSON.parse(args[5]);
         row.status_checked_at = new Date();
+        if (args[9]) row.checkout_url = args[10];
         return [];
       }
       throw new Error("Unexpected SQL: " + sql);
@@ -268,6 +269,23 @@ test("cross-device resume exposes an approval link only for the canonical checko
     "https://www.sandbox.paypal.com/approve",
   );
   assert.deepEqual(scopes, [{ kind: "user", context: c }]);
+  summary.pendingPlanChange.action = "approve_payment";
+  summary.pendingPlanChange.checkoutUrl =
+    "https://www.sandbox.paypal.com/pay-current-order";
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    summary.pendingPlanChange.checkoutUrl,
+  );
+  summary.pendingPlanChange.checkoutUrl = null;
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    null,
+  );
+  summary.pendingPlanChange.action = "none";
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingPlanChange.checkoutUrl,
+    null,
+  );
 });
 
 test("stale subscription confirmations reject cancellation and change before any provider mutation", async () => {
@@ -304,4 +322,108 @@ test("stale subscription confirmations reject cancellation and change before any
     /Invalid expected subscription/,
   );
   assert.equal(f.row(), null);
+});
+
+test("prorated attempt binds approved amount and only POST confirmation can advance PayPal payment", async () => {
+  const f = fixture();
+  let verifies = 0;
+  const quote = {
+    kind: "upgrade",
+    amountDueNow: "150.00",
+    currency: "MXN",
+    recurringAmount: "600.00",
+    effectiveAt: "2026-10-23T12:00:00Z",
+    nextBillingAt: "2026-11-01T00:00:00Z",
+  };
+  const initialChange = {
+    ...quote,
+    state: "awaiting_approval",
+    action: "approve_subscription",
+    checkoutUrl: "https://www.sandbox.paypal.com/revise",
+  };
+  f.service.client.subscriptions.planChangeQuote = async (id, plan, price) => {
+    assert.equal(id, subscriptionId);
+    assert.equal(plan, "pro");
+    assert.equal(price, "monthly");
+    return quote;
+  };
+  assert.deepEqual(
+    await new PaymentsController(f.service).planChangeQuote(
+      {},
+      { targetPlanCode: "pro", targetPlanPriceCode: "monthly" },
+    ),
+    quote,
+  );
+  f.service.client.subscriptions.changePlan = async (_, input) => {
+    assert.equal(input.expectedAmountDueNow, "150.00");
+    return {
+      checkoutId: randomUUID(),
+      newSubscriptionId: subscriptionId,
+      checkoutUrl: initialChange.checkoutUrl,
+      state: initialChange.state,
+      effectiveAt: quote.effectiveAt,
+      planChange: initialChange,
+    };
+  };
+  const payload = {
+    ...dto,
+    expectedSubscriptionId: subscriptionId,
+    expectedAmountDueNow: "150.00",
+  };
+  const initial = await f.service.createAttempt(c, payload, "change_plan");
+  assert.deepEqual(initial.planChange, initialChange);
+  await assert.rejects(
+    f.service.createAttempt(
+      c,
+      { ...payload, expectedAmountDueNow: "200.00" },
+      "change_plan",
+    ),
+    /IDEMPOTENCY_KEY_REUSED/,
+  );
+  const status = {
+    checkoutId: initial.checkoutId,
+    subscriptionId,
+    checkoutStatus: "created",
+    subscriptionStatus: "pending",
+    planChange: initialChange,
+  };
+  f.service.client.checkout.status = async () => status;
+  f.service.client.checkout.verify = async () => {
+    verifies++;
+    return {
+      ...status,
+      planChange: {
+        ...initialChange,
+        action: "approve_payment",
+        checkoutUrl: "https://www.sandbox.paypal.com/pay",
+      },
+    };
+  };
+  await f.service.getAttempt(c, initial.attemptId);
+  assert.equal(verifies, 0);
+  const paying = await new PaymentsController(f.service).confirm(
+    {},
+    initial.attemptId,
+  );
+  assert.equal(verifies, 1);
+  assert.equal(paying.checkoutUrl, "https://www.sandbox.paypal.com/pay");
+  f.service.client.checkout.verify = async () => ({
+    ...status,
+    planChange: {
+      ...initialChange,
+      state: "effective",
+      action: "none",
+      checkoutUrl: null,
+    },
+  });
+  const done = await f.service.confirmAttempt(c, initial.attemptId);
+  assert.equal(done.planChange.state, "effective");
+  assert.equal(done.checkoutUrl, undefined);
+  await assert.rejects(
+    f.service.confirmAttempt(
+      { ...c, subjectId: randomUUID() },
+      initial.attemptId,
+    ),
+    /not found/,
+  );
 });
