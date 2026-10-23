@@ -1,5 +1,11 @@
 # @hemia/payments
 
+## 0.5.0
+
+### Minor Changes
+
+- 9db58bd: Add server-quoted immediate upgrades with prorated PayPal payments, renewal-time downgrades, accepted amount ceilings, and explicit authenticated plan-change confirmation. Read-only attempt polling preserves payment continuation URLs without creating or capturing purchases.
+
 ## 0.4.1
 
 ### Patch Changes
