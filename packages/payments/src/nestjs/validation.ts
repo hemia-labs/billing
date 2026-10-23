@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import type {
   AcceptLegalInput,
+  CancelSubscriptionRequest,
   CreateCheckoutAttemptInput,
   LegalContextInput,
   PaymentsContext,
@@ -37,6 +38,7 @@ export function attemptInput(v: unknown): CreateCheckoutAttemptInput {
     "planCode",
     "planPriceCode",
     "legalAcceptanceId",
+    "expectedSubscriptionId",
   ]);
   if (
     !uuid(v.idempotencyKey) ||
@@ -44,7 +46,8 @@ export function attemptInput(v: unknown): CreateCheckoutAttemptInput {
     /\s/.test(v.planCode) ||
     !text(v.planPriceCode, 100) ||
     /\s/.test(v.planPriceCode) ||
-    (v.legalAcceptanceId !== undefined && !uuid(v.legalAcceptanceId))
+    (v.legalAcceptanceId !== undefined && !uuid(v.legalAcceptanceId)) ||
+    (v.expectedSubscriptionId !== undefined && !uuid(v.expectedSubscriptionId))
   )
     throw new BadRequestException("Invalid checkout request");
   return v as CreateCheckoutAttemptInput;
@@ -224,4 +227,15 @@ export function webhookInput(v: unknown, product: string) {
     license: l,
     checkouts: v.checkouts,
   };
+}
+
+export function cancellationInput(v: unknown): CancelSubscriptionRequest {
+  exact(v, ["idempotencyKey", "reason", "expectedSubscriptionId"]);
+  if (
+    !uuid(v.idempotencyKey) ||
+    !uuid(v.expectedSubscriptionId) ||
+    (v.reason !== undefined && (!text(v.reason, 500) || !v.reason.trim()))
+  )
+    throw new BadRequestException("Invalid cancellation request");
+  return v as CancelSubscriptionRequest;
 }

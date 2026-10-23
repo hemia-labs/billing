@@ -306,9 +306,145 @@ test("payments-only checkout omits Legal evidence; supplied malformed evidence f
   const { legalAcceptanceId, ...paymentsOnly } = input;
   const client = createPaymentsClient(config);
   await client.checkout.create(paymentsOnly);
-  assert.equal(Object.hasOwn(JSON.parse(calls[1].init.body), 'legalAcceptanceId'), false);
+  assert.equal(
+    Object.hasOwn(JSON.parse(calls[1].init.body), "legalAcceptanceId"),
+    false,
+  );
   const count = calls.length;
-  for (const invalid of [null, '', 'invalid'])
-    await assert.rejects(client.checkout.create({ ...input, legalAcceptanceId: invalid }), { code: 'configuration' });
+  for (const invalid of [null, "", "invalid"])
+    await assert.rejects(
+      client.checkout.create({ ...input, legalAcceptanceId: invalid }),
+      { code: "configuration" },
+    );
   assert.equal(calls.length, count);
+});
+
+const subscriptionSummary = () => ({
+  id,
+  organizationId: id,
+  productCode: config.productCode,
+  planCode: "basic",
+  planPriceCode: "monthly",
+  status: "active",
+  currentPeriodEnd: "2026-12-22T10:00:00.000Z",
+  nextBillingTime: "2026-12-22T10:00:00.000Z",
+  cancelAtPeriodEnd: false,
+  cancellation: null,
+  pendingPlanChange: null,
+});
+test("subscription management uses its exact scope, native subscription routes and sanitized product-bound summaries", async () => {
+  const calls = mock(() =>
+    Response.json({
+      ...subscriptionSummary(),
+      providerSubscriptionId: "private-provider-id",
+    }),
+  );
+  const client = createPaymentsClient(config);
+  assert.deepEqual(
+    await client.subscriptions.current(id),
+    subscriptionSummary(),
+  );
+  assert.match(calls[1].url, /api\/v1\/billing\/subscriptions\/current/);
+  assert.equal(calls[0].init.body.get("scope"), "billing.subscriptions.manage");
+  await client.subscriptions.cancel(id, {
+    idempotencyKey: "cancel-once",
+    actorUserId: id,
+    reason: "Requested by owner",
+  });
+  assert.match(calls[2].url, /billing\/subscriptions\/[^/]+\/cancel$/);
+  assert.deepEqual(JSON.parse(calls[2].init.body), {
+    idempotencyKey: "cancel-once",
+    actorUserId: id,
+    reason: "Requested by owner",
+  });
+  mock(() =>
+    Response.json({
+      ...subscriptionSummary(),
+      organizationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {
+    code: "contract",
+  });
+  mock(() => Response.json({}, { status: 404 }));
+  assert.equal(
+    await createPaymentsClient(config).subscriptions.current(id),
+    null,
+  );
+  mock(() => Response.json({}, { status: 403 }));
+  await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {
+    status: 403,
+  });
+});
+test("plan changes bind actor and target without creating a second contract and validate canonical state", async () => {
+  const changed = {
+    subscription: subscriptionSummary(),
+    checkoutId: id,
+    newSubscriptionId: id,
+    checkoutUrl: checkout.checkoutUrl,
+    targetPlanCode: input.planCode,
+    effectiveAt: "2026-12-22T10:00:00.000Z",
+    state: "awaiting_approval",
+  };
+  const calls = mock(() => Response.json(changed));
+  assert.deepEqual(
+    await createPaymentsClient(config).subscriptions.changePlan(id, input),
+    changed,
+  );
+  assert.match(calls[1].url, /subscriptions\/[^/]+\/change-plan$/);
+  const payload = JSON.parse(calls[1].init.body);
+  assert.equal(payload.actorUserId, input.userId);
+  assert.equal(payload.targetPlanPriceCode, input.planPriceCode);
+  assert.equal(payload.legalAcceptanceId, input.legalAcceptanceId);
+  assert.equal(payload.organizationId, undefined);
+  mock(() =>
+    Response.json({ ...changed, checkoutUrl: "https://attacker.test/pay" }),
+  );
+  await assert.rejects(
+    createPaymentsClient(config).subscriptions.changePlan(id, input),
+    { code: "contract" },
+  );
+  mock(() =>
+    Response.json({
+      checkoutId: id,
+      subscriptionId: id,
+      checkoutStatus: "approved",
+      subscriptionStatus: "active",
+      provider: "paypal",
+      planChange: { state: "scheduled", effectiveAt: changed.effectiveAt },
+    }),
+  );
+  assert.deepEqual(
+    (await createPaymentsClient(config).checkout.status(id)).planChange,
+    { state: "scheduled", effectiveAt: changed.effectiveAt },
+  );
+});
+
+test("a canonically accepted revision recovers a lost approval URL using only the exact validated success return", async () => {
+  const response = {
+    subscription: subscriptionSummary(),
+    checkoutId: id,
+    newSubscriptionId: id,
+    checkoutUrl: config.successUrl,
+    targetPlanCode: input.planCode,
+    effectiveAt: "2026-12-22T10:00:00.000Z",
+    state: "scheduled",
+  };
+  mock(() => Response.json(response));
+  assert.equal(
+    (await createPaymentsClient(config).subscriptions.changePlan(id, input))
+      .checkoutUrl,
+    config.successUrl,
+  );
+  for (const invalid of [
+    { ...response, state: "awaiting_approval" },
+    { ...response, checkoutUrl: config.successUrl + "?unexpected=1" },
+    { ...response, checkoutUrl: "https://attacker.test/pay" },
+  ]) {
+    mock(() => Response.json(invalid));
+    await assert.rejects(
+      createPaymentsClient(config).subscriptions.changePlan(id, input),
+      { code: "contract" },
+    );
+  }
 });

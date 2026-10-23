@@ -32,6 +32,7 @@ import {
 } from "./types";
 import {
   acceptInput,
+  cancellationInput,
   attemptInput,
   legalContextInput,
   prepareInput,
@@ -111,6 +112,39 @@ export class PaymentsController {
       await this.payments.authorize(request, "plans.read"),
     );
   }
+  @Get("subscription") @Header("Cache-Control", "no-store") async subscription(
+    @Req() request: unknown,
+  ) {
+    return this.payments.getSubscription(
+      await this.payments.authorize(request, "subscription.manage"),
+    );
+  }
+  @Post("subscription/cancel")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async cancelSubscription(@Req() request: unknown, @Body() input: unknown) {
+    return this.payments.cancelSubscription(
+      await this.payments.authorize(request, "subscription.manage"),
+      cancellationInput(input),
+    );
+  }
+  @Post("subscription/change-plan")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async changePlan(
+    @Req() request: unknown,
+    @Body() input: unknown,
+    @Res({ passthrough: true }) response: ResponseStatus,
+  ) {
+    return receipt(
+      await this.payments.createAttempt(
+        await this.payments.authorize(request, "subscription.manage"),
+        attemptInput(input),
+        "change_plan",
+      ),
+      response,
+    );
+  }
   @Post("checkout-attempts")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
@@ -130,7 +164,7 @@ export class PaymentsController {
     @Param("id") id: string,
   ) {
     return this.payments.getAttempt(
-      await this.payments.authorize(request, "checkout.manage"),
+      await this.payments.authorizeAttempt(request, id),
       id,
     );
   }
@@ -144,7 +178,7 @@ export class PaymentsController {
   ) {
     return receipt(
       await this.payments.retryAttempt(
-        await this.payments.authorize(request, "checkout.manage"),
+        await this.payments.authorizeAttempt(request, id),
         id,
       ),
       response,
