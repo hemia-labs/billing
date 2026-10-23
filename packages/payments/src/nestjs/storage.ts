@@ -3,7 +3,7 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { EntityManager } from "typeorm";
+import type { EntityManager, DataSource } from "typeorm";
 import {
   PAYMENTS_OPTIONS,
   type PaymentsRuntimeOptions,
@@ -29,7 +29,14 @@ export type AttemptRow = {
 @Injectable()
 export class PaymentsStorage {
   constructor(
-    @Inject(PAYMENTS_OPTIONS) private readonly options: PaymentsRuntimeOptions,
+    @Inject(PAYMENTS_OPTIONS)
+    private readonly options: PaymentsRuntimeOptions & {
+      dataSource: DataSource;
+      scopeTransaction?: (
+        manager: EntityManager,
+        scope: PaymentsTransactionScope,
+      ) => Promise<void>;
+    },
   ) {}
   transaction<T>(
     scope: PaymentsTransactionScope,

@@ -26,19 +26,6 @@ jobs:
     name: Payments package
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:18.4
-        env:
-          POSTGRES_DB: payments_receipt_test
-          POSTGRES_PASSWORD: isolated-receipt-only
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d payments_receipt_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -68,11 +55,8 @@ jobs:
       - run: bun run --cwd packages/payments build
       - run: bun run --cwd packages/payments test
       - run: bun run --cwd packages/payments test:nest
-      - name: Verify plan change receipts against PostgreSQL
-        env:
-          PAYMENTS_RECEIPT_PG_PORT: '5432'
-          NODE_PATH: apps/api/node_modules
-        run: node --test test/payments/integration/plan-change-receipt.test.cjs
+      - name: Verify Node and Nest with optional MySQL and PostgreSQL copies
+        run: bash test/payments/integration/database-optional/verify.sh
       - name: Validate the npm tarball
         env:
           PAYMENTS_RELEASE_DIR: ${{ inputs.preserve-release-artifact && format('{0}/payments-release', runner.temp) || '' }}

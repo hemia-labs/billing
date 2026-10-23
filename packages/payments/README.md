@@ -1,261 +1,166 @@
 # @hemia/payments
 
-Connect your backend to Hemia Billing to list plans, start checkout, manage
-subscriptions and check paid access. Billing handles payment providers; your
-application handles its users, permissions and UI.
+Server-side payment integration for Node.js and NestJS. Billing owns durable payment attempts, subscriptions, provider operations, and licenses. Consumers do **not** need a database, TypeORM, PostgreSQL, MySQL, a local payments schema, or a webhook to purchase and manage plans.
 
-Choose the integration that fits your backend:
+Keep the client secret on the server. Browser code calls its own backend with its authenticated session and CSRF protection. The backend derives organization and buyer identity; never trust browser-supplied identities.
 
-| Import | Use it for |
-| --- | --- |
-| `@hemia/payments` | A server-side client for any Node.js backend. |
-| `@hemia/payments/nestjs` | Ready-to-use NestJS routes, stored checkout attempts and license webhooks. Requires PostgreSQL and your existing TypeORM DataSource. |
+## Install
 
-## 1. Install
+Install `@hemia/payments` and its `@hemia/auth` peer. For the Nest adapter, use the host's NestJS11, reflect-metadata, and RxJS7. TypeORM remains an optional peer solely for the historical migration export; the active Node and Nest integrations do not import or initialize it.
 
-Requires Node.js **20.19 or later**.
-
-```sh
-npm install @hemia/payments @hemia/auth@^1.1.0
-```
-
-For the NestJS integration, your application also needs NestJS 11, TypeORM
-(`>=0.3.0 <2`), `reflect-metadata` and `rxjs`. These are optional peers and are
-not loaded by the core import.
-
-## 2. Configure in Console
-
-Before connecting the SDK:
-
-1. In Billing, publish a plan with an active price and payment-provider mapping.
-2. In Console, select your backend client, product and payment functions. Set the
-   authorized organizations, checkout return URLs and backend base URL, including
-   its API prefix (for example, `https://api.example.com/api`). Enable subscription
-   management if your application needs plan changes or cancellation.
-3. Copy the generated `PAYMENTS_CONNECTION` JSON into your backend configuration.
-   Load `HEMIA_CLIENT_SECRET` separately from your existing secret provider.
-
-Keep both values on the server. Use the connection for the environment you are
-running; do not build its service URLs, audiences or scopes by hand.
-
-## 3. Connect your backend
-
-### Any Node.js backend
+## Node.js
 
 ```ts
 import { createPaymentsClient } from '@hemia/payments';
 
 const payments = createPaymentsClient({
-  ...JSON.parse(process.env.PAYMENTS_CONNECTION!),
-  clientSecret: process.env.HEMIA_CLIENT_SECRET!,
+  ...connectionFromConsole,
+  clientSecret: secretFromYourServer,
 });
 
 const plans = await payments.catalog.listPlans();
+const idempotencyKey = crypto.randomUUID();
+// This UUID is also the durable attemptId, known even if the first response is lost.
+const attempt = await payments.attempts.create({
+  idempotencyKey,
+  organizationId: verifiedOrganizationId,
+  userId: verifiedUserId,
+  operation: 'checkout',
+  planCode: selectedPlanCode,
+  planPriceCode: selectedPriceCode,
+  successUrl: `https://product.example/payments/success?attemptId=${idempotencyKey}`,
+  cancelUrl: `https://product.example/payments/cancel?attemptId=${idempotencyKey}`,
+});
 ```
 
-Call this client from your authorized backend handlers. Derive organization and
-user IDs from the authenticated session, rather than trusting browser input.
+All example identifiers come from the host application or Billing's catalog. Return URLs must use configured permitted origins. All money amounts are decimal strings.
 
-| Method | Purpose |
-| --- | --- |
-| `catalog.listPlans()` | Read plans, prices and benefits. |
-| `checkout.create(input)` | Start a purchase with a persisted idempotency key. |
-| `checkout.status(checkoutId)` | Read a checkout's status. |
-| `subscriptions.current(organizationId)` | Read the current subscription, or `null` if there is none. |
-| `subscriptions.changePlan(subscriptionId, input)` | Request a plan change. |
-| `subscriptions.cancel(subscriptionId, input)` | Request cancellation. |
-| `licenses.resolve(organizationId)` | Check paid access for the configured product. |
+```ts
+const buyer = { organizationId: verifiedOrganizationId, userId: verifiedUserId };
+await payments.attempts.get(idempotencyKey, buyer);      // Read only; never captures.
+await payments.attempts.retry(idempotencyKey, buyer);    // Replays Billing's frozen intent.
+await payments.attempts.confirm(idempotencyKey, buyer);  // Explicit plan-change continuation.
+const license = await payments.licenses.resolve(verifiedOrganizationId);
+const subscription = await payments.subscriptions.current(verifiedOrganizationId);
+```
 
-Checkout input includes `organizationId`, `userId`, `planCode`, `planPriceCode`
-and `idempotencyKey`. Both `successUrl` and `cancelUrl` must be present in the
-connection or supplied in the request. See the exported TypeScript types for the
-full method signatures.
+An interrupted create is recovered with its known UUID. Retry the same key and body; changing the payload under the same key is a conflict. The SDK does not create local attempts or recreate a purchase from a GET. `ready` means a provider receipt exists, not that paid access has been granted. Confirm access from Billing's license and the exact effective plan/subscription.
 
-### NestJS with PostgreSQL
+Core `checkout.create/status/verify` and `subscriptions.changePlan` remain low-level APIs. Prefer `attempts` for durable creation/recovery. Core types and `CheckoutAttemptResponse` are exported from the main entry point; no framework is required.
 
-Register the module in your application. The configuration and authentication
-services below are your application's existing services; their method names are
-illustrative.
+## NestJS without a database
 
 ```ts
 import { PaymentsModule } from '@hemia/payments/nestjs';
 
 PaymentsModule.forRootAsync({
-  imports: [ConfigModule, AuthModule],
-  inject: [ConfigService, AuthService],
-  useFactory: (config, auth) => ({
-    connection: config.getOrThrow('PAYMENTS_CONNECTION'),
-    clientSecret: config.getOrThrow('HEMIA_CLIENT_SECRET'),
-    authorize: (request, operation) => auth.authorizePayments(request, operation),
+  inject: [ApplicationAuthorization],
+  useFactory: (authorization) => ({
+    connection: connectionFromConsole, // object or Console JSON
+    clientSecret: secretFromYourServer,
+    authorize: (request, operation) => authorization.paymentsContext(request, operation),
+    returnUrls: async (context, attemptId) => ({
+      successUrl: `https://product.example/payments/success?attemptId=${attemptId}`,
+      cancelUrl: `https://product.example/payments/cancel?attemptId=${attemptId}`,
+    }),
   }),
 });
 ```
 
-The `authorize` callback must check the session, active membership, permissions
-and any required MFA, then return:
+The host callback must authenticate the session, active organization/membership and required permission/MFA, then return `{organizationId, subjectId, sessionId?, membershipId?}`. Operations are `plans.read`, `checkout.manage`, `subscription.manage`, `license.read`, and `legal.accept`. The host keeps its CSRF policy. Recognize `SERVICE_AUTHENTICATED_METADATA` only for service callbacks protected by the SDK's OAuth guard.
+
+The adapter exposes these routes relative to the host's HTTP prefix:
+
+| Method and path | Use |
+| --- | --- |
+| GET `/payments/ready` | Reports adapter readiness; does not run migrations or prove remote availability. |
+| GET `/payments/plans` | Product catalog. |
+| POST `/payments/checkout-attempts` | `{idempotencyKey,planCode,planPriceCode,legalAcceptanceId?}`. |
+| GET `/payments/checkout-attempts/:id` | Buyer-bound central status. |
+| POST `/payments/checkout-attempts/:id/retry` | Retry central intent; no request body. |
+| POST `/payments/checkout-attempts/:id/confirm` | Explicit plan-change continuation; no request body. |
+| GET `/payments/subscription` | Current commercial subscription or null. |
+| GET `/payments/subscription/plan-change-quote` | Query `targetPlanCode` and `targetPlanPriceCode`. |
+| POST `/payments/subscription/change-plan` | Attempt input plus `expectedSubscriptionId` and quoted `expectedAmountDueNow` for upgrades. |
+| POST `/payments/subscription/cancel` | `{idempotencyKey,expectedSubscriptionId,reason?}`. |
+| GET `/payments/license` | Live authoritative license, without consulting a local database. |
+
+Create/change/retry return200 for a ready attempt,202 with `Retry-After` for pending/processing, and422 for rejected attempts. GET and confirm return the central receipt with normal200 handling. Check the response state and `statusFresh`; HTTP200 alone does not confirm a payment. Remote failures are errors, never stale implicit grants.
+
+`/payments/access`, free trials, fiscal/business guards and local business limits are host features, not mandatory SDK tables or routes.
+
+## Immediate upgrades and renewal-time downgrades
+
+Get a quote using `subscriptions.planChangeQuote(id, targetPlanCode, targetPlanPriceCode)`. For an upgrade, create a `change_plan` attempt with the current `expectedSubscriptionId` and `expectedAmountDueNow` as the accepted ceiling. Billing computes the actual charge, freezes the intent, and rejects an increased amount without new approval. It supports same-currency/same-interval price changes.
+
+After each PayPal approval return, explicitly confirm the attempt. `planChange.action` determines the next step:
+
+- `approve_subscription`: approve the revised recurring agreement.
+- `approve_payment`: approve the one-time prorated order. A null URL means an explicit confirmation is still needed to prepare/reconcile the next step.
+- `none`: no additional provider approval. Read `state` to distinguish scheduled, effective, or failed.
+
+A canonical null URL or terminal action must not fall back to an old agreement link. Upgrades become effective after payment confirmation; future renewals stay on the new plan. Downgrades preserve the paid plan until the next renewal. Confirm the resulting license before enabling new benefits.
+
+## Optional local synchronization: any host persistence
+
+Local copies and webhooks are optional. The default is to read Billing remotely. If a product wants a copy, supply one atomic callback. It can use MySQL, PostgreSQL or any store supporting an atomic revision comparison; the SDK does not select a driver or execute SQL.
 
 ```ts
-type AuthorizedContext = {
-  organizationId: string;
-  subjectId: string;
-  sessionId?: string;
-  membershipId?: string;
-};
+import { createPaymentsReceiver, snapshotAccess } from '@hemia/payments';
+
+const receiver = createPaymentsReceiver(config, {
+  onSnapshot: async (snapshot) => repository.applyIfNewer(snapshot),
+});
+
+// In a backend route: map headers, keep raw secrets out of logs.
+await receiver.receive({
+  authorization: request.headers.authorization,
+  timestamp: request.headers['x-billing-timestamp'],
+}, request.body);
+
+// Explicit pull/resynchronization, even without a webhook:
+const { snapshot } = await receiver.synchronize(verifiedOrganizationId);
+const access = snapshotAccess(snapshot);
 ```
 
-Supported operations are `plans.read`, `checkout.manage`, `subscription.manage`,
-`license.read` and `legal.accept`. Keep your CSRF/origin protection on user
-mutation routes. The SDK derives user and organization identity from this
-callback, not from the checkout body.
+`PaymentSnapshot` contains `{organizationId,productCode,revision,confirmedAt,license,subscription}`. Revision is a positive decimal string. The callback must atomically compare the saved revision for **both organization and product**, replace the whole snapshot only for a greater revision, and return `{applied:boolean}`. Never overwrite a newer copy or refresh `confirmedAt` on duplicate delivery. A storage failure must throw so Billing retries delivery. Persistence is not in the payment create/confirm path, so a copy failure cannot create a second purchase.
 
-The module reuses your exported default `DataSource`. Import your database module
-if it is not global, or pass `dataSource` explicitly for a named connection.
-Register `PaymentsSchema1792886400000` from `@hemia/payments/nestjs` in your
-TypeORM migration list and run your normal migration command **before deployment**.
-The module never starts a database connection or runs migrations for you.
+`snapshotAccess(null)` reports `not_confirmed`. A saved snapshot grants access only while both its license validity and a fixed24-hour confirmation window remain valid; expired copies do not grant indefinitely. Use the original central `confirmedAt`, not local read time. A pull fetches a new central snapshot and applies the same callback. `payments.snapshots.current(org)` returns a validated snapshot without storing it.
 
-## Checkout flow
+Node receiver methods: `receive`, `probe`, `verifyConsole`, `verifyLegal`, `synchronize`. Signature/JWKS and live Identity introspection are both checked. Billing callbacks require `Authorization: Bearer ...` and `x-billing-timestamp` within five minutes. No HMAC secret is used. The receiver validates the configured service client, audience and scope.
 
-For NestJS, call these routes under your application's API prefix:
+For Nest, pass the same optional `onSnapshot` callback to `PaymentsModule.forRootAsync`. Without it, license delivery/probe routes return404; no local receiver is advertised. With it, GET/POST `/payments/webhooks/license` receive authenticated snapshots. Console's GET `/payments/integration-status` remains available and reports whether synchronization is configured.
 
-| Route | Purpose |
-| --- | --- |
-| `GET /payments/plans` | List plans and prices. |
-| `POST /payments/checkout-attempts` | Start a purchase. |
-| `GET /payments/checkout-attempts/:id` | Read the stored attempt and refresh its status. |
-| `POST /payments/checkout-attempts/:id/retry` | Retry the same stored request. |
-| `GET /payments/license` | Read the local paid-access result. |
+## Optional Legal in Node or Nest
 
-1. Let the user choose a plan and price.
-2. Create and persist one UUID idempotency key for that purchase attempt. Send
-   `{ idempotencyKey, planCode, planPriceCode }` to the checkout route.
-3. Save the returned `attemptId`. When `status` is `ready`, redirect to
-   `checkoutUrl`. For `pending` or `processing`, respect `Retry-After` and read the
-   attempt again. These responses use HTTP 202; rejected attempts use HTTP 422.
-4. After the return redirect, check `/payments/license` before granting access.
-   A successful redirect or provider approval alone does not confirm paid access.
+```ts
+import { createPaymentsLegalClient } from '@hemia/payments';
 
-The core client does not persist attempts; your application must store the
-request and key. The NestJS integration stores them in PostgreSQL. Neither
-integration automatically retries purchase requests: after a timeout, explicitly
-retry the same attempt instead of creating a new key.
-
-## Plan changes and cancellation
-
-Subscription management requires Console to grant
-`billing.subscriptions.manage`. With NestJS, authorize `subscription.manage` and
-use these routes:
-
-| Route | Purpose |
-| --- | --- |
-| `GET /payments/subscription` | Read the plan, billing dates and pending changes. |
-| `POST /payments/subscription/change-plan` | Send checkout-attempt fields plus `expectedSubscriptionId`. |
-| `POST /payments/subscription/cancel` | Send `{ idempotencyKey, expectedSubscriptionId, reason? }`. |
-
-Use the current subscription ID as `expectedSubscriptionId`. The SDK rejects a
-stale confirmation if the subscription changed while the user was deciding.
-
-Plan changes use the existing PayPal agreement and apply at the next paid cycle.
-If approval is required, follow the returned checkout URL and read the attempt
-again. Display the returned `pendingPlanChange.state` and `effectiveAt`; an
-existing active license does not prove the new plan is effective.
-
-For cancellation, display `cancellation.state`, `cancellation.effectiveAt` and
-`currentPeriodEnd`. A pending request is not yet a scheduled cancellation. Once
-scheduled, the subscription keeps its paid access through the period end without
-renewing. Use `nextBillingTime` for renewal dates, and the license result to decide
-whether access is currently allowed. Trials remain your application's responsibility.
-
-## Optional: Hemia Legal
-
-Skip this section if your application manages documents itself. Omit
-`legalAcceptanceId` from checkout and leave the module's `legal` option unset.
-
-To use Hemia Legal:
-
-1. Publish your documents and acceptance rules in Legal.
-2. Select the collector, application, documents and source identity namespace in
-   Console. The namespace must match your application's identity contract.
-3. Add `legal: { resolveContext }` to the module options. Your callback checks the
-   current user, membership, MFA and permission to contract. The SDK reads Legal
-   endpoints from `connection.legal`.
-4. Use `POST /payments/legal/prepare` to load the documents, show them to the user,
-   then call `POST /payments/legal/accept` with their explicit confirmations.
-   Pass the returned acceptance ID as `legalAcceptanceId` when creating checkout.
-
-Legal routes return 404 when disabled. Billing validates every supplied acceptance,
-including one obtained outside this module. Never fabricate an acceptance ID.
-
-## Webhooks and operations
-
-Console configures the standard receiver and verification routes from your backend
-base URL. The NestJS module exposes:
-
-| Route | Purpose |
-| --- | --- |
-| `GET/POST /payments/webhooks/license` | Authenticated receiver probe and license updates. |
-| `GET /payments/integration-status` | Console-authenticated connection check. |
-| `GET /payments/ready` | Check the installed schema without migrating it. |
-| `POST /payments/legal/context` | Authenticated Legal context callback, when enabled. |
-
-Machine routes require the configured receiver, valid token signature, exact
-client/audience/scope and current token introspection. License webhooks also
-require a fresh timestamp. The SDK rejects older license updates; the local
-license check enforces expiry and a 24-hour confirmation freshness limit.
-
-<details>
-<summary>Advanced configuration</summary>
-
-- NestJS `connection` accepts JSON or an object. Use `returnUrls(context, attemptId)`
-  for dynamic return paths within the configured origins.
-- `allowHttpLoopback` works only outside production. Timeouts default to five
-  seconds and are capped at 30 seconds. Errors expose sanitized `code`, optional
-  HTTP `status` and bounded `retryAfterSeconds`.
-- The migration creates `payments_checkout_attempts`, `payments_licenses` and
-  `payments_apply_license`. Configure runtime grants and any RLS policies in your
-  own migrations. Grant function execution only to the intended runtime role;
-  never expose these tables to browser clients. `scopeTransaction` supports
-  transaction-local database roles.
-- `SERVICE_AUTHENTICATED_METADATA` marks machine routes for host guards. The SDK
-  still verifies their service tokens. Catalog-only setup needs no receiver;
-  machine routes fail closed until one is configured.
-
-</details>
-
-## Development and releases
-
-From the Billing repository, build and test the package with:
-
-```sh
-bun run --cwd packages/payments typecheck
-bun run --cwd packages/payments build
-bun run --cwd packages/payments test
-bun run --cwd packages/payments test:nest
-bun run test:payments:tarball
+const legal = createPaymentsLegalClient(config);
+const prepared = await legal.prepare(verifiedContext, crypto.randomUUID());
+const accepted = await legal.accept(verifiedContext, {
+  requestId: prepared.requestId,
+  idempotencyKey: crypto.randomUUID(),
+  confirmations: prepared.documents.map(d => ({
+    documentVersionId: d.documentVersionId,
+    contentHash: d.contentHash,
+    accepted: true,
+  })),
+});
 ```
 
-The disposable PostgreSQL integration suite is at
-`test/payments/integration/atlas/verify.sh`. Releases use Changesets and a separate
-version PR; see [release operations](https://github.com/hemia-labs/billing/blob/main/docs/payments-release.md).
+`verifiedContext` includes organizationId, subjectId and sessionId from the host session. Render and obtain explicit consent before sending confirmations; the snippet constructs the payload only. Identity-source IDs, request IDs and evidence IDs come from Legal. Omit `legalAcceptanceId` when Legal is not used; do not send an empty string.
 
-## Prorated plan changes
+Node context callbacks combine `receiver.verifyLegal(headers)` and `legal.resolveContext(input)` with the host's configured `resolveContext`. Nest enables Legal only when `legal: {resolveContext}` is supplied and Console's Legal connection is complete. Routes: POST `/payments/legal/prepare`, `/accept`, `/context`. The callback recomputes current membership/contracting authority; it does not revive an expired buyer session.
 
-`subscriptions.planChangeQuote(subscriptionId, targetPlanCode, targetPlanPriceCode)`
-returns decimal-string `amountDueNow` and `recurringAmount`, `currency`, `kind`,
-`effectiveAt` and `nextBillingAt`. Upgrades require `expectedAmountDueNow` on
-`changePlan` / the Nest attempt request: Billing rejects a newly computed amount
-above this accepted ceiling and freezes the actual authoritative charge.
+## Service scopes
 
-The Nest adapter exposes authenticated `GET /payments/subscription/plan-change-quote`
-with `targetPlanCode` and `targetPlanPriceCode` query parameters, and
-`POST /payments/checkout-attempts/:id/confirm` after each PayPal approval return.
-Only this POST invokes provider reconciliation and capture. GET attempt polling
-never creates or captures a payment. Follow `planChange.action` and the refreshed
-`checkoutUrl`: `approve_subscription` authorizes the recurring agreement,
-`approve_payment` authorizes the one-time prorated order, and `none` has no
-further approval. Activate access only from canonical license updates.
+Core read/create scopes: `billing.integration.catalog.read`, `billing.integration.checkout.create`, `billing.integration.checkout.read`, `billing.integration.licenses.read`. Change-plan creation/retry additionally need `billing.subscriptions.manage`; explicit confirmation uses that scope. Full snapshots additionally require subscription management because they include subscription details. Console must authorize these functions per product/organization.
 
-Publish the SDK release through the existing npm release workflow before pinning
-consuming applications to that release; source changes do not update installed
-`@hemia/payments` packages. Sandbox verification of both approval steps is required
-before enabling the flow in production.
+Legal outgoing scopes are `legal.integration.acceptances.prepare` and `.create`. Inbound scopes are `billing.webhooks.deliver`, `billing.connections.check`, and `legal.consumer_context.read`, from the configured Billing/Console/Legal clients respectively.
+
+## Existing local-schema installations
+
+`PaymentsSchema1792886400000` remains exported from `@hemia/payments/nestjs` for already-applied migration histories. The module no longer requires it, a DataSource, `scopeTransaction`, or legacy local payments tables. Do not delete existing tables or edit an applied migration just to update the SDK. Historical migrations and their owners/grants remain the host's responsibility; new consumers do not run them.
+
+Publishing this SDK does not deploy Billing's central payment-attempt/snapshot APIs. Deploy and test the matching Billing version before upgrading a consumer. Test PayPal approvals and authenticated callbacks in Sandbox before enabling purchases in production.

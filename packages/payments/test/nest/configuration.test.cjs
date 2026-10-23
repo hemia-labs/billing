@@ -33,7 +33,7 @@ function configured(value) {
     .useFactory();
 }
 
-test("Nest resolves host DataSource and JSON connection while preserving factory dependency injection", async () => {
+test("Nest ignores an unrelated host database and preserves factory dependency injection", async () => {
   class DatabaseModule {}
   Global()(DatabaseModule);
   Module({
@@ -64,7 +64,7 @@ test("Nest resolves host DataSource and JSON connection while preserving factory
   try {
     const options = app.get(PaymentsService).options;
     assert.deepEqual(options.connection, connection);
-    assert.equal(options.dataSource, dataSource);
+    assert.equal(options.dataSource, undefined);
     assert.equal(options.clientSecret, "test-secret");
     assert.equal(options.legal, undefined);
   } finally {
@@ -97,7 +97,7 @@ test("explicit DataSource supports hosts without a default database provider", a
   }
 });
 
-test("missing database, authorization and malformed connection fail with safe configuration diagnostics", async () => {
+test("missing authorization and malformed connection fail, while a database is optional", async () => {
   const base = {
     connection,
     clientSecret: "private-secret",
@@ -126,9 +126,9 @@ test("missing database, authorization and malformed connection fail with safe co
       },
     );
   }
-  await assert.rejects(
-    configured({ ...base, dataSource: undefined }),
-    /host TypeORM DataSource/,
+  assert.equal(
+    (await configured({ ...base, dataSource: undefined })).dataSource,
+    undefined,
   );
   await assert.rejects(
     configured({ ...base, authorize: undefined }),
