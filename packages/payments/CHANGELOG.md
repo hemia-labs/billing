@@ -1,5 +1,12 @@
 # @hemia/payments
 
+## 0.4.1
+
+### Patch Changes
+
+- a2ae167: Clarify the English README with a step-by-step setup guide, separate Node.js and
+  NestJS integration paths, and concise checkout, subscription and webhook references.
+
 ## 0.4.0
 
 ### Minor Changes
