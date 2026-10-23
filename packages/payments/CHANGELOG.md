@@ -1,5 +1,11 @@
 # @hemia/payments
 
+## 0.5.1
+
+### Patch Changes
+
+- 6e352c3: Preserve PostgreSQL checkout receipts when plan changes no longer require approval, hide obsolete approval links, and retain timestamp precision when refreshing payment status.
+
 ## 0.5.0
 
 ### Minor Changes
