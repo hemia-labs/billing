@@ -53,6 +53,7 @@ export type CreateCheckoutAttemptInput = {
   expectedSubscriptionId?: string;
 };
 export type CheckoutAttemptResponse = {
+  provider?: string;
   attemptId: string;
   operation?: "checkout" | "change_plan";
   status: "pending" | "processing" | "ready" | "rejected";

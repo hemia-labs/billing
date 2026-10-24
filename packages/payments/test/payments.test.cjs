@@ -58,7 +58,7 @@ test("one product config, exact scopes, safe checkout, same key on explicit retr
   assert.equal(token.get("audience"), "billing-api");
   const payload = JSON.parse(calls[1].init.body);
   assert.equal(payload.productCode, "second-product");
-  assert.equal(payload.provider, "paypal");
+  assert.equal(Object.hasOwn(payload, "provider"), false);
   assert.equal(payload.idempotencyKey, input.idempotencyKey);
   assert.equal(calls[1].init.body, calls[2].init.body);
   assert.equal(calls[1].init.redirect, "error");
@@ -179,7 +179,7 @@ test("rejects browser execution, unsafe config, cross-origin returns and malform
     { code: "configuration" },
   );
   const calls = mock(() =>
-    Response.json({ ...checkout, checkoutUrl: "https://attacker.test/pay" }),
+    Response.json({ ...checkout, checkoutUrl: "http://attacker.test/pay" }),
   );
   await assert.rejects(
     createPaymentsClient(config).checkout.create({
@@ -378,10 +378,11 @@ test("subscription management uses its exact scope, native subscription routes a
 });
 test("plan changes bind actor and target without creating a second contract and validate canonical state", async () => {
   const changed = {
+    provider: "configured_provider",
     subscription: subscriptionSummary(),
     checkoutId: id,
     newSubscriptionId: id,
-    checkoutUrl: checkout.checkoutUrl,
+    checkoutUrl: "https://checkout.configured-provider.test/revise",
     targetPlanCode: input.planCode,
     effectiveAt: "2026-12-22T10:00:00.000Z",
     state: "awaiting_approval",
@@ -398,7 +399,7 @@ test("plan changes bind actor and target without creating a second contract and 
   assert.equal(payload.legalAcceptanceId, input.legalAcceptanceId);
   assert.equal(payload.organizationId, undefined);
   mock(() =>
-    Response.json({ ...changed, checkoutUrl: "https://attacker.test/pay" }),
+    Response.json({ ...changed, checkoutUrl: "http://attacker.test/pay" }),
   );
   await assert.rejects(
     createPaymentsClient(config).subscriptions.changePlan(id, input),
@@ -439,7 +440,7 @@ test("a canonically accepted revision recovers a lost approval URL using only th
   for (const invalid of [
     { ...response, state: "awaiting_approval" },
     { ...response, checkoutUrl: config.successUrl + "?unexpected=1" },
-    { ...response, checkoutUrl: "https://attacker.test/pay" },
+    { ...response, checkoutUrl: "http://attacker.test/pay" },
   ]) {
     mock(() => Response.json(invalid));
     await assert.rejects(
@@ -449,7 +450,7 @@ test("a canonically accepted revision recovers a lost approval URL using only th
   }
 });
 
-test("quotes retain decimal amounts and confirmation is an explicit POST with validated PayPal continuation", async () => {
+test("quotes retain decimal amounts and confirmation is an explicit POST with validated provider continuation", async () => {
   const quote = {
     kind: "upgrade",
     amountDueNow: "150.01",
@@ -498,7 +499,10 @@ test("quotes retain decimal amounts and confirmation is an explicit POST with va
       checkoutStatus: "created",
       subscriptionStatus: "pending",
       provider: "paypal",
-      planChange: { ...change, checkoutUrl: "https://attacker.test/approve" },
+      planChange: {
+        ...change,
+        checkoutUrl: "https://credentials@checkout.example/approve",
+      },
     }),
   );
   await assert.rejects(createPaymentsClient(config).checkout.verify(id), {
@@ -545,7 +549,7 @@ test("subscription summaries preserve validated pending upgrade amounts and null
       ...subscriptionSummary(),
       pendingPlanChange: {
         ...pending,
-        checkoutUrl: "https://attacker.test/pay",
+        checkoutUrl: "http://attacker.test/pay",
       },
     }),
   );
