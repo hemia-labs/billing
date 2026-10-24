@@ -1,5 +1,11 @@
 # @hemia/payments
 
+## 0.7.0
+
+### Minor Changes
+
+- 9ecf45e: Let Billing choose the payment provider. Remove provider selection from checkout requests, retain optional provider metadata, and validate provider-neutral HTTPS approval URLs without requiring provider setup in consumers.
+
 ## 0.6.0
 
 ### Minor Changes
