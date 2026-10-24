@@ -10,6 +10,7 @@ export * from "./contracts";
 export { createPaymentsReceiver } from "./receiver";
 export { createPaymentsLegalClient } from "./legal";
 import { MachineClient, MachineClientError } from "@hemia/auth";
+import { isIP } from "node:net";
 
 export type PaymentsConnection = {
   issuer: string;
@@ -110,6 +111,7 @@ export type PlanChangeState = {
   effectiveAt: string;
 };
 export type ChangePlan = {
+  provider?: string;
   planChange?: PlanChangeState;
   subscription: Subscription;
   checkoutId: string;
@@ -120,6 +122,7 @@ export type ChangePlan = {
   state: "awaiting_approval" | "scheduled" | "effective";
 };
 export type Checkout = {
+  provider?: string;
   checkoutId: string;
   subscriptionId: string;
   checkoutUrl: string;
@@ -131,7 +134,7 @@ export type CheckoutStatus = {
   subscriptionId: string;
   checkoutStatus: string;
   subscriptionStatus: string;
-  provider: string;
+  provider?: string;
   planChange?: PlanChangeState;
 };
 export type PlanPrice = {
@@ -370,7 +373,15 @@ export function createPaymentsClient(config: PaymentsConfig) {
           : [permissions.create];
       return parseAttempt(
         await request("payment-attempts", scopes, {
-          ...input,
+          planCode: input.planCode,
+          planPriceCode: input.planPriceCode,
+          operation: input.operation,
+          ...(input.expectedAmountDueNow === undefined
+            ? {}
+            : { expectedAmountDueNow: input.expectedAmountDueNow }),
+          ...(input.legalAcceptanceId === undefined
+            ? {}
+            : { legalAcceptanceId: input.legalAcceptanceId }),
           organizationId: input.organizationId.toLowerCase(),
           userId: input.userId.toLowerCase(),
           idempotencyKey: input.idempotencyKey.toLowerCase(),
@@ -469,7 +480,6 @@ export function createPaymentsClient(config: PaymentsConfig) {
         productCode,
         planCode: input.planCode,
         planPriceCode: input.planPriceCode,
-        provider: "paypal",
         ...(input.legalAcceptanceId === undefined
           ? {}
           : { legalAcceptanceId: input.legalAcceptanceId }),
@@ -484,23 +494,15 @@ export function createPaymentsClient(config: PaymentsConfig) {
         !uuid.test(String(value.checkoutId)) ||
         !uuid.test(String(value.subscriptionId)) ||
         !statuses.includes(String(value.status)) ||
-        !string(value.checkoutUrl)
+        !string(value.checkoutUrl) ||
+        (value.provider !== undefined && !identifier(value.provider))
       )
         throw new PaymentsError("contract");
-      let url: URL;
-      try {
-        url = new URL(value.checkoutUrl);
-      } catch {
-        throw new PaymentsError("contract");
-      }
-      if (
-        url.protocol !== "https:" ||
-        url.username ||
-        url.password ||
-        !["www.paypal.com", "www.sandbox.paypal.com"].includes(url.hostname)
-      )
-        throw new PaymentsError("contract");
+      if (!checkoutUrl(value.checkoutUrl)) throw new PaymentsError("contract");
       return {
+        ...(value.provider === undefined
+          ? {}
+          : { provider: value.provider as string }),
         checkoutId: value.checkoutId as string,
         subscriptionId: value.subscriptionId as string,
         checkoutUrl: value.checkoutUrl,
@@ -694,7 +696,8 @@ export function createPaymentsClient(config: PaymentsConfig) {
           !["awaiting_approval", "scheduled", "effective"].includes(
             String(value.state),
           ) ||
-          !string(value.checkoutUrl)
+          !string(value.checkoutUrl) ||
+          (value.provider !== undefined && !identifier(value.provider))
         )
           throw new PaymentsError("contract");
         const source = subscription(
@@ -709,22 +712,23 @@ export function createPaymentsClient(config: PaymentsConfig) {
         } catch {
           throw new PaymentsError("contract");
         }
-        const paypalApproval =
-          approval.protocol === "https:" &&
-          !approval.username &&
-          !approval.password &&
-          ["www.paypal.com", "www.sandbox.paypal.com"].includes(
-            approval.hostname,
-          );
+        const providerApproval = checkoutUrl(value.checkoutUrl);
         const confirmedReturn =
           ["scheduled", "effective"].includes(String(value.state)) &&
           approval.href === successUrl.href;
-        if (!paypalApproval && !confirmedReturn)
+        if (
+          ["scheduled", "effective"].includes(String(value.state))
+            ? !confirmedReturn
+            : !providerApproval || approval.href === successUrl.href
+        )
           throw new PaymentsError("contract");
         return {
           ...(value.planChange === undefined
             ? {}
             : { planChange: planChangeState(value.planChange) }),
+          ...(value.provider === undefined
+            ? {}
+            : { provider: value.provider as string }),
           subscription: source,
           checkoutId: value.checkoutId as string,
           newSubscriptionId: value.newSubscriptionId as string,
@@ -982,16 +986,22 @@ function subscription(
 
 const money = (v: unknown): v is string =>
   typeof v === "string" && /^(0|[1-9]\d{0,17})(\.\d{1,2})?$/.test(v);
-function paypalUrl(v: unknown): v is string | null {
+function checkoutUrl(v: unknown): v is string | null {
   if (v === null) return true;
-  if (!string(v)) return false;
+  if (!string(v) || !/^https:\/\/[^/\\\s]/i.test(v) || /[\s\\]/.test(v))
+    return false;
   try {
     const u = new URL(v);
+    const hostname = u.hostname.replace(/\.$/, "");
     return (
       u.protocol === "https:" &&
       !u.username &&
       !u.password &&
-      ["www.paypal.com", "www.sandbox.paypal.com"].includes(u.hostname)
+      !u.port &&
+      hostname.includes(".") &&
+      hostname !== "localhost" &&
+      !hostname.endsWith(".localhost") &&
+      !isIP(hostname.replace(/^\[|\]$/g, ""))
     );
   } catch {
     return false;
@@ -1041,7 +1051,7 @@ function planChangeState(v: unknown): PlanChangeState {
     !["approve_subscription", "approve_payment", "none"].includes(
       String(v.action),
     ) ||
-    !paypalUrl(v.checkoutUrl) ||
+    !checkoutUrl(v.checkoutUrl) ||
     (v.action === "approve_subscription" && v.checkoutUrl === null)
   )
     throw new PaymentsError("contract");
@@ -1066,8 +1076,8 @@ function checkoutStatus(v: unknown, id: string): CheckoutStatus {
       "cancelled",
       "expired",
     ].includes(String(v.subscriptionStatus)) ||
-    v.provider !== "paypal" ||
-    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl))
+    (v.provider !== undefined && !identifier(v.provider)) ||
+    (v.checkoutUrl !== undefined && !checkoutUrl(v.checkoutUrl))
   )
     throw new PaymentsError("contract");
   return {
@@ -1075,7 +1085,7 @@ function checkoutStatus(v: unknown, id: string): CheckoutStatus {
     subscriptionId: v.subscriptionId,
     checkoutStatus: v.checkoutStatus,
     subscriptionStatus: v.subscriptionStatus,
-    provider: v.provider,
+    ...(v.provider === undefined ? {} : { provider: v.provider as string }),
     ...(v.planChange === undefined
       ? {}
       : { planChange: planChangeState(v.planChange) }),
@@ -1092,7 +1102,7 @@ function pendingChangeDetails(
       !["approve_subscription", "approve_payment", "none"].includes(
         String(v.action),
       )) ||
-    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl))
+    (v.checkoutUrl !== undefined && !checkoutUrl(v.checkoutUrl))
   )
     throw new PaymentsError("contract");
   return {
@@ -1116,9 +1126,10 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
     ) ||
     !["checkout", "change_plan"].includes(String(v.operation)) ||
     typeof v.statusFresh !== "boolean" ||
+    (v.provider !== undefined && !identifier(v.provider)) ||
     (v.checkoutId !== undefined && !uuid.test(String(v.checkoutId))) ||
     (v.subscriptionId !== undefined && !uuid.test(String(v.subscriptionId))) ||
-    (v.checkoutUrl !== undefined && !paypalUrl(v.checkoutUrl)) ||
+    (v.checkoutUrl !== undefined && !checkoutUrl(v.checkoutUrl)) ||
     (v.statusCheckedAt !== undefined && !date(v.statusCheckedAt)) ||
     (v.retryAfterSeconds !== undefined &&
       (!count(v.retryAfterSeconds) || v.retryAfterSeconds < 1)) ||
@@ -1149,6 +1160,7 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
       : (change?.checkoutUrl ?? v.checkoutUrl);
   return {
     attemptId: id,
+    ...(v.provider === undefined ? {} : { provider: v.provider as string }),
     operation: v.operation as "checkout" | "change_plan",
     status: v.status as CheckoutAttemptResponse["status"],
     statusFresh: v.statusFresh,

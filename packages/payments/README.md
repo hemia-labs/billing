@@ -93,7 +93,7 @@ Create/change/retry return200 for a ready attempt,202 with `Retry-After` for pen
 
 Get a quote using `subscriptions.planChangeQuote(id, targetPlanCode, targetPlanPriceCode)`. For an upgrade, create a `change_plan` attempt with the current `expectedSubscriptionId` and `expectedAmountDueNow` as the accepted ceiling. Billing computes the actual charge, freezes the intent, and rejects an increased amount without new approval. It supports same-currency/same-interval price changes.
 
-After each PayPal approval return, explicitly confirm the attempt. `planChange.action` determines the next step:
+After each payment-provider approval return, explicitly confirm the attempt. `planChange.action` determines the next step:
 
 - `approve_subscription`: approve the revised recurring agreement.
 - `approve_payment`: approve the one-time prorated order. A null URL means an explicit confirmation is still needed to prepare/reconcile the next step.
@@ -164,3 +164,5 @@ Legal outgoing scopes are `legal.integration.acceptances.prepare` and `.create`.
 `PaymentsSchema1792886400000` remains exported from `@hemia/payments/nestjs` for already-applied migration histories. The module no longer requires it, a DataSource, `scopeTransaction`, or legacy local payments tables. Do not delete existing tables or edit an applied migration just to update the SDK. Historical migrations and their owners/grants remain the host's responsibility; new consumers do not run them.
 
 Publishing this SDK does not deploy Billing's central payment-attempt/snapshot APIs. Deploy and test the matching Billing version before upgrading a consumer. Test PayPal approvals and authenticated callbacks in Sandbox before enabling purchases in production.
+
+Billing selects the configured provider; consumer checkout inputs never select it. An optional `provider` response field is informational. Approval URLs come from authenticated Billing responses and the SDK validates absolute HTTPS URLs without credentials, nonstandard ports, IP addresses, or localhost destinations. Billing validates upstream destinations against its provider adapter configuration. No provider allowlist or payment credentials are configured by a consumer.
