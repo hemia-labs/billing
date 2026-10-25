@@ -8,6 +8,27 @@ Keep the client secret on the server. Browser code calls its own backend with it
 
 Install `@hemia/payments` and its `@hemia/auth` peer. For the Nest adapter, use the host's NestJS11, reflect-metadata, and RxJS7. TypeORM remains an optional peer solely for the historical migration export; the active Node and Nest integrations do not import or initialize it.
 
+## Compatibility before a consumer upgrade
+
+The SDK requires **Billing >=1.0.1 and <2.0.0**, with the `billing.integrations.v1` contract. Deploy Billing and run its explicit migrations before adopting this SDK in a consumer such as Balanz. Publishing an npm package does not deploy Billing.
+
+Run this read-only preflight in the consumer's deployment check against its actual Billing URL, using the same server-side connection and service credentials:
+
+```ts
+import { createPaymentsClient, MINIMUM_BILLING_VERSION } from '@hemia/payments';
+
+const payments = createPaymentsClient({
+  ...connectionFromConsole,
+  clientSecret: secretFromYourServer,
+});
+await payments.verifyCompatibility(); // Stop the upgrade if this rejects.
+console.log(`Billing satisfies ${MINIMUM_BILLING_VERSION}`);
+```
+
+The check requests `GET /billing/integrations/v1/compatibility` with the existing `billing.integration.catalog.read` scope. An old server without that route, an unsupported version/contract, invalid credentials or an unavailable server stops the check. It does not purchase, confirm, retry or cancel payments. Run it for each target environment; a GitHub/npm release alone does not prove server availability.
+
+Nest's authenticated `/payments/integration-status` performs this check before reporting `ready: true`. `/payments/ready` only reports local module initialization and does not prove remote Billing compatibility. Normal payment calls retain their existing behavior and do not add a preflight request per transaction.
+
 ## Node.js
 
 ```ts

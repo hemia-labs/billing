@@ -6,6 +6,8 @@ import type {
 } from "./contracts";
 import { webhookInput } from "./validation";
 import { PaymentsError } from "./errors";
+import { billingCompatibility } from "./compatibility";
+export { MINIMUM_BILLING_VERSION, BILLING_API_CONTRACT } from "./compatibility";
 export * from "./contracts";
 export { createPaymentsReceiver } from "./receiver";
 export { createPaymentsLegalClient } from "./legal";
@@ -560,6 +562,11 @@ export function createPaymentsClient(config: PaymentsConfig) {
     },
   };
   return {
+    async verifyCompatibility() {
+      return billingCompatibility(
+        await request("compatibility", permissions.catalog),
+      );
+    },
     catalog: {
       async listPlans(): Promise<Plan[]> {
         const value = await request(

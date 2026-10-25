@@ -311,3 +311,31 @@ test("cross-device recovery uses only the matching central buyer receipt and pre
     undefined,
   );
 });
+
+test("integration readiness verifies remote compatibility before catalog access", async () => {
+  const { service } = fixture();
+  const calls = [];
+  service.client.verifyCompatibility = async () => {
+    calls.push("compatibility");
+    return { contract: "billing.integrations.v1", billingVersion: "1.0.1" };
+  };
+  service.client.catalog.listPlans = async () => {
+    calls.push("catalog");
+    return [];
+  };
+  const status = await service.integrationStatus();
+  assert.deepEqual(calls, ["compatibility", "catalog"]);
+  assert.equal(status.ready, true);
+  assert.equal(status.compatibility.billingVersion, "1.0.1");
+
+  calls.length = 0;
+  const { PaymentsError } = require("../../dist");
+  service.client.verifyCompatibility = async () => {
+    throw new PaymentsError("compatibility", 503);
+  };
+  await assert.rejects(
+    service.integrationStatus(),
+    (error) => error.getStatus() === 503,
+  );
+  assert.deepEqual(calls, []);
+});

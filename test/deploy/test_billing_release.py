@@ -86,6 +86,26 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'migration'):
             release.validate(self.output)
 
+    def test_explicit_selected_digests_are_preserved_and_must_exist(self):
+        selected = {service: release.DEFAULT_REGISTRY + '/billing/' + service + '@sha256:' + 'c' * 64
+                    for service in ['backend', 'frontend']}
+
+        def command(args, **kwargs):
+            value = self.command(args, **kwargs)
+            if args[:3] == ['docker', 'image', 'inspect']:
+                infos = json.loads(value)
+                service = args[3].split('/')[-1].split(':')[0]
+                infos[0]['RepoDigests'].append(selected[service])
+                return json.dumps(infos)
+            return value
+
+        with patch.object(release.subprocess, 'check_output', side_effect=command):
+            release.create('billing-v1.0.0', self.output, images=selected)
+        self.assertEqual(release.validate(self.output)['images'], selected)
+        with patch.object(release.subprocess, 'check_output', side_effect=self.command):
+            with self.assertRaisesRegex(ValueError, 'Selected image digest'):
+                release.create('billing-v1.0.0', self.output, images=selected)
+
     def test_invalid_tag_is_rejected_before_docker(self):
         for tag in ['billing-v01.0.0', 'identity-v1.0.0', 'billing-v1.0.0;id', 'billing-v1.0.0\n']:
             with self.assertRaisesRegex(ValueError, 'billing-v'):

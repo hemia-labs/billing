@@ -85,8 +85,14 @@ jobs:
         run: |
           bun run version:billing
           node scripts/billing-version.mjs notes > "$RUNNER_TEMP/billing-release-notes.md"
-      - name: Create or update the Billing version PR
+      - name: Check that this version PR update is still current
+        id: current-version
         if: steps.changesets.outputs.pending == 'true'
+        run: node scripts/release-current.mjs check
+      - name: Create or update the Billing version PR
+        id: version-update
+        continue-on-error: true
+        if: steps.changesets.outputs.pending == 'true' && steps.current-version.outputs.current == 'true'
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
           token: ${{ steps.app-token.outputs.token || github.token }}
@@ -102,6 +108,9 @@ jobs:
             apps/web/CHANGELOG.md
             bun.lock
             .changeset/*.md
+      - name: Preserve failures unless main advanced during the update
+        if: steps.version-update.outcome == 'failure'
+        run: node scripts/release-current.mjs recover
 
   checks:
     needs: classify
@@ -148,38 +157,12 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo 'Release already exists. Redeploy its assets instead of rebuilding.' >&2
-            exit 1
-          fi
           : "${REGISTRY_HOST:?Missing REGISTRY_HOST}" "${REGISTRY_USERNAME:?Missing REGISTRY_USERNAME}" "${REGISTRY_PASSWORD:?Missing REGISTRY_PASSWORD}"
           export DOCKER_CONFIG="$RUNNER_TEMP/billing-registry-docker"
           install -d -m 700 "$DOCKER_CONFIG"
           trap 'docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true; rm -rf -- "$DOCKER_CONFIG"' EXIT
           printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
-          for service in backend frontend; do
-            if docker manifest inspect "$REGISTRY_HOST/billing/$service:$RELEASE_TAG" >/dev/null 2>&1; then
-              echo 'Image tag already exists; refusing to overwrite it.' >&2
-              exit 1
-            fi
-          done
-          for service in backend frontend; do
-            image="$REGISTRY_HOST/billing/$service:$RELEASE_TAG"
-            docker tag "hemia-billing-$service:local" "$image"
-            docker push "$image"
-            docker manifest inspect "$image" >/dev/null
-          done
-          python3 scripts/billing-release.py create "$RELEASE_TAG" "$RUNNER_TEMP/billing-release"
-          node scripts/billing-version.mjs notes > "$RUNNER_TEMP/billing-release-notes.md"
-          if git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
-          fi
-          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft \
-            --title "Billing ${RELEASE_TAG#billing-v}" --notes-file "$RUNNER_TEMP/billing-release-notes.md"
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/billing-release/"*
-          gh release edit "$RELEASE_TAG" --draft=false
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-            --jq 'if .immutable != true then error("Enable release immutability before publishing Billing releases") else .tag_name end'
+          python3 scripts/billing-publish.py "$RELEASE_TAG" "$RUNNER_TEMP/billing-release"
           echo "Release ready: $RELEASE_TAG. The next job checks whether automatic deployment is enabled in prod." >> "$GITHUB_STEP_SUMMARY"
 
   auto-deploy:

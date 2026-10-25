@@ -17,6 +17,8 @@ RUN bun install --frozen-lockfile --production --filter api \
     && mkdir -p apps/api/node_modules
 
 FROM node:22-bookworm-slim AS runtime
+ARG BILLING_REVISION=local
+LABEL org.opencontainers.image.revision=$BILLING_REVISION
 ENV NODE_ENV=production PORT=3015
 WORKDIR /app/apps/api
 COPY --from=production-dependencies /app/node_modules /app/node_modules

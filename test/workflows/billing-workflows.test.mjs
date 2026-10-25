@@ -152,3 +152,28 @@ test('deployment gates production access and keeps migrations explicitly selecta
   assert(cleanup, 'Missing SSH credential cleanup step');
   assert.equal(expression(cleanup.if), 'always()');
 });
+
+for (const name of ['billing-release', 'release-payments']) {
+  test(`${name}: stale version updates are gated and real update failures remain fatal`, () => {
+    const steps = load(name).jobs['version-pr'].steps;
+    const check = steps.find(step => step.id === 'current-version');
+    const update = steps.find(step => step.id === 'version-update');
+    const recover = steps.find(step => step.run === 'node scripts/release-current.mjs recover');
+    assert.equal(check.run, 'node scripts/release-current.mjs check');
+    assert(steps.indexOf(check) < steps.indexOf(update));
+    assert.equal(expression(update.if), "steps.changesets.outputs.pending=='true'&&steps.current-version.outputs.current=='true'");
+    assert.equal(update['continue-on-error'], true);
+    assert.equal(expression(recover.if), "steps.version-update.outcome=='failure'");
+    assert.equal(recover['continue-on-error'], undefined);
+    assert(steps.indexOf(recover) > steps.indexOf(update));
+  });
+}
+
+test('Billing publication uses the recovery publisher after checks, with credentials scoped to the step', () => {
+  const workflow = load('billing-release');
+  const publish = workflow.jobs.publish.steps.find(step => step.name === 'Publish images and immutable release assets');
+  assert(publish.run.includes('python3 scripts/billing-publish.py "$RELEASE_TAG" "$RUNNER_TEMP/billing-release"'));
+  assert(publish.run.includes('docker login "$REGISTRY_HOST"'));
+  assert(publish.run.includes('docker logout "$REGISTRY_HOST"'));
+  assert.equal(publish.env.REGISTRY_PASSWORD, '${{ secrets.REGISTRY_PASSWORD }}');
+});

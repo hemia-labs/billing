@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   ParseUUIDPipe,
   Post,
@@ -10,6 +11,7 @@ import {
   UseGuards,
   UseFilters,
 } from '@nestjs/common';
+import { version as billingVersion } from '../../../package.json';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { BillingServiceAccess } from '../../common/decorators/billing-service-access.decorator';
 import {
@@ -50,6 +52,14 @@ export class BillingIntegrationsController {
     private readonly checkout: BillingCheckoutService,
     private readonly licenses: BillingLicensesService,
   ) {}
+
+  @Get('compatibility')
+  @Header('Cache-Control', 'no-store')
+  @Permissions('billing.integration.catalog.read')
+  @BillingServiceAccess('catalog')
+  compatibility() {
+    return { contract: 'billing.integrations.v1', billingVersion };
+  }
 
   @Get('catalog/products')
   @Permissions('billing.integration.catalog.read')
