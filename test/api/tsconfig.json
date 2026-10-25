@@ -15,6 +15,9 @@
       ],
       "supertest/types": [
         "node_modules/@types/supertest/types.d.ts"
+      ],
+      "@hemia/auth/nestjs": [
+        "node_modules/@hemia/auth/dist/nestjs/index.d.ts"
       ]
     },
     "types": [
