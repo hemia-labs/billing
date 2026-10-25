@@ -77,7 +77,7 @@ jobs:
     needs: [classify, validate]
     if: needs.classify.outputs.release == 'true' && vars.ENABLE_NPM_PUBLISH == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: npm
     permissions:
       contents: write
