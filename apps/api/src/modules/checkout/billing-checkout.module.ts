@@ -10,7 +10,7 @@ import {
 } from '../billing-shared';
 import { BillingAuditModule } from '../audit';
 import { BillingCatalogModule } from '../catalog';
-import { PaypalModule } from '../paypal';
+import { BillingProvidersModule } from '../providers/billing-providers.module';
 import { BillingCheckoutController } from './billing-checkout.controller';
 import { BillingCheckoutService } from './billing-checkout.service';
 import { HemiaLegalClientService } from './clients';
@@ -27,7 +27,7 @@ import { HemiaLegalClientService } from './clients';
     ]),
     BillingAuditModule,
     BillingCatalogModule,
-    PaypalModule,
+    BillingProvidersModule,
   ],
   controllers: [BillingCheckoutController],
   providers: [BillingCheckoutService, HemiaLegalClientService],

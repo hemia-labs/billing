@@ -55,7 +55,7 @@ jobs:
         id: changesets
         run: |
           bun run changeset status --output "$RUNNER_TEMP/changeset-status.json"
-          node -e "const s=require(process.env.RUNNER_TEMP+'/changeset-status.json'); require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'pending='+(s.releases.length>0)+'\n')"
+          node -e "const s=require(process.env.RUNNER_TEMP+'/changeset-status.json'); require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'pending='+(s.releases.some(r=>r.name==='@hemia/payments'))+'\n')"
       - name: Create or update the version PR
         if: steps.changesets.outputs.pending == 'true'
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1 for Changesets CLI 2

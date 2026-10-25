@@ -83,7 +83,9 @@ export class BillingServicePolicyService {
     if (
       !organizationId ||
       (authorization.policy.organizationScope === 'organizations' &&
-        !authorization.policy.organizationIds.includes(organizationId))
+        !authorization.policy.organizationIds.some(
+          (id) => id.toLowerCase() === organizationId.toLowerCase(),
+        ))
     )
       throw new ForbiddenException('Organization is outside service scope');
   }

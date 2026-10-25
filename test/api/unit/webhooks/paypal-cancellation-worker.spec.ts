@@ -1,8 +1,8 @@
+import { providerRegistry } from '../../helpers/provider-registry';
 import { randomUUID } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 import { BillingAuditService } from '../../../../apps/api/src/modules/audit';
 import { BillingProvider } from '../../../../apps/api/src/modules/billing-shared';
-import { PaypalClientService } from '../../../../apps/api/src/modules/paypal';
 import { PaypalCancellationWorker } from '../../../../apps/api/src/modules/webhooks/paypal/paypal-cancellation-worker';
 
 function fixture(paypalStatus: string | Error) {
@@ -10,6 +10,7 @@ function fixture(paypalStatus: string | Error) {
     id: randomUUID(),
     organization_id: randomUUID(),
     provider_subscription_id: 'I-SUBSCRIPTION',
+    provider: BillingProvider.Paypal,
     target_type: 'subscription' as const,
     target_subscription_id: randomUUID(),
     target_addon_id: null,
@@ -46,7 +47,7 @@ function fixture(paypalStatus: string | Error) {
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const worker = new PaypalCancellationWorker(
     dataSource as unknown as DataSource,
-    paypal as unknown as PaypalClientService,
+    providerRegistry(paypal),
     audit as unknown as BillingAuditService,
   );
 

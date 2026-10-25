@@ -181,6 +181,7 @@ export class BillingInvoicesService {
     action: 'issue' | 'cancel',
     actor: BillingOperationActor,
   ) {
+    this.issuer.assertAvailable?.();
     const key = `invoice:${id}:${action}`;
     const expected =
       action === 'issue' ? InvoiceStatus.Pending : InvoiceStatus.Issued;

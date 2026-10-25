@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { EntityManager, In } from 'typeorm';
 import { BillingAuditService } from '../../audit';
 import {
   BillingLicenseEntity,
   BillingPaymentEntity,
+  BillingPlanEntity,
+  BillingProductEntity,
   BillingPaymentRefundEntity,
   BillingProvider,
   BillingSubscriptionAddonEntity,
@@ -14,6 +16,11 @@ import {
   SubscriptionStatus,
   WebhookProcessingStatus,
 } from '../../billing-shared';
+import { BillingLicenseCalculatorService } from '../../licenses';
+import {
+  cancellationIntent,
+  pendingPlanChange,
+} from '../../subscriptions-management/subscription-management-state';
 import type {
   BillingWebhookProcessorInput,
   BillingWebhookProcessorResult,
@@ -21,18 +28,31 @@ import type {
 
 @Injectable()
 export class BillingPaypalRefundsService {
-  constructor(private readonly audit: BillingAuditService) {}
+  constructor(
+    private readonly audit: BillingAuditService,
+    @Optional()
+    private readonly licenseCalculator?: BillingLicenseCalculatorService,
+  ) {}
 
   async process(
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
   ): Promise<BillingWebhookProcessorResult> {
     const refundId = this.stringOrNull(input.resource.id);
-    const saleId = this.stringOrNull(input.resource.sale_id);
+    const captureRefund = input.eventType === 'PAYMENT.CAPTURE.REFUNDED';
+    const saleId = captureRefund
+      ? this.captureId(input.resource)
+      : this.stringOrNull(input.resource.sale_id);
     const amount = this.asRecord(input.resource.amount);
-    const refundCents = this.moneyCents(amount?.total);
-    const currency = this.stringOrNull(amount?.currency);
-    const refundState = this.stringOrNull(input.resource.state)?.toLowerCase();
+    const refundCents = this.moneyCents(
+      captureRefund ? amount?.value : amount?.total,
+    );
+    const currency = this.stringOrNull(
+      captureRefund ? amount?.currency_code : amount?.currency,
+    );
+    const refundState = this.stringOrNull(
+      captureRefund ? input.resource.status : input.resource.state,
+    )?.toLowerCase();
     const refundedAt =
       this.dateOrNull(input.resource.create_time) ?? new Date();
 
@@ -49,14 +69,30 @@ export class BillingPaypalRefundsService {
     }
 
     const [lockedPayment] = await manager.query<{ id: string }[]>(
-      'SELECT id FROM payments WHERE provider=$1 AND provider_capture_id=$2 FOR UPDATE',
+      'SELECT id FROM payments WHERE provider=$1 AND provider_capture_id=$2',
       [BillingProvider.Paypal, saleId],
     );
     if (!lockedPayment) return this.failed('Payment not found');
 
     const payments = manager.getRepository(BillingPaymentEntity);
-    const payment = await payments.findOne({
+    let payment = await payments.findOne({
       where: { id: lockedPayment.id },
+      relations: { subscription: true },
+    });
+    if (!payment) return this.failed('Payment not found');
+
+    // Captures and refunds serialize on the subscription before the payment.
+    if (payment.subscriptionId) {
+      await manager.getRepository(BillingSubscriptionEntity).findOne({
+        where: { id: payment.subscriptionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+    }
+    await manager.query('SELECT id FROM payments WHERE id=$1 FOR UPDATE', [
+      payment.id,
+    ]);
+    payment = await payments.findOne({
+      where: { id: payment.id },
       relations: { subscription: true },
     });
     if (!payment) return this.failed('Payment not found');
@@ -170,6 +206,17 @@ export class BillingPaypalRefundsService {
 
     const marker = subscription.metadata.refundRevocation;
     if (marker && typeof marker === 'object') {
+      return { processingStatus: WebhookProcessingStatus.Processed };
+    }
+
+    if (payment.metadata?.operation === 'plan_change_proration') {
+      await this.restoreProration(
+        manager,
+        subscription,
+        payment,
+        refundedAt,
+        refundId,
+      );
       return { processingStatus: WebhookProcessingStatus.Processed };
     }
 
@@ -289,6 +336,203 @@ export class BillingPaypalRefundsService {
     });
 
     return { processingStatus: WebhookProcessingStatus.Processed };
+  }
+
+  async reverseCapture(
+    manager: EntityManager,
+    input: BillingWebhookProcessorInput,
+  ): Promise<BillingWebhookProcessorResult> {
+    const captureId = this.stringOrNull(input.resource.id);
+    if (!captureId) return this.failed('Invalid PayPal capture reference');
+    const payments = manager.getRepository(BillingPaymentEntity);
+    let payment = await payments.findOne({
+      where: { provider: BillingProvider.Paypal, providerCaptureId: captureId },
+    });
+    if (!payment) return this.failed('Payment not found');
+    if (payment.metadata?.operation !== 'plan_change_proration')
+      return { processingStatus: WebhookProcessingStatus.Ignored };
+    const subscription = await manager
+      .getRepository(BillingSubscriptionEntity)
+      .findOne({
+        where: { id: payment.subscriptionId! },
+        lock: { mode: 'pessimistic_write' },
+      });
+    if (!subscription) return this.failed('Subscription not found');
+    await manager.query('SELECT id FROM payments WHERE id=$1 FOR UPDATE', [
+      payment.id,
+    ]);
+    payment = await payments.findOne({ where: { id: payment.id } });
+    if (!payment) return this.failed('Payment not found');
+    if (
+      payment.status === PaymentStatus.Reversed ||
+      payment.status === PaymentStatus.Refunded
+    )
+      return { processingStatus: WebhookProcessingStatus.Processed };
+    payment.status = PaymentStatus.Reversed;
+    await payments.save(payment);
+    await this.restoreProration(
+      manager,
+      subscription,
+      payment,
+      new Date(),
+      input.providerEventId,
+    );
+    await this.audit.record({
+      manager,
+      organizationId: payment.organizationId,
+      action: 'billing.payment.status_changed',
+      resourceType: 'billing_payment',
+      resourceId: payment.id,
+      provider: BillingProvider.Paypal,
+      metadata: {
+        newStatus: PaymentStatus.Reversed,
+        providerEventId: input.providerEventId,
+      },
+    });
+    return { processingStatus: WebhookProcessingStatus.Processed };
+  }
+
+  private captureId(resource: Record<string, unknown>): string | null {
+    const related = this.asRecord(
+      this.asRecord(resource.supplementary_data)?.related_ids,
+    );
+    const direct =
+      this.stringOrNull(related?.capture_id) ??
+      this.stringOrNull(resource.capture_id);
+    if (direct) return direct;
+    if (!Array.isArray(resource.links)) return null;
+    for (const entry of resource.links) {
+      const link = this.asRecord(entry);
+      if (link?.rel !== 'up' || typeof link.href !== 'string') continue;
+      try {
+        const url = new URL(link.href);
+        if (
+          url.protocol !== 'https:' ||
+          ![
+            'api.paypal.com',
+            'api-m.paypal.com',
+            'api.sandbox.paypal.com',
+            'api-m.sandbox.paypal.com',
+          ].includes(url.hostname)
+        )
+          continue;
+        const match = /^\/v2\/payments\/captures\/([A-Za-z0-9-]+)$/.exec(
+          url.pathname,
+        );
+        if (match) return match[1];
+      } catch {
+        /* Invalid provider links cannot identify a capture. */
+      }
+    }
+    return null;
+  }
+
+  private async restoreProration(
+    manager: EntityManager,
+    subscription: BillingSubscriptionEntity,
+    payment: BillingPaymentEntity,
+    refundedAt: Date,
+    refundId: string,
+  ): Promise<void> {
+    if (!payment.periodEnd || payment.periodEnd <= new Date()) return;
+    const change = pendingPlanChange(subscription);
+    // A later paid change must never be undone by an older capture refund.
+    if (
+      !change ||
+      change.checkoutId !== payment.metadata.checkoutId ||
+      change.proration?.refundedAt
+    )
+      return;
+    const previous = this.asRecord(payment.metadata.previousPlan);
+    if (
+      !previous ||
+      typeof previous.planId !== 'string' ||
+      typeof previous.planCode !== 'string'
+    )
+      throw new Error('Proration refund is missing the previous contract');
+    const plan = await manager.getRepository(BillingPlanEntity).findOne({
+      where: { id: previous.planId },
+      relations: {
+        versions: {
+          prices: { providerPrices: true },
+          entitlements: { feature: true },
+        },
+      },
+    });
+    if (!plan || !this.licenseCalculator)
+      throw new Error('Proration refund contract cannot be restored');
+    const price = plan.versions
+      ?.flatMap((version) => version.prices ?? [])
+      .find((item) => item.id === previous.planPriceId);
+    const providerPrice = price?.providerPrices?.find(
+      (item) => item.id === previous.providerPriceId,
+    );
+    if (!price || !providerPrice)
+      throw new Error('Proration refund price cannot be restored');
+    Object.assign(subscription, {
+      planId: plan.id,
+      plan,
+      planCode: previous.planCode,
+      planPriceId: price.id,
+      planPrice: price,
+      planPriceCode: previous.planPriceCode,
+      providerPriceId: providerPrice.id,
+      providerPrice,
+      legalAcceptanceId: previous.legalAcceptanceId ?? null,
+      acceptedAt:
+        typeof previous.acceptedAt === 'string'
+          ? new Date(previous.acceptedAt)
+          : null,
+      legalSnapshotHash: previous.legalSnapshotHash ?? null,
+    });
+    change.proration = {
+      ...change.proration,
+      refundedAt: refundedAt.toISOString(),
+    };
+    change.state =
+      subscription.cancelAtPeriodEnd || cancellationIntent(subscription)
+        ? 'failed'
+        : 'scheduled';
+    change.effectiveAt = payment.periodEnd.toISOString();
+    subscription.metadata = {
+      ...subscription.metadata,
+      legalEvidence: previous.legalEvidence ?? null,
+      pendingPlanChange: change,
+    };
+    await manager.getRepository(BillingSubscriptionEntity).save(subscription);
+    const licenses = manager.getRepository(BillingLicenseEntity);
+    const license = await licenses.findOne({
+      where: { subscriptionId: subscription.id },
+    });
+    if (license && license.status === LicenseStatus.Active) {
+      const product = await manager
+        .getRepository(BillingProductEntity)
+        .findOne({ where: { code: subscription.productCode } });
+      if (!product) throw new Error('Proration refund product not found');
+      Object.assign(
+        license,
+        this.licenseCalculator.calculate({
+          license,
+          product,
+          subscription,
+          status: LicenseStatus.Active,
+        }),
+      );
+      await licenses.save(license);
+    }
+    await this.audit.record({
+      manager,
+      organizationId: subscription.organizationId,
+      action: 'billing.subscription.proration_refunded',
+      resourceType: 'billing_subscription',
+      resourceId: subscription.id,
+      provider: BillingProvider.Paypal,
+      metadata: {
+        paymentId: payment.id,
+        refundId,
+        restoredPlanCode: subscription.planCode,
+      },
+    });
   }
 
   private async enqueueCancellation(

@@ -36,8 +36,9 @@ export class CreateCheckoutSessionDto {
   @MaxLength(100)
   planPriceCode: string;
 
+  @ValidateIf((_, value) => value !== undefined)
   @IsEnum(BillingProvider)
-  provider: BillingProvider;
+  provider?: BillingProvider;
 
   @ValidateIf((_, value) => value !== undefined)
   @IsUUID()

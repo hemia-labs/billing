@@ -203,6 +203,20 @@ describe('service isolation through the actual HTTP guards', () => {
     fetcher.mockRestore();
   });
 
+  it('accepts the universal SDK checkout body without a provider field', async () => {
+    const { provider, ...withoutProvider } = body;
+    void provider;
+    await http()
+      .post('/api/v1/billing/integrations/v1/checkout/sessions')
+      .set('Authorization', bearer())
+      .send(withoutProvider)
+      .expect(201);
+    expect(checkout.createCheckoutSession).toHaveBeenCalledWith(
+      withoutProvider,
+      { issuer, clientId },
+    );
+  });
+
   it('creates without SSO, forwarding the verified actor from the signed token', async () => {
     await http()
       .post('/api/v1/billing/integrations/v1/checkout/sessions')

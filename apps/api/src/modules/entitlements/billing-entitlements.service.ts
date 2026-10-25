@@ -74,11 +74,14 @@ export class BillingEntitlementsService {
 
   async resolveForSubscription(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
-    const subscription = await this.findSubscription(subscriptionId);
-    const activeAddons = await this.findActiveAddons(subscriptionId);
+    const subscription = await this.findSubscription(subscriptionId, manager);
+    const activeAddons = await this.findActiveAddons(subscriptionId, manager);
     const version = this.planResolver.contractVersion(subscription);
-    const persisted = await this.entitlements.find({
+    const persisted = await (
+      manager?.getRepository(BillingEntitlementEntity) ?? this.entitlements
+    ).find({
       where: {
         subscriptionId,
         status: EntitlementStatus.Active,
@@ -93,7 +96,7 @@ export class BillingEntitlementsService {
         (entitlement) => entitlement.metadata?.planVersionId !== version.id,
       )
     ) {
-      return this.recalculate(subscriptionId);
+      return this.recalculate(subscriptionId, manager);
     }
 
     return {

@@ -10,7 +10,7 @@
     },
     "apps/api": {
       "name": "api",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "dependencies": {
         "@fevex/core": "0.1.0-alpha.3",
         "@fevex/deepseek": "0.1.0-alpha.3",

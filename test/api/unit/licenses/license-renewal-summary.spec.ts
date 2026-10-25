@@ -1,3 +1,6 @@
+import { BillingLicensesService } from '../../../../apps/api/src/modules/licenses/billing-licenses.service';
+import type { Repository } from 'typeorm';
+import type { BillingEntitlementsService } from '../../../../apps/api/src/modules/entitlements';
 import {
   BillingLicenseEntity,
   BillingSubscriptionEntity,
@@ -134,4 +137,42 @@ describe('license renewal summary', () => {
         .nextBillingTime,
     ).toBeNull();
   });
+});
+
+describe('license resolution', () => {
+  it.each([false, true])(
+    'preserves renewal with a minimal subscription load (fallback: %s)',
+    async (fallback) => {
+      const license = fixture();
+      license.validUntil = new Date('2099-01-01T00:00:00Z');
+      const findOne = jest.fn();
+      if (fallback) findOne.mockResolvedValueOnce(null);
+      findOne.mockResolvedValue(license);
+      const calculated = BillingLicenseMapper.toResolveDto(
+        license,
+        'balanz_cfdi',
+      );
+      const resolveForSubscription = jest.fn().mockResolvedValue(calculated);
+      const service = new BillingLicensesService(
+        { findOne } as unknown as Repository<BillingLicenseEntity>,
+        { resolveForSubscription } as unknown as BillingEntitlementsService,
+      );
+      const result = await service.resolveLicense(
+        'organization',
+        'balanz_cfdi',
+      );
+      expect(result.billing.nextBillingTime).toBe(renewal.toISOString());
+      expect(result.subscriptionId).toBe('subscription');
+      expect(resolveForSubscription).toHaveBeenCalledWith(
+        'subscription',
+        undefined,
+      );
+      expect(findOne).toHaveBeenCalledTimes(fallback ? 2 : 1);
+      for (const [options] of findOne.mock.calls) {
+        expect(options).toEqual(
+          expect.objectContaining({ relations: { subscription: true } }),
+        );
+      }
+    },
+  );
 });

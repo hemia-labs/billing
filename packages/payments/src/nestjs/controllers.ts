@@ -18,8 +18,10 @@ import {
   NotFoundException,
   ServiceUnavailableException,
   UseGuards,
+  UseFilters,
   type CanActivate,
 } from "@nestjs/common";
+import { PaymentsExceptionFilter } from "./errors";
 import { Reflector } from "@nestjs/core";
 import { PaymentsService } from "./payments.service";
 import { PaymentsServiceTokens } from "./service-tokens";
@@ -36,6 +38,7 @@ import {
   attemptInput,
   legalContextInput,
   prepareInput,
+  planChangeQuoteInput,
 } from "./validation";
 const MACHINE_KIND = "hemia.payments.machine-kind";
 const machine = (kind: "billing" | "console" | "legal") =>
@@ -54,6 +57,8 @@ export class PaymentsMachineGuard implements CanActivate {
       ctx.getHandler(),
       ctx.getClass(),
     ]);
+    if (kind === "billing" && !this.options.onSnapshot)
+      throw new NotFoundException("Local synchronization is disabled");
     if (kind === "legal" && !this.options.legal)
       throw new NotFoundException("Legal integration is disabled");
     const r = ctx
@@ -99,6 +104,7 @@ function receipt(value: CheckoutAttemptResponse, response: ResponseStatus) {
   } else if (value.status === "rejected") response.status(422);
   return value;
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments")
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
@@ -117,6 +123,14 @@ export class PaymentsController {
   ) {
     return this.payments.getSubscription(
       await this.payments.authorize(request, "subscription.manage"),
+    );
+  }
+  @Get("subscription/plan-change-quote")
+  @Header("Cache-Control", "no-store")
+  async planChangeQuote(@Req() request: unknown, @Query() input: unknown) {
+    return this.payments.planChangeQuote(
+      await this.payments.authorize(request, "subscription.manage"),
+      planChangeQuoteInput(input),
     );
   }
   @Post("subscription/cancel")
@@ -168,6 +182,24 @@ export class PaymentsController {
       id,
     );
   }
+  @Post("checkout-attempts/:id/confirm")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async confirm(@Req() request: unknown, @Param("id") id: string) {
+    return this.payments.confirmAttempt(
+      await this.payments.authorizeAttempt(request, id),
+      id,
+    );
+  }
+  @Post("checkout-attempts/:id/cancel")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async cancelAttempt(@Req() request: unknown, @Param("id") id: string) {
+    return this.payments.cancelAttempt(
+      await this.payments.authorizeAttempt(request, id),
+      id,
+    );
+  }
   @Post("checkout-attempts/:id/retry")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
@@ -192,6 +224,7 @@ export class PaymentsController {
     );
   }
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments")
 @SetMetadata(SERVICE_AUTHENTICATED_METADATA, true)
 @UseGuards(PaymentsMachineGuard)
@@ -221,6 +254,7 @@ export class PaymentsMachineController {
     return this.payments.receiveLicense(body);
   }
 }
+@UseFilters(PaymentsExceptionFilter)
 @Controller("payments/legal")
 export class PaymentsLegalController {
   constructor(

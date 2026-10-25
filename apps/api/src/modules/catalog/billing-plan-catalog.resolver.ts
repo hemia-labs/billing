@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -87,6 +88,23 @@ export class BillingPlanCatalogResolver {
     if (!price)
       throw new NotFoundException('Active billing plan price not found');
     return price;
+  }
+
+  configuredProvider(price: BillingPlanPriceEntity): BillingProvider {
+    const providers = [
+      ...new Set(
+        (price.providerPrices ?? [])
+          .filter((item) => item.status === ProviderPriceStatus.Active)
+          .map((item) => item.provider),
+      ),
+    ];
+    if (!providers.length)
+      throw new NotFoundException('Active provider price not found');
+    if (providers.length !== 1)
+      throw new ConflictException(
+        'Billing price provider configuration is ambiguous',
+      );
+    return providers[0];
   }
 
   providerPrice(

@@ -1,23 +1,18 @@
 node_modules/
 dist/
 .next/
+__pycache__/
 .env*.local
-1_billing_core_paypal.md
-2_billing_core_flujo_de_pago.md
-3_billing_core_pagos_extras_addons.md
-docs/
-!docs/
-!docs/billing-roadmap.md
-!docs/billing-development-progress.md
-ROADMAP_DESARROLLO_BILLING_CORE.md
 .agents/
 .codex/
 AGENTS.md
-billing-integrations-v1.md
-docs/
-billing-medsync.md
 .codegraph
-# Keep only the payments release guide visible among ignored docs.
-!docs/
-docs/*
-!docs/payments-release.md
+
+# Local deployment configuration; may contain secrets.
+.env.production
+
+# Local API event log.
+/apps/api/events.log.jsonl
+
+# Local gateway configuration.
+/deploy/nginx/billing.conf

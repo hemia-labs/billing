@@ -22,7 +22,7 @@ import {
   SubscriptionStatus,
 } from '../billing-shared';
 import { BillingEntitlementsService } from '../entitlements';
-import { PaypalClientService } from '../paypal';
+import { BillingProviderRegistry } from '../providers/billing-provider.registry';
 import { ConfigService } from '@nestjs/config';
 import {
   CreateSubscriptionAddonDto,
@@ -49,7 +49,7 @@ export class BillingSubscriptionAddonsService {
     private readonly usageCounters: Repository<BillingUsageCounterEntity>,
     private readonly audit: BillingAuditService,
     private readonly entitlements: BillingEntitlementsService,
-    private readonly paypal: PaypalClientService,
+    private readonly providers: BillingProviderRegistry,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
     private readonly planResolver: BillingPlanCatalogResolver,
@@ -97,6 +97,7 @@ export class BillingSubscriptionAddonsService {
         'A pending payment already exists for this add-on',
       );
     }
+    this.providers.get(addon.provider);
     const entity = this.subscriptionAddons.create({
       subscriptionId: subscription.id,
       subscription,
@@ -149,13 +150,20 @@ export class BillingSubscriptionAddonsService {
     addon: SubscriptionAddonResponseDto;
     approvalUrl: string | null;
   }> {
+    if (
+      typeof dto.idempotencyKey !== 'string' ||
+      !/^\S{1,120}$/.test(dto.idempotencyKey)
+    )
+      throw new BadRequestException(
+        'A valid idempotencyKey is required for add-on checkout',
+      );
     const pending = await this.createPendingAddon(subscriptionId, dto);
     const entity = await this.findSubscriptionAddon(pending.id);
 
     if (entity.providerSubscriptionId) {
-      const provider = await this.paypal.getSubscription(
-        entity.providerSubscriptionId,
-      );
+      const provider = await this.providers
+        .get(entity.provider)
+        .getSubscription(entity.providerSubscriptionId);
       return {
         addon: SubscriptionAddonMapper.toDto(entity),
         approvalUrl: provider.approvalUrl ?? null,
@@ -163,12 +171,51 @@ export class BillingSubscriptionAddonsService {
     }
     if (!entity.providerReferenceId) {
       throw new BadRequestException(
-        'PayPal plan id is required for add-on checkout',
+        'Provider plan id is required for add-on checkout',
       );
     }
 
+    await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(BillingSubscriptionAddonEntity);
+      const locked = await repository.findOne({
+        where: { id: entity.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked)
+        throw new NotFoundException('Billing subscription add-on not found');
+      Object.assign(entity, locked);
+      if (entity.providerSubscriptionId) return;
+      const attempted =
+        typeof entity.metadata.providerAttemptStartedAt === 'string'
+          ? Date.parse(entity.metadata.providerAttemptStartedAt)
+          : entity.createdAt.getTime();
+      if (
+        !Number.isFinite(attempted) ||
+        Date.now() + 60_000 >=
+          attempted +
+            this.providers.get(entity.provider).subscriptionIdempotencyWindowMs
+      )
+        throw new ConflictException(
+          'Provider add-on creation requires reconciliation',
+        );
+      entity.metadata = {
+        ...entity.metadata,
+        providerAttemptStartedAt: new Date(attempted).toISOString(),
+      };
+      await repository.save(entity);
+    });
+    const adapter = this.providers.get(entity.provider);
+    if (entity.providerSubscriptionId) {
+      const provider = await adapter.getSubscription(
+        entity.providerSubscriptionId,
+      );
+      return {
+        addon: SubscriptionAddonMapper.toDto(entity),
+        approvalUrl: provider.approvalUrl ?? null,
+      };
+    }
     try {
-      const created = await this.paypal.createSubscription({
+      const created = await adapter.createSubscription({
         providerPlanId: entity.providerReferenceId,
         customId: entity.id,
         quantity: entity.quantity,
@@ -177,6 +224,7 @@ export class BillingSubscriptionAddonsService {
         cancelUrl: this.callbackUrl(entity.id, 'cancel'),
       });
       entity.providerSubscriptionId = created.id;
+      entity.status = SubscriptionAddonStatus.PendingPayment;
       const saved = await this.subscriptionAddons.save(entity);
       await this.audit.record({
         organizationId: entity.subscription.organizationId,
@@ -393,11 +441,15 @@ export class BillingSubscriptionAddonsService {
         return;
       if (!addon.providerSubscriptionId)
         throw new BadRequestException('Provider subscription id is missing');
-      const provider = await this.paypal.getSubscription(
-        addon.providerSubscriptionId,
-      );
-      if (!['CANCELLED', 'EXPIRED'].includes(provider.status ?? '')) {
-        await this.paypal.cancelSubscription({
+      const provider = await this.providers
+        .get(addon.provider)
+        .getSubscription(addon.providerSubscriptionId);
+      if (
+        ![SubscriptionStatus.Cancelled, SubscriptionStatus.Expired].includes(
+          provider.subscriptionStatus,
+        )
+      ) {
+        await this.providers.get(addon.provider).cancelSubscription({
           providerSubscriptionId: addon.providerSubscriptionId,
           reason: 'Scheduled add-on cancellation',
         });

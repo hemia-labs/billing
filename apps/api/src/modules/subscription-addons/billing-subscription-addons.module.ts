@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from '../audit';
 import { BillingCatalogModule } from '../catalog';
 import { BillingEntitlementsModule } from '../entitlements';
-import { PaypalModule } from '../paypal';
+import { BillingProvidersModule } from '../providers/billing-providers.module';
 import {
   BillingAddonEntity,
   BillingSubscriptionAddonEntity,
@@ -27,7 +27,7 @@ import { BillingSubscriptionAddonsWorker } from './billing-subscription-addons.w
     BillingAuditModule,
     BillingCatalogModule,
     BillingEntitlementsModule,
-    PaypalModule,
+    BillingProvidersModule,
   ],
   controllers: [
     BillingSubscriptionAddonsController,

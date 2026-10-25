@@ -58,7 +58,7 @@ test("one product config, exact scopes, safe checkout, same key on explicit retr
   assert.equal(token.get("audience"), "billing-api");
   const payload = JSON.parse(calls[1].init.body);
   assert.equal(payload.productCode, "second-product");
-  assert.equal(payload.provider, "paypal");
+  assert.equal(Object.hasOwn(payload, "provider"), false);
   assert.equal(payload.idempotencyKey, input.idempotencyKey);
   assert.equal(calls[1].init.body, calls[2].init.body);
   assert.equal(calls[1].init.redirect, "error");
@@ -179,7 +179,7 @@ test("rejects browser execution, unsafe config, cross-origin returns and malform
     { code: "configuration" },
   );
   const calls = mock(() =>
-    Response.json({ ...checkout, checkoutUrl: "https://attacker.test/pay" }),
+    Response.json({ ...checkout, checkoutUrl: "http://attacker.test/pay" }),
   );
   await assert.rejects(
     createPaymentsClient(config).checkout.create({
@@ -378,10 +378,11 @@ test("subscription management uses its exact scope, native subscription routes a
 });
 test("plan changes bind actor and target without creating a second contract and validate canonical state", async () => {
   const changed = {
+    provider: "configured_provider",
     subscription: subscriptionSummary(),
     checkoutId: id,
     newSubscriptionId: id,
-    checkoutUrl: checkout.checkoutUrl,
+    checkoutUrl: "https://checkout.configured-provider.test/revise",
     targetPlanCode: input.planCode,
     effectiveAt: "2026-12-22T10:00:00.000Z",
     state: "awaiting_approval",
@@ -398,7 +399,7 @@ test("plan changes bind actor and target without creating a second contract and 
   assert.equal(payload.legalAcceptanceId, input.legalAcceptanceId);
   assert.equal(payload.organizationId, undefined);
   mock(() =>
-    Response.json({ ...changed, checkoutUrl: "https://attacker.test/pay" }),
+    Response.json({ ...changed, checkoutUrl: "http://attacker.test/pay" }),
   );
   await assert.rejects(
     createPaymentsClient(config).subscriptions.changePlan(id, input),
@@ -439,7 +440,7 @@ test("a canonically accepted revision recovers a lost approval URL using only th
   for (const invalid of [
     { ...response, state: "awaiting_approval" },
     { ...response, checkoutUrl: config.successUrl + "?unexpected=1" },
-    { ...response, checkoutUrl: "https://attacker.test/pay" },
+    { ...response, checkoutUrl: "http://attacker.test/pay" },
   ]) {
     mock(() => Response.json(invalid));
     await assert.rejects(
@@ -447,4 +448,164 @@ test("a canonically accepted revision recovers a lost approval URL using only th
       { code: "contract" },
     );
   }
+});
+
+test("quotes retain decimal amounts and confirmation is an explicit POST with validated provider continuation", async () => {
+  const quote = {
+    kind: "upgrade",
+    amountDueNow: "150.01",
+    currency: "MXN",
+    recurringAmount: "600.00",
+    effectiveAt: "2026-10-23T12:00:00Z",
+    nextBillingAt: "2026-11-01T00:00:00Z",
+  };
+  const change = {
+    ...quote,
+    state: "awaiting_approval",
+    action: "approve_payment",
+    checkoutUrl: "https://www.sandbox.paypal.com/checkoutnow?token=order",
+  };
+  const calls = mock((url) =>
+    Response.json(
+      String(url).includes("plan-change-quote")
+        ? quote
+        : {
+            checkoutId: id,
+            subscriptionId: id,
+            checkoutStatus: "created",
+            subscriptionStatus: "pending",
+            provider: "paypal",
+            planChange: change,
+          },
+    ),
+  );
+  const client = createPaymentsClient(config);
+  assert.deepEqual(
+    await client.subscriptions.planChangeQuote(id, "pro", "monthly"),
+    quote,
+  );
+  assert.equal(calls[1].init.method, "GET");
+  assert.match(
+    calls[1].url,
+    /target_plan_code=pro&target_plan_price_code=monthly/,
+  );
+  assert.deepEqual((await client.checkout.verify(id)).planChange, change);
+  const verify = calls.find((c) => c.url.endsWith("/verify"));
+  assert.equal(verify.init.method, "POST");
+  mock(() =>
+    Response.json({
+      checkoutId: id,
+      subscriptionId: id,
+      checkoutStatus: "created",
+      subscriptionStatus: "pending",
+      provider: "paypal",
+      planChange: {
+        ...change,
+        checkoutUrl: "https://credentials@checkout.example/approve",
+      },
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).checkout.verify(id), {
+    code: "contract",
+  });
+  mock(() => Response.json({ ...quote, amountDueNow: 150 }));
+  await assert.rejects(
+    createPaymentsClient(config).subscriptions.planChangeQuote(
+      id,
+      "pro",
+      "monthly",
+    ),
+    { code: "contract" },
+  );
+});
+
+test("subscription summaries preserve validated pending upgrade amounts and nullable approval action", async () => {
+  const pending = {
+    attemptId: id,
+    state: "awaiting_approval",
+    targetPlanCode: "pro",
+    targetPlanPriceCode: "monthly",
+    effectiveAt: "2026-10-23T12:00:00Z",
+    checkoutId: id,
+    newSubscriptionId: id,
+    kind: "upgrade",
+    amountDueNow: "150.00",
+    currency: "MXN",
+    recurringAmount: "600.00",
+    nextBillingAt: "2026-11-01T00:00:00Z",
+    action: "approve_subscription",
+    checkoutUrl: null,
+  };
+  mock(() =>
+    Response.json({ ...subscriptionSummary(), pendingPlanChange: pending }),
+  );
+  assert.deepEqual(
+    (await createPaymentsClient(config).subscriptions.current(id))
+      .pendingPlanChange,
+    pending,
+  );
+  mock(() =>
+    Response.json({
+      ...subscriptionSummary(),
+      pendingPlanChange: {
+        ...pending,
+        checkoutUrl: "http://attacker.test/pay",
+      },
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {
+    code: "contract",
+  });
+  mock(() =>
+    Response.json({
+      ...subscriptionSummary(),
+      pendingPlanChange: { ...pending, attemptId: "not-a-uuid" },
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).subscriptions.current(id), {
+    code: "contract",
+  });
+});
+
+test("read-only status preserves a pending proration without creating or requiring its payment URL", async () => {
+  const change = {
+    kind: "upgrade",
+    amountDueNow: "150.00",
+    currency: "MXN",
+    recurringAmount: "600.00",
+    effectiveAt: "2026-10-23T12:00:00Z",
+    nextBillingAt: "2026-11-01T00:00:00Z",
+    state: "awaiting_approval",
+    action: "approve_payment",
+    checkoutUrl: null,
+  };
+  const calls = mock(() =>
+    Response.json({
+      checkoutId: id,
+      subscriptionId: id,
+      checkoutStatus: "created",
+      subscriptionStatus: "pending",
+      provider: "paypal",
+      planChange: change,
+      checkoutUrl: null,
+    }),
+  );
+  const result = await createPaymentsClient(config).checkout.status(id);
+  assert.deepEqual(result.planChange, change);
+  assert.equal(result.checkoutUrl, null);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].init.method, "GET");
+  mock(() =>
+    Response.json({
+      checkoutId: id,
+      subscriptionId: id,
+      checkoutStatus: "created",
+      subscriptionStatus: "pending",
+      provider: "paypal",
+      planChange: { ...change, action: "approve_subscription" },
+    }),
+  );
+  await assert.rejects(createPaymentsClient(config).checkout.status(id), {
+    code: "contract",
+  });
 });

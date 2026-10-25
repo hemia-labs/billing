@@ -12,7 +12,7 @@ import {
   BillingSubscriptionEntity,
 } from '../billing-shared';
 import { BillingLicensesModule } from '../licenses';
-import { PaypalModule } from '../paypal';
+import { BillingProvidersModule } from '../providers/billing-providers.module';
 import { BillingSubscriptionsManagementController } from './billing-subscriptions-management.controller';
 import { BillingSubscriptionsManagementService } from './billing-subscriptions-management.service';
 
@@ -30,7 +30,7 @@ import { BillingSubscriptionsManagementService } from './billing-subscriptions-m
     BillingCheckoutModule,
     BillingEntitlementsModule,
     BillingLicensesModule,
-    PaypalModule,
+    BillingProvidersModule,
   ],
   controllers: [BillingSubscriptionsManagementController],
   providers: [BillingSubscriptionsManagementService],

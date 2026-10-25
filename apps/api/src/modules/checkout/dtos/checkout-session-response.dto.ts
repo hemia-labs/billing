@@ -12,7 +12,11 @@ export class CheckoutSessionResponseDto {
 }
 
 export class CheckoutSessionStatusResponseDto {
-  planChange?: {
+  planChange?: Partial<
+    ReturnType<
+      typeof import('../../subscriptions-management/subscription-management-state').planChangeResponse
+    >
+  > & {
     state:
       'preparing' | 'awaiting_approval' | 'scheduled' | 'effective' | 'failed';
     effectiveAt: string;

@@ -1,3 +1,5 @@
+import { BillingPaymentAttemptsController } from '../../../../apps/api/src/modules/payment-attempts/billing-payment-attempts.controller';
+import { BillingSnapshotsController } from '../../../../apps/api/src/modules/licenses/billing-snapshots.controller';
 import {
   policyFixture,
   policyRegistry,
@@ -92,6 +94,20 @@ function fixture(rule?: BillingServiceAccessRule) {
 }
 
 describe('service policy configuration', () => {
+  it('compares UUID organization casing without granting another organization', async () => {
+    const f = fixture();
+    await expect(
+      f.policy.assertContext(actor, 'medsync', organizationId.toUpperCase()),
+    ).resolves.toBeUndefined();
+    await expect(
+      f.policy.assertContext(
+        actor,
+        'medsync',
+        otherOrganizationId.toUpperCase(),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
   it('denies checkout return origins when no allowlist is configured', async () => {
     const f = fixture();
     await expect(
@@ -451,6 +467,8 @@ describe('service route authorization', () => {
   it('requires a policy on every protected route, including compatibility endpoints', () => {
     const controllers = [
       BillingIntegrationsController,
+      BillingPaymentAttemptsController,
+      BillingSnapshotsController,
       BillingCheckoutController,
       BillingCatalogInternalController,
       BillingCatalogPublicController,
@@ -484,7 +502,8 @@ describe('service route authorization', () => {
         checked.push(`${controller.name}.${name}`);
       }
     }
-    expect(checked.length).toBe(29);
+    expect(checked).toContain('BillingSubscriptionsManagementController.quote');
+    expect(checked.length).toBe(36);
   });
 });
 

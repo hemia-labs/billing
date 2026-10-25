@@ -1,6 +1,7 @@
 import {
   cancellationIntent,
   pendingPlanChange,
+  planChangeResponse,
 } from '../subscription-management-state';
 import { BillingEntitlementsResolution } from '../../entitlements';
 import { BillingSubscriptionEntity } from '../../billing-shared';
@@ -22,16 +23,24 @@ export class SubscriptionManagementMapper {
             effectiveAt: cancellation.effectiveAt,
           }
         : null,
-      pendingPlanChange: change
-        ? {
-            state: change.state,
-            targetPlanCode: change.targetPlanCode,
-            targetPlanPriceCode: change.targetPlanPriceCode,
-            effectiveAt: change.effectiveAt,
-            checkoutId: change.checkoutId,
-            newSubscriptionId: subscription.id,
-          }
-        : null,
+      pendingPlanChange:
+        change && change.state !== 'failed'
+          ? {
+              ...planChangeResponse(change),
+              ...(typeof change.idempotencyKey === 'string' &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+                change.idempotencyKey,
+              )
+                ? { attemptId: change.idempotencyKey.toLowerCase() }
+                : {}),
+              state: change.state,
+              targetPlanCode: change.targetPlanCode,
+              targetPlanPriceCode: change.targetPlanPriceCode,
+              effectiveAt: change.effectiveAt,
+              checkoutId: change.checkoutId,
+              newSubscriptionId: subscription.id,
+            }
+          : null,
       id: subscription.id,
       organizationId: subscription.organizationId,
       productCode: subscription.productCode,

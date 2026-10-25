@@ -1,9 +1,9 @@
 import { DataSource } from 'typeorm';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { environmentFile } from './src/config/env-file';
 
-dotenv.config({ path: '.env' });
-dotenv.config({ path: '.env.local' });
+dotenv.config({ path: environmentFile() });
 
 const isProduction = process.env.NODE_ENV === 'production';
 const ext = isProduction ? 'js' : 'ts';
@@ -18,5 +18,7 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_DATABASE,
   extra: { options: '-c timezone=America/Mexico_City' },
   entities: [path.join(process.cwd(), `${baseDir}/**/*.entity.${ext}`)],
-  migrations: [path.join(process.cwd(), `${baseDir}/database/migrations/*.${ext}`)],
+  migrations: [
+    path.join(process.cwd(), `${baseDir}/database/migrations/*.${ext}`),
+  ],
 });

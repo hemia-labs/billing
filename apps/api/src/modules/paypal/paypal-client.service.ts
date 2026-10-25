@@ -136,6 +136,63 @@ export class PaypalClientService {
     };
   }
 
+  async createOrder(input: {
+    requestId: string;
+    checkoutId: string;
+    amount: string;
+    currency: string;
+    returnUrl: string;
+    cancelUrl: string;
+  }): Promise<Record<string, unknown>> {
+    return this.request('/v2/checkout/orders', {
+      method: 'POST',
+      headers: {
+        'PayPal-Request-Id': input.requestId,
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            custom_id: input.checkoutId,
+            invoice_id: input.requestId,
+            amount: { currency_code: input.currency, value: input.amount },
+          },
+        ],
+        payment_source: {
+          paypal: {
+            experience_context: {
+              return_url: input.returnUrl,
+              cancel_url: input.cancelUrl,
+              user_action: 'PAY_NOW',
+            },
+          },
+        },
+      }),
+    });
+  }
+  async getOrder(id: string): Promise<Record<string, unknown>> {
+    return this.request(`/v2/checkout/orders/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+  }
+  async captureOrder(
+    id: string,
+    requestId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/v2/checkout/orders/${encodeURIComponent(id)}/capture`,
+      {
+        method: 'POST',
+        headers: {
+          'PayPal-Request-Id': requestId,
+          Prefer: 'return=representation',
+        },
+        body: '{}',
+      },
+    );
+  }
+
   async cancelSubscription(
     input: CancelPaypalSubscriptionInput,
   ): Promise<void> {

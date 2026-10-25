@@ -46,7 +46,12 @@ apps/api/
 
 ## Variables de entorno
 
-Copia `.env.example` a `.env` y completa los valores:
+Copia `.env.example` a `.env.local` para desarrollo o a `.env.production` para
+produccion y completa los valores. La aplicacion y el DataSource de la CLI cargan
+solo `.env.production` cuando `NODE_ENV=production`; en los demas entornos cargan
+`.env.local`. Define `NODE_ENV` antes de ejecutar el proceso; `start:prod` ya lo
+establece. Las variables inyectadas al proceso tienen prioridad sobre el archivo.
+Vault permanece deshabilitado salvo que se defina `SECRETS_ENABLED=true`.
 
 ```
 NODE_ENV=development
@@ -327,7 +332,7 @@ El build emite la API en `dist/src/`: `bun run start:prod` inicia `dist/src/main
 ```bash
 bun run --cwd apps/api build
 bun run --cwd apps/api test      # unit specs en test/api/unit
-bun run --cwd apps/api test:e2e
+bun run --cwd apps/api test:authorization:docker # PostgreSQL desechable; requiere Docker
 ```
 
 ### Consumidores administrables desde consola
@@ -387,3 +392,11 @@ ni revoca una suscripción o enlace que ya exista en PayPal. No requiere migraci
 Todas las pruebas, configuraciones y runners viven en `../../test/`: Jest usa `test/api/unit`, Fevex usa Bun y las integraciones desechables viven en `test/api/integration`. Ejecutar `bun run test` desde la raíz Billing incluye API y frontend. Ver [guía de pruebas](../../test/README.md).
 
 Auth agrupa sesión y Redis; Integrations separa service-clients y oauth-clients; los módulos con varios controladores usan `controllers/`. Webhooks agrupa sus workers y servicios PayPal en `paypal/`; Event Bus mantiene transporte y contratos juntos. No cambian endpoints ni contratos.
+
+## Proveedor de pagos
+
+Billing selecciona el único proveedor activo de `provider_prices` asociado al precio publicado solicitado. Sin configuración devuelve `404`; con varios proveedores activos devuelve `409`. Un proveedor sin adaptador devuelve `422` antes de realizar una operación financiera. El SDK y los productos consumidores no eligen proveedor ni configuran credenciales de la pasarela.
+
+La selección se conserva en el intento durable. Los reintentos reutilizan el proveedor y la clave originales; los cambios y cancelaciones de una suscripción usan el proveedor de ese contrato. No se cambia de proveedor al editar el catálogo ni se usa PayPal como alternativa ante una configuración inválida.
+
+PayPal es el adaptador implementado. Traduce sus estados, valida sus URLs de aprobación y declara sus ventanas de idempotencia. Fuera de una ventana de creación incierta, Billing requiere conciliación y no crea otra compra automáticamente. Otros proveedores necesitan su propio adaptador y recepción de eventos antes de habilitarse. Este cambio no requiere migraciones nuevas.

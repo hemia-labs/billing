@@ -1,3 +1,4 @@
+const {providerRegistry}=require('../../helpers/provider-registry');
 const { createRequire } = require('node:module');
 const apiRequire = createRequire(require('node:path').resolve(__dirname, '../../../../apps/api/package.json'));
 const assert = require('node:assert/strict');
@@ -79,7 +80,7 @@ module.exports = async function checkCheckoutScaling(ds) {
       calls++;
       return {
         id: `I-${requestId}`,
-        approvalUrl: 'https://paypal.test/approve',
+        approvalUrl: 'https://www.sandbox.paypal.com/approve',
       };
     },
   };
@@ -94,7 +95,7 @@ module.exports = async function checkCheckoutScaling(ds) {
         legalSnapshotHash: 'a'.repeat(64),
       }),
     },
-    provider,
+    providerRegistry(provider),
     new BillingAuditService(ds.getRepository(entities.BillingAuditLogEntity)),
     checkouts,
     ds.getRepository(entities.BillingSubscriptionEntity),
@@ -122,20 +123,14 @@ module.exports = async function checkCheckoutScaling(ds) {
   };
   await assert.rejects(service.createCheckoutSession(input,catalogActor),error=>error.status===403);
   assert.equal(calls,0);
-  const responses = await Promise.all(
-    Array.from({ length: 12 }, () =>
-      service.createCheckoutSession(
-        { ...input, idempotencyKey: randomUUID() },
-        actor,
-      ),
-    ),
-  );
-  assert.equal(new Set(responses.map((result) => result.checkoutId)).size, 12);
-  assert.equal(
-    await customers.countBy({ organizationId, provider: 'paypal' }),
-    1,
-  );
-  assert.equal(calls, 12);
+  const requests = Array.from({length:12},()=>({...input,idempotencyKey:randomUUID()}));
+  const responses = await Promise.allSettled(requests.map(dto=>service.createCheckoutSession(dto,actor)));
+  const admitted = responses.flatMap((result,index)=>result.status==='fulfilled'?[{...result.value,index}]:[]);
+  assert.equal(admitted.length,1,'one renewable contract per organization/product');
+  for (const result of responses) if(result.status==='rejected') assert.equal(result.reason.status,409);
+  input.idempotencyKey=requests[admitted[0].index].idempotencyKey;
+  assert.equal(await customers.countBy({organizationId,provider:'paypal'}),1);
+  assert.equal(calls,1);
 
   const retries = await Promise.allSettled(
     Array.from({ length: 8 }, () =>
@@ -149,16 +144,23 @@ module.exports = async function checkCheckoutScaling(ds) {
       assert.equal(result.value.checkoutId, complete[0].value.checkoutId);
     else assert.equal(result.reason.response.code, 'CHECKOUT_IN_PROGRESS');
   }
-  assert.equal(calls, 13);
+  assert.equal(calls, 1);
   assert.equal(
     (await service.createCheckoutSession(input, actor)).checkoutId,
     complete[0].value.checkoutId,
   );
+  // A new buyer/client cannot bypass the active-contract guard. Namespace reuse is exercised after its terminal boundary.
+  await assert.rejects(service.createCheckoutSession(input,{...actor,clientId:'other-client'}),error=>error.status===409);
+  await ds.query("UPDATE subscriptions SET status='cancelled' WHERE id=$1",[admitted[0].subscriptionId]);
   const other = await service.createCheckoutSession(input, {
     ...actor,
     clientId: 'other-client',
   });
   assert.notEqual(other.checkoutId, complete[0].value.checkoutId);
+  const beforeIndependent=calls;
+  const independent=await Promise.all(Array.from({length:12},()=>service.createCheckoutSession({...input,organizationId:randomUUID(),idempotencyKey:randomUUID()},actor)));
+  assert.equal(new Set(independent.map(result=>result.checkoutId)).size,12);
+  assert.equal(calls,beforeIndependent+12,'distinct organizations still create independently');
   const original = await checkouts.findOneByOrFail({
     id: complete[0].value.checkoutId,
   });
@@ -223,6 +225,6 @@ module.exports = async function checkCheckoutScaling(ds) {
     await runner.release();
   }
   console.log(
-    'PASS concurrent customer creation, independent checkout keys, indexed lookup, same-key retries, namespace and soft-delete uniqueness, migration duplicate preflight and rollback',
+    'PASS one contract across concurrent independent keys, one customer, indexed lookup, same-key retries, namespace and soft-delete uniqueness, migration duplicate preflight and rollback',
   );
 };

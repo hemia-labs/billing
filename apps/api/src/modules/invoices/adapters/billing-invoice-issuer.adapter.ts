@@ -10,6 +10,7 @@ export type BillingInvoiceIssuerResult = {
 };
 
 export interface BillingInvoiceIssuerAdapter {
+  assertAvailable?(): void;
   issue(
     invoice: BillingInvoiceEntity,
     idempotencyKey: string,

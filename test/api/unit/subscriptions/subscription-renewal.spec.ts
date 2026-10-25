@@ -616,3 +616,14 @@ it('a cancellation webhook preserves the stored paid end when PayPal omits the n
     true,
   );
 });
+
+it('propagates the current contractual plan code when renewing an existing license', async () => {
+  const f = fixture();
+  f.license.planCode = 'premium';
+  f.subscription.planCode = 'basic';
+  await f.processor.process(f.manager as never, f.input);
+  expect(f.license.planCode).toBe('basic');
+  expect(f.licenses.save).toHaveBeenCalledWith(
+    expect.objectContaining({ planCode: 'basic' }),
+  );
+});

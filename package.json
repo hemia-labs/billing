@@ -16,8 +16,12 @@
     "test:payments": "bun run --cwd packages/payments build && bun run --cwd packages/payments test",
     "changeset": "changeset",
     "version:payments": "node scripts/version-payments.mjs",
-    "test:release": "node --test test/release/payments-release.test.mjs",
-    "test:payments:tarball": "node test/payments/package/check-payments-tarball.mjs"
+    "test:release": "node --test test/release/*.test.mjs",
+    "test:payments:tarball": "node test/payments/package/check-payments-tarball.mjs",
+    "version:billing": "node scripts/version-billing.mjs",
+    "test:deploy": "python3 -m unittest discover -s test/deploy -p 'test_*.py'",
+    "check:billing": "bash scripts/billing-checks.sh",
+    "test:workflows": "bun test test/workflows"
   },
   "packageManager": "bun@1.4.4",
   "devDependencies": {

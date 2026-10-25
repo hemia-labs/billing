@@ -17,6 +17,7 @@ import { billingServiceActor } from '../../common/types/billing-service-authoriz
 import { BillingInternalAuthGuard } from '../../common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { BillingSubscriptionsManagementService } from './billing-subscriptions-management.service';
+import { PlanChangeQuoteQueryDto } from './dtos/manage-subscription.dto';
 import { CheckoutInProgressFilter } from '../checkout/filters/checkout-in-progress.filter';
 import {
   CancelSubscriptionDto,
@@ -42,6 +43,19 @@ export class BillingSubscriptionsManagementController {
     return this.service.getCurrentSubscription(
       query.organization_id,
       query.product_code,
+    );
+  }
+
+  @Get('subscriptions/:id/plan-change-quote')
+  @BillingServiceAccess({ resource: 'subscriptions' })
+  quote(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PlanChangeQuoteQueryDto,
+  ) {
+    return this.service.quotePlanChange(
+      id,
+      query.target_plan_code,
+      query.target_plan_price_code,
     );
   }
 

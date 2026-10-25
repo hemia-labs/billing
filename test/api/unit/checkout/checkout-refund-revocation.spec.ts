@@ -1,3 +1,4 @@
+import { providerRegistry } from '../../helpers/provider-registry';
 import {
   BillingCheckoutSessionEntity,
   BillingLicenseEntity,
@@ -92,7 +93,7 @@ function fixture() {
     } as never,
     {} as never,
     {} as never,
-    paypal as never,
+    providerRegistry(paypal),
     new BillingLicenseCalculatorService(new BillingPlanCatalogResolver()),
     audit as never,
     {} as never,

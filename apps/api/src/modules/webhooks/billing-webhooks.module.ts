@@ -1,3 +1,4 @@
+import { BillingProvidersModule } from '../providers/billing-providers.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
@@ -36,6 +37,7 @@ import { PaypalWebhookWorker } from './paypal/paypal-webhook-worker';
     BillingAuditModule,
     BillingLicensesModule,
     PaypalModule,
+    BillingProvidersModule,
     BillingSubscriptionAddonsModule,
   ],
   controllers: [BillingWebhooksController, BillingWebhooksConsoleController],

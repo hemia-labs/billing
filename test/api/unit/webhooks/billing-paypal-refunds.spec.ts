@@ -4,6 +4,8 @@ import { BillingAuditService } from '../../../../apps/api/src/modules/audit';
 import {
   BillingLicenseEntity,
   BillingPaymentEntity,
+  BillingPlanEntity,
+  BillingProductEntity,
   BillingPaymentRefundEntity,
   BillingProvider,
   BillingSubscriptionAddonEntity,
@@ -13,6 +15,7 @@ import {
   SubscriptionAddonStatus,
   SubscriptionStatus,
 } from '../../../../apps/api/src/modules/billing-shared';
+import { BillingLicenseCalculatorService } from '../../../../apps/api/src/modules/licenses';
 import { BillingPaypalRefundsService } from '../../../../apps/api/src/modules/webhooks/paypal/billing-paypal-refunds.service';
 import type { BillingWebhookProcessorInput } from '../../../../apps/api/src/modules/webhooks/types';
 
@@ -64,6 +67,27 @@ function fixture(paymentFound = true) {
   const jobs: Record<string, unknown>[] = [];
   const queryCalls: Array<[string, unknown[]]> = [];
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
+  const previousPlan = {
+    id: 'plan-a',
+    versions: [
+      { prices: [{ id: 'price-a', providerPrices: [{ id: 'provider-a' }] }] },
+    ],
+  };
+  const calculator = {
+    calculate: jest.fn(
+      ({
+        subscription: restored,
+      }: {
+        subscription: BillingSubscriptionEntity;
+      }) => ({
+        planCode: restored.planCode,
+        status: LicenseStatus.Active,
+        seatsLimit: 3,
+        featuresJson: { 'tier.a': true },
+        validUntil: periodEnd,
+      }),
+    ),
+  };
   const repositories = new Map<unknown, Record<string, jest.Mock>>([
     [
       BillingPaymentEntity,
@@ -137,6 +161,12 @@ function fixture(paymentFound = true) {
       },
     ],
   ]);
+  repositories.set(BillingPlanEntity, {
+    findOne: jest.fn().mockResolvedValue(previousPlan),
+  });
+  repositories.set(BillingProductEntity, {
+    findOne: jest.fn().mockResolvedValue({ id: 'product', code: 'balanz' }),
+  });
   const manager = {
     query: jest.fn((sql: string, parameters?: unknown[]) => {
       queryCalls.push([sql, parameters ?? []]);
@@ -157,6 +187,7 @@ function fixture(paymentFound = true) {
   } as unknown as EntityManager;
   const service = new BillingPaypalRefundsService(
     audit as unknown as BillingAuditService,
+    calculator as unknown as BillingLicenseCalculatorService,
   );
   const input = (id: string, total: string): BillingWebhookProcessorInput => ({
     eventId: webhookEventId,
@@ -182,6 +213,8 @@ function fixture(paymentFound = true) {
     queryCalls,
     audit,
     input,
+    repositories,
+    calculator,
   };
 }
 
@@ -290,4 +323,129 @@ it('audits refund revocation without reporting an unchanged revoked license', as
   expect(f.audit.record).not.toHaveBeenCalledWith(
     expect.objectContaining({ action: 'billing.license.status_changed' }),
   );
+});
+
+function prorationFixture() {
+  const f = fixture();
+  f.payment.metadata = {
+    operation: 'plan_change_proration',
+    checkoutId: 'checkout-b',
+    previousPlan: {
+      planId: 'plan-a',
+      planCode: 'a',
+      planPriceId: 'price-a',
+      planPriceCode: 'monthly',
+      providerPriceId: 'provider-a',
+      legalAcceptanceId: 'legal-a',
+      acceptedAt: paidAt.toISOString(),
+      legalSnapshotHash: 'hash-a',
+    },
+  };
+  f.subscription.planCode = 'b';
+  f.subscription.metadata = {
+    pendingPlanChange: {
+      checkoutId: 'checkout-b',
+      state: 'effective',
+      effectiveAt: paidAt.toISOString(),
+      captureId: 'SALE-ORIGINAL',
+      capturedAt: paidAt.toISOString(),
+    },
+  };
+  f.license.planCode = 'b';
+  const input = f.input('REFUND-CAPTURE', f.payment.amount);
+  input.eventType = 'PAYMENT.CAPTURE.REFUNDED';
+  input.resource = {
+    id: 'REFUND-CAPTURE',
+    status: 'COMPLETED',
+    create_time: new Date().toISOString(),
+    amount: { value: f.payment.amount, currency_code: 'MXN' },
+    links: [
+      {
+        rel: 'up',
+        href: 'https://api.paypal.com/v2/payments/captures/SALE-ORIGINAL',
+      },
+    ],
+  };
+  return { ...f, captureInput: input };
+}
+
+it('restores the paid original plan after a full Orders proration refund without cancelling renewal', async () => {
+  const f = prorationFixture();
+  await f.service.process(f.manager, f.captureInput);
+  await f.service.process(f.manager, f.captureInput);
+  expect(f.savedRefunds).toHaveLength(1);
+  expect(f.payment.status).toBe(PaymentStatus.Refunded);
+  expect(f.subscription).toMatchObject({
+    status: SubscriptionStatus.Active,
+    planCode: 'a',
+    legalAcceptanceId: 'legal-a',
+    legalSnapshotHash: 'hash-a',
+  });
+  expect(f.subscription.metadata.pendingPlanChange).toMatchObject({
+    state: 'scheduled',
+    effectiveAt: periodEnd.toISOString(),
+    proration: { refundedAt: f.captureInput.resource.create_time },
+  });
+  expect(f.license).toMatchObject({
+    status: LicenseStatus.Active,
+    planCode: 'a',
+    seatsLimit: 3,
+  });
+  expect(f.jobs).toHaveLength(0);
+  expect(f.addon.status).toBe(SubscriptionAddonStatus.ScheduledCancel);
+});
+
+it('keeps upgraded access on partial Orders refunds and rejects spoofed capture links', async () => {
+  const f = prorationFixture();
+  f.captureInput.resource.amount = { value: '100.00', currency_code: 'MXN' };
+  await f.service.process(f.manager, f.captureInput);
+  expect(f.subscription.planCode).toBe('b');
+  expect(f.calculator.calculate).not.toHaveBeenCalled();
+  f.captureInput.resource.links = [
+    {
+      rel: 'up',
+      href: 'https://example.com/v2/payments/captures/SALE-ORIGINAL',
+    },
+  ];
+  expect(await f.service.process(f.manager, f.captureInput)).toMatchObject({
+    processingStatus: 'failed',
+  });
+});
+
+it('does not roll back a later upgrade when an older proration is refunded', async () => {
+  const f = prorationFixture();
+  f.subscription.metadata.pendingPlanChange = {
+    ...(f.subscription.metadata.pendingPlanChange as object),
+    checkoutId: 'later-checkout',
+  };
+  await f.service.process(f.manager, f.captureInput);
+  expect(f.payment.status).toBe(PaymentStatus.Refunded);
+  expect(f.subscription.planCode).toBe('b');
+  expect(f.jobs).toHaveLength(0);
+});
+
+it('restores original paid access once after reversal of the prorated capture', async () => {
+  const f = prorationFixture();
+  const input = {
+    ...f.captureInput,
+    eventType: 'PAYMENT.CAPTURE.REVERSED',
+    resource: { id: 'SALE-ORIGINAL' },
+  };
+  await f.service.reverseCapture(f.manager, input);
+  await f.service.reverseCapture(f.manager, input);
+  expect(f.payment.status).toBe(PaymentStatus.Reversed);
+  expect(f.subscription.planCode).toBe('a');
+  expect(f.jobs).toHaveLength(0);
+  expect(f.calculator.calculate).toHaveBeenCalledTimes(1);
+});
+
+it('does not revive an upgrade renewal when its proration is refunded after cancellation', async () => {
+  const f = prorationFixture();
+  f.subscription.cancelAtPeriodEnd = true;
+  await f.service.process(f.manager, f.captureInput);
+  expect(f.subscription.planCode).toBe('a');
+  expect(f.subscription.metadata.pendingPlanChange).toMatchObject({
+    state: 'failed',
+  });
+  expect(f.subscription.cancelAtPeriodEnd).toBe(true);
 });

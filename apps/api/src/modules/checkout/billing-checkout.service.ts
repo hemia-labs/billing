@@ -1,4 +1,9 @@
 import {
+  pendingPlanChange,
+  type PendingPlanChange,
+  planChangeResponse,
+} from '../subscriptions-management/subscription-management-state';
+import {
   BadGatewayException,
   BadRequestException,
   ConflictException,
@@ -24,7 +29,7 @@ import {
   SubscriptionStatus,
 } from '../billing-shared';
 import { BillingPlanCatalogResolver } from '../catalog';
-import { PaypalClientService } from '../paypal';
+import { BillingProviderRegistry } from '../providers/billing-provider.registry';
 import { HemiaLegalClientService } from './clients';
 import {
   CheckoutSessionResponseDto,
@@ -34,11 +39,10 @@ import {
 import { BillingAuditService } from '../audit';
 import { BillingServicePolicyService } from '../../common/services/billing-service-policy.service';
 import type { BillingServiceActor } from '../../common/types/billing-service-authorization.type';
-import type { PaypalSubscriptionResult } from '../paypal/types';
+import type { ProviderSubscription } from '../providers/billing-provider.types';
 import { CheckoutInProgressException } from './errors/checkout-in-progress.exception';
 
-const PAYPAL_IDEMPOTENCY_WINDOW_MS = 72 * 60 * 60 * 1000;
-// Covers the PayPal OAuth and subscription request timeouts with margin.
+// Covers provider request timeouts with margin.
 const CHECKOUT_ATTEMPT_LEASE_MS = 60_000;
 
 type CheckoutReservation = {
@@ -52,7 +56,7 @@ export class BillingCheckoutService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly hemiaLegal: HemiaLegalClientService,
-    private readonly paypal: PaypalClientService,
+    private readonly providers: BillingProviderRegistry,
     private readonly audit: BillingAuditService,
     @InjectRepository(BillingCheckoutSessionEntity)
     private readonly checkoutSessions: Repository<BillingCheckoutSessionEntity>,
@@ -61,6 +65,50 @@ export class BillingCheckoutService {
     private readonly planResolver: BillingPlanCatalogResolver,
     private readonly servicePolicy: BillingServicePolicyService,
   ) {}
+
+  validateApprovalUrl(provider: BillingProvider, value: string): string {
+    return this.providers.get(provider).validateApprovalUrl(value);
+  }
+  planChangeResponse(
+    provider: BillingProvider,
+    change: PendingPlanChange,
+    revisionUrl: string | null,
+  ) {
+    const response = planChangeResponse(change, revisionUrl);
+    if (response.checkoutUrl)
+      response.checkoutUrl = this.validateApprovalUrl(
+        provider,
+        response.checkoutUrl,
+      );
+    return response;
+  }
+
+  async resolveCheckoutProvider(
+    dto: Pick<
+      CreateCheckoutSessionDto,
+      | 'idempotencyKey'
+      | 'organizationId'
+      | 'productCode'
+      | 'planCode'
+      | 'planPriceCode'
+    >,
+    actor: BillingServiceActor,
+    manager: EntityManager = this.dataSource.manager,
+  ): Promise<BillingProvider> {
+    const existing = await this.findExistingCheckout(
+      manager.getRepository(BillingCheckoutSessionEntity),
+      dto,
+      actor,
+    );
+    if (existing) return existing.provider;
+    const product = await this.findActiveProduct(dto.productCode, manager);
+    const plan = await this.findActivePlan(product.id, dto.planCode, manager);
+    const price = this.planResolver.activePrice(
+      this.planResolver.publishedVersion(plan),
+      dto.planPriceCode,
+    );
+    return this.planResolver.configuredProvider(price);
+  }
 
   async createCheckoutSession(
     dto: CreateCheckoutSessionDto,
@@ -82,15 +130,22 @@ export class BillingCheckoutService {
     ) {
       throw new BadRequestException('A valid idempotencyKey is required');
     }
-    const requestHash = this.checkoutRequestHash(dto, actor);
+    const requestedProvider = dto.provider;
     const previous = await this.findExistingCheckout(
       this.checkoutSessions,
       dto,
       actor,
     );
+    const provider =
+      previous?.provider ?? (await this.resolveCheckoutProvider(dto, actor));
+    if (requestedProvider !== undefined && requestedProvider !== provider)
+      throw new ConflictException(
+        'Requested provider differs from the configured or frozen provider',
+      );
+    dto = { ...dto, provider };
+    const requestHash = this.checkoutRequestHash(dto, actor);
     if (previous) this.assertSameRequest(previous, requestHash, actor);
-    if (!previous && dto.provider !== BillingProvider.Paypal)
-      throw new BadRequestException('Only PayPal checkout is supported');
+    this.providers.get(provider);
     // No database connection or transaction is held while validating Legal.
     const legal =
       previous || dto.legalAcceptanceId === undefined
@@ -133,7 +188,14 @@ export class BillingCheckoutService {
         true,
       );
       if (existing) {
-        this.assertSameRequest(existing, requestHash, actor);
+        this.assertSameRequest(
+          existing,
+          this.checkoutRequestHash(
+            { ...dto, provider: requestedProvider ?? existing.provider },
+            actor,
+          ),
+          actor,
+        );
         return this.reserveAttempt(manager, existing, actor);
       }
       if (previous || (dto.legalAcceptanceId !== undefined && !legal))
@@ -141,9 +203,7 @@ export class BillingCheckoutService {
           'Checkout changed; retry with the same idempotency key',
         );
 
-      if (dto.provider !== BillingProvider.Paypal) {
-        throw new BadRequestException('Only PayPal checkout is supported');
-      }
+      this.providers.get(dto.provider!);
       await manager.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         [`billing.subscription:${dto.organizationId}:${dto.productCode}`],
@@ -168,12 +228,12 @@ export class BillingCheckoutService {
       const plan = await this.findActivePlan(product.id, dto.planCode, manager);
       const resolved = this.planResolver.resolve(
         plan,
-        dto.provider,
+        dto.provider!,
         dto.planPriceCode,
       );
       if (!resolved.providerPrice.providerPriceId) {
         throw new BadRequestException(
-          'PayPal plan id is required for checkout',
+          'Provider plan id is required for checkout',
         );
       }
       const customers = manager.getRepository(BillingCustomerEntity);
@@ -274,7 +334,7 @@ export class BillingCheckoutService {
             subscriptionId: subscription.id,
             idempotencyKey: dto.idempotencyKey,
             requestHash,
-            paypalPlanId: resolved.providerPrice.providerPriceId,
+            providerPlanId: resolved.providerPrice.providerPriceId,
             billingEmail: dto.billingEmail ?? null,
           },
         }),
@@ -340,16 +400,21 @@ export class BillingCheckoutService {
       }
     }
 
-    // The reservation is committed before contacting PayPal. These calls hold
+    // The reservation is committed before contacting the provider. These calls hold
     // neither a transaction nor a database lock, and use the frozen payload.
-    let result: PaypalSubscriptionResult | null = null;
+    let result: ProviderSubscription | null = null;
     let error: unknown;
     const { checkout, subscription } = preparation;
     try {
       result = subscription.providerSubscriptionId
-        ? await this.paypal.getSubscription(subscription.providerSubscriptionId)
-        : await this.paypal.createSubscription({
-            providerPlanId: String(checkout.metadata.paypalPlanId),
+        ? await this.providers
+            .get(checkout.provider)
+            .getSubscription(subscription.providerSubscriptionId)
+        : await this.providers.get(checkout.provider).createSubscription({
+            providerPlanId: String(
+              checkout.metadata.providerPlanId ??
+                checkout.metadata.paypalPlanId,
+            ),
             customId: checkout.id,
             requestId: checkout.id,
             returnUrl: checkout.successUrl,
@@ -438,7 +503,7 @@ export class BillingCheckoutService {
       }
       const resolved = this.planResolver.resolve(
         targetPlan,
-        dto.provider,
+        dto.provider!,
         dto.planPriceCode,
       );
       return repository.save(
@@ -469,7 +534,7 @@ export class BillingCheckoutService {
             idempotencyKey: dto.idempotencyKey,
             requestHash,
             effectiveAt,
-            paypalPlanId: resolved.providerPrice.providerPriceId,
+            providerPlanId: resolved.providerPrice.providerPriceId,
             ...(legal ? { legalEvidence: legal.evidence } : {}),
           },
         }),
@@ -479,7 +544,7 @@ export class BillingCheckoutService {
 
   private async findExistingCheckout(
     repository: Repository<BillingCheckoutSessionEntity>,
-    dto: CreateCheckoutSessionDto,
+    dto: Pick<CreateCheckoutSessionDto, 'organizationId' | 'idempotencyKey'>,
     actor: BillingServiceActor,
     lock = false,
   ): Promise<BillingCheckoutSessionEntity | null> {
@@ -593,10 +658,11 @@ export class BillingCheckoutService {
     if (
       !subscription.providerSubscriptionId &&
       now.getTime() + CHECKOUT_ATTEMPT_LEASE_MS >=
-        checkout.createdAt.getTime() + PAYPAL_IDEMPOTENCY_WINDOW_MS
+        checkout.createdAt.getTime() +
+          this.providers.get(checkout.provider).subscriptionIdempotencyWindowMs
     )
       throw new ConflictException(
-        'PayPal retry window expired; reconcile the original checkout before retrying',
+        'Provider retry window expired; reconcile the original checkout before retrying',
       );
 
     const attemptId = randomUUID();
@@ -614,9 +680,9 @@ export class BillingCheckoutService {
   private async completeAttempt(
     reservation: CheckoutReservation,
     actor: BillingServiceActor,
-    result: PaypalSubscriptionResult | null,
+    result: ProviderSubscription | null,
     providerError: unknown,
-    failureSource: 'paypal' | 'legal' = 'paypal',
+    failureSource: 'provider' | 'legal' = 'provider',
   ): Promise<CheckoutSessionResponseDto> {
     const outcome = await this.dataSource.transaction(async (manager) => {
       const subscriptions = manager.getRepository(BillingSubscriptionEntity);
@@ -660,7 +726,7 @@ export class BillingCheckoutService {
           subscription.providerSubscriptionId !== result.id
         )
           throw new ConflictException(
-            'PayPal subscription differs from the original checkout; reconcile before retrying',
+            'Provider subscription differs from the original checkout; reconcile before retrying',
           );
         if (!alreadyLinked) {
           // Update only the provider reference, preserving webhook status/periods.
@@ -705,7 +771,7 @@ export class BillingCheckoutService {
             manager,
             organizationId: checkout.organizationId,
             actorUserId: checkout.userId,
-            action: 'billing.checkout.paypal_created',
+            action: 'billing.checkout.provider_created',
             resourceType: 'billing_checkout_session',
             resourceId: checkout.id,
             provider: checkout.provider,
@@ -728,7 +794,7 @@ export class BillingCheckoutService {
         return {
           error:
             providerError ??
-            new BadGatewayException('PayPal approval URL is missing'),
+            new BadGatewayException('Provider approval URL is missing'),
         };
       }
       return { response: this.toCheckoutResponse(checkout, subscription.id) };
@@ -740,7 +806,7 @@ export class BillingCheckoutService {
           cause: outcome.error,
         });
       }
-      throw new BadGatewayException('PayPal checkout creation failed', {
+      throw new BadGatewayException('Provider checkout creation failed', {
         cause: outcome.error,
       });
     }
@@ -761,7 +827,7 @@ export class BillingCheckoutService {
           dto.productCode,
           dto.planCode,
           dto.planPriceCode,
-          dto.provider,
+          dto.provider!,
           dto.legalAcceptanceId,
           dto.successUrl,
           dto.cancelUrl,
@@ -778,7 +844,10 @@ export class BillingCheckoutService {
     return {
       checkoutId: checkout.id,
       subscriptionId,
-      checkoutUrl: checkout.providerCheckoutUrl!,
+      checkoutUrl: this.validateApprovalUrl(
+        checkout.provider,
+        checkout.providerCheckoutUrl!,
+      ),
       status: checkout.status,
     };
   }
@@ -848,7 +917,21 @@ export class BillingCheckoutService {
           ? SubscriptionStatus.Pending
           : subscription.status,
       provider: checkoutSession.provider,
-      ...(planChange ? { planChange } : {}),
+      ...(planChange
+        ? {
+            planChange: {
+              ...planChange,
+              ...(pendingPlanChange(subscription)?.checkoutId ===
+              checkoutSession.id
+                ? this.planChangeResponse(
+                    checkoutSession.provider,
+                    pendingPlanChange(subscription)!,
+                    checkoutSession.providerCheckoutUrl,
+                  )
+                : {}),
+            },
+          }
+        : {}),
     };
   }
 

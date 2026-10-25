@@ -1,15 +1,28 @@
 import { EntityManager } from 'typeorm';
+import type { PlanChangeQuote } from './plan-change-quote';
 import {
   BillingCheckoutSessionEntity,
   BillingCheckoutSessionStatus,
   BillingSubscriptionEntity,
   SubscriptionStatus,
 } from '../billing-shared';
-import type { PaypalSubscriptionDetails } from '../paypal/types';
+import type { ProviderSubscription } from '../providers/billing-provider.types';
 
 export type PlanChangeState =
   'preparing' | 'awaiting_approval' | 'scheduled' | 'effective' | 'failed';
 export type PendingPlanChange = {
+  cancelRequestedAt?: string;
+  cancelApprovalUrl?: string;
+  quote?: PlanChangeQuote;
+  proration?: { refundedAt?: string };
+  paymentOrderId?: string;
+  paymentOrderGeneration?: number;
+  paymentQuoteExpiresAt?: string;
+  paymentApprovalUrl?: string;
+  captureId?: string;
+  capturedAt?: string;
+  orderCreateAttemptedAt?: string;
+  captureAttemptedAt?: string;
   idempotencyKey: string;
   requestHash: string;
   state: PlanChangeState;
@@ -58,12 +71,12 @@ export function cancellationIntent(
     : null;
 }
 
-// PayPal ACTIVE refers to the existing agreement; only the target provider plan proves consent.
+// Provider ACTIVE refers to the existing agreement; only the target provider plan proves consent.
 // Keep the contracted catalog version until its paid cycle ends and the new cycle is paid.
 export async function applyConfirmedPlanChange(
   manager: EntityManager,
   subscription: BillingSubscriptionEntity,
-  provider: PaypalSubscriptionDetails,
+  provider: ProviderSubscription,
   now = new Date(),
   approvalOccurredAt?: string,
 ): Promise<void> {
@@ -71,20 +84,19 @@ export async function applyConfirmedPlanChange(
   if (
     !change ||
     change.state === 'failed' ||
+    !!change.cancelRequestedAt ||
     change.state === 'effective' ||
     subscription.metadata.refundRevocation
   )
     return;
   if (
     provider.planId !== change.targetProviderPlanId ||
-    provider.status !== 'ACTIVE'
+    provider.subscriptionStatus !== SubscriptionStatus.Active
   )
     return;
-  const billing =
-    provider.billingInfo ??
-    (provider.raw.billing_info as Record<string, unknown> | undefined);
-  const payment = billing?.last_payment as { time?: string } | undefined;
-  const paidAt = payment?.time ? Date.parse(payment.time) : NaN;
+  const paidAt = provider.lastPaymentAt
+    ? Date.parse(provider.lastPaymentAt)
+    : NaN;
   const originalBoundary = Date.parse(
     change.requestedEffectiveAt ?? change.effectiveAt,
   );
@@ -104,8 +116,8 @@ export async function applyConfirmedPlanChange(
     change.effectiveAt = new Date(originalBoundary).toISOString();
   else {
     const next =
-      typeof billing?.next_billing_time === 'string'
-        ? Date.parse(billing.next_billing_time)
+      typeof provider.nextBillingAt === 'string'
+        ? Date.parse(provider.nextBillingAt)
         : NaN;
     if (paidAt > Date.parse(change.approvedAt))
       change.effectiveAt = new Date(paidAt).toISOString();
@@ -113,7 +125,20 @@ export async function applyConfirmedPlanChange(
       change.effectiveAt = new Date(next).toISOString();
     else return;
   }
-  change.state = 'scheduled';
+  const immediateUpgrade =
+    change.quote?.kind === 'upgrade' &&
+    !change.proration?.refundedAt &&
+    (change.captureId || change.quote.amountDueNow === '0.00') &&
+    now.getTime() < originalBoundary;
+  if (immediateUpgrade)
+    change.effectiveAt = change.capturedAt ?? now.toISOString();
+  change.state =
+    change.quote?.kind === 'upgrade' &&
+    !change.proration?.refundedAt &&
+    !immediateUpgrade &&
+    now.getTime() < originalBoundary
+      ? 'awaiting_approval'
+      : 'scheduled';
   const checkout = await manager
     .getRepository(BillingCheckoutSessionEntity)
     .findOne({
@@ -141,8 +166,9 @@ export async function applyConfirmedPlanChange(
   )
     throw new Error('Scheduled plan checkout mismatch');
   if (
-    now.getTime() >= Date.parse(change.effectiveAt) &&
-    paidAt >= Date.parse(change.effectiveAt)
+    immediateUpgrade ||
+    (now.getTime() >= Date.parse(change.effectiveAt) &&
+      paidAt >= Date.parse(change.effectiveAt))
   ) {
     Object.assign(subscription, {
       planId: checkout.planId,
@@ -172,7 +198,10 @@ export async function applyConfirmedPlanChange(
   await manager
     .getRepository(BillingCheckoutSessionEntity)
     .update(change.checkoutId, {
-      status: BillingCheckoutSessionStatus.Approved,
+      status:
+        change.state === 'awaiting_approval'
+          ? BillingCheckoutSessionStatus.Pending
+          : BillingCheckoutSessionStatus.Approved,
       metadata: {
         ...checkout.metadata,
         planChangeState: change.state,
@@ -193,4 +222,37 @@ export function hasPaidCancellationAccess(
     !!until &&
     until.getTime() > now
   );
+}
+
+export function planChangeResponse(
+  change: PendingPlanChange,
+  revisionUrl?: string | null,
+) {
+  const terminal = ['scheduled', 'effective', 'failed'].includes(change.state);
+  const payment =
+    !change.cancelRequestedAt &&
+    !!change.approvedAt &&
+    change.quote?.kind === 'upgrade' &&
+    !terminal;
+  return {
+    ...change.quote,
+    cancellationRequested: Boolean(change.cancelRequestedAt),
+    state: change.state,
+    effectiveAt:
+      change.quote?.kind === 'upgrade' && !terminal
+        ? change.quote.effectiveAt
+        : change.effectiveAt,
+    action: terminal
+      ? ('none' as const)
+      : payment
+        ? ('approve_payment' as const)
+        : ('approve_subscription' as const),
+    checkoutUrl: terminal
+      ? null
+      : change.cancelRequestedAt
+        ? (change.cancelApprovalUrl ?? null)
+        : payment
+          ? (change.paymentApprovalUrl ?? null)
+          : (revisionUrl ?? null),
+  };
 }

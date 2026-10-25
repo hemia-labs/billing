@@ -34,7 +34,7 @@ module.exports=async function checkLicenseConnections(ds) {
     }
     const initial=await ds.query('SELECT product_code,revision FROM billing_license_deliveries WHERE organization_id=$1 ORDER BY product_code',[org]);
     assert.equal(initial.length,2);
-    const service=new LicenseWebhookDeliveryService(ds,new ConfigService({app:{nodeEnv:'test'},hemiaLegal:{tokenUrl:base+'/token',clientId:'fixture-billing',clientSecret:'fixture-only'}}),{resolveLicense:async()=>({active:true})});
+    const service=new LicenseWebhookDeliveryService(ds,new ConfigService({app:{nodeEnv:'test'},hemiaLegal:{tokenUrl:base+'/token',clientId:'fixture-billing',clientSecret:'fixture-only'}}),{current:async(organizationId,productCode)=>({organizationId,productCode,revision:String((await ds.query("SELECT nextval('billing_license_revision_seq') AS revision"))[0].revision),confirmedAt:new Date().toISOString(),license:{active:true},subscription:null})});
     await service.deliver();
     assert.equal(received.length,3,'concurrent change must deliver again');
     assert.deepEqual([...new Set(received.map(p=>p.productCode))].sort(),products.sort());

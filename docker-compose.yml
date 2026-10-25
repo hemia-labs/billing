@@ -1,0 +1,82 @@
+name: hemia-billing
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  backend:
+    image: hemia-billing-backend:${BILLING_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: ${BILLING_API_ENV_FILE:-./apps/api/.env.production}
+        format: raw
+    environment:
+      NODE_ENV: production
+      PORT: "3015"
+      APP_GLOBAL_PREFIX: api/v1
+      NODE_OPTIONS: --max-old-space-size=256
+    ports:
+      - "${BILLING_BIND_ADDRESS:-127.0.0.1}:${BILLING_API_PORT:-3015}:3015"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3015/api/v1', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  frontend:
+    image: hemia-billing-frontend:${BILLING_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+      args:
+        NEXT_PUBLIC_API_URL: ${BILLING_PUBLIC_API_URL:-https://billing.hemia.cloud/api/v1}
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "5175"
+      HOSTNAME: 0.0.0.0
+      NODE_OPTIONS: --max-old-space-size=128
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "${BILLING_BIND_ADDRESS:-127.0.0.1}:${BILLING_WEB_PORT:-5175}:5175"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /app/apps/web/.next/cache:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5175', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

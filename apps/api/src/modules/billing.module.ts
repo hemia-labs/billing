@@ -1,3 +1,4 @@
+import { BillingPaymentAttemptsModule } from './payment-attempts/billing-payment-attempts.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from './audit';
@@ -68,6 +69,7 @@ import {
     BillingInvoicesModule,
     BillingLicensesModule,
     BillingIntegrationsModule,
+    BillingPaymentAttemptsModule,
     BillingOperationsModule,
     BillingSubscriptionsManagementModule,
     BillingSubscriptionAddonsModule,

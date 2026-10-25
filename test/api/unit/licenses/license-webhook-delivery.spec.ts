@@ -25,6 +25,14 @@ const item = {
   attempts: 2,
 };
 const license = { active: true, validUntil: null };
+const snapshot = {
+  organizationId: item.organization_id,
+  productCode: item.product_code,
+  revision: '15',
+  confirmedAt: '2026-10-23T00:00:00.000Z',
+  license,
+  subscription: null,
+};
 function fixture(count = 1, config: Record<string, unknown> = {}) {
   const queue = Array.from({ length: count }, () => ({
     ...item,
@@ -51,7 +59,15 @@ function fixture(count = 1, config: Record<string, unknown> = {}) {
       hemiaLegal: oauth,
       ...config,
     }),
-    { resolveLicense: jest.fn().mockResolvedValue(license) } as never,
+    {
+      current: jest.fn((organizationId: string, productCode: string) =>
+        Promise.resolve({
+          ...snapshot,
+          organizationId,
+          productCode,
+        }),
+      ),
+    } as never,
   );
   return {
     service,
@@ -111,8 +127,7 @@ describe('Billing OAuth delivery to Balanz', () => {
       type: 'billing.license.updated',
       organizationId: item.organization_id,
       productCode: 'balanz_cfdi',
-      revision: item.revision,
-      license,
+      ...snapshot,
       checkouts: [],
     });
     expect(

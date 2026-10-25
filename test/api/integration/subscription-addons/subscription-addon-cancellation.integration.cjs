@@ -1,3 +1,4 @@
+const {providerRegistry}=require('../../helpers/provider-registry');
 const { createRequire } = require('node:module');
 const apiRequire = createRequire(require('node:path').resolve(__dirname, '../../../../apps/api/package.json'));
 // SQL: TS_NODE_TRANSPILE_ONLY=false node -r ts-node/register test/subscription-addon-cancellation.integration.cjs
@@ -21,7 +22,7 @@ function service(repository, dataSource, paypal, audit, entitlements) {
     null,
     audit,
     entitlements,
-    paypal,
+    providerRegistry(paypal),
     null,
     dataSource,
     null,

@@ -9,13 +9,14 @@ import {
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { BillingAuditService } from '../../audit';
-import { BillingProvider } from '../../billing-shared';
-import { PaypalClientService } from '../../paypal';
+import { BillingProvider, SubscriptionStatus } from '../../billing-shared';
+import { BillingProviderRegistry } from '../../providers/billing-provider.registry';
 
 type CancellationJob = {
   id: string;
   organization_id: string;
   provider_subscription_id: string;
+  provider: BillingProvider;
   target_type: 'subscription' | 'addon';
   target_subscription_id: string;
   target_addon_id: string | null;
@@ -34,7 +35,7 @@ export class PaypalCancellationWorker
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly paypal: PaypalClientService,
+    private readonly providers: BillingProviderRegistry,
     private readonly audit: BillingAuditService,
   ) {
     this.wakeup = new BillingQueueWakeup(
@@ -68,23 +69,24 @@ export class PaypalCancellationWorker
 
       let completed = false;
       try {
-        const subscription = await this.paypal.getSubscription(
-          job.provider_subscription_id,
-        );
-        if (subscription.status === 'CANCELLED') {
+        const subscription = await this.providers
+          .get(job.provider)
+          .getSubscription(job.provider_subscription_id);
+        if (subscription.subscriptionStatus === SubscriptionStatus.Cancelled) {
           completed = true;
         } else {
           try {
-            await this.paypal.cancelSubscription({
+            await this.providers.get(job.provider).cancelSubscription({
               providerSubscriptionId: job.provider_subscription_id,
               reason: 'Subscription cancelled after a completed PayPal refund',
             });
             completed = true;
           } catch {
-            const current = await this.paypal.getSubscription(
-              job.provider_subscription_id,
-            );
-            completed = current.status === 'CANCELLED';
+            const current = await this.providers
+              .get(job.provider)
+              .getSubscription(job.provider_subscription_id);
+            completed =
+              current.subscriptionStatus === SubscriptionStatus.Cancelled;
           }
         }
       } catch {
@@ -125,7 +127,10 @@ export class PaypalCancellationWorker
           WHERE job.id=candidate.id
          RETURNING job.id,job.organization_id,job.provider_subscription_id,
                    job.target_type,job.target_subscription_id,job.target_addon_id,
-                   job.source_payment_refund_id,job.lease_token,job.attempts
+                   job.source_payment_refund_id,job.lease_token,job.attempts,
+                   CASE WHEN job.target_type='addon' THEN
+                     (SELECT provider::text FROM subscription_addons WHERE id=job.target_addon_id)
+                   ELSE (SELECT provider::text FROM subscriptions WHERE id=job.target_subscription_id) END AS provider
         `,
         [token],
       );
@@ -164,7 +169,7 @@ export class PaypalCancellationWorker
         action: 'billing.refund.subscription_cancellation_completed',
         resourceType: 'paypal_cancellation_job',
         resourceId: job.id,
-        provider: BillingProvider.Paypal,
+        provider: job.provider,
         metadata: {
           cancellationJobId: job.id,
           paymentRefundId: job.source_payment_refund_id,

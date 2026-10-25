@@ -4,15 +4,18 @@ Todas las pruebas, fixtures, configuraciones y runners pertenecen a `billing/tes
 
 ## Estructura
 
-- `api/unit/`: 31 suites Jest organizadas por módulo y la suite Bun de Fevex en `copilot/`.
+- `api/unit/`: suites Jest organizadas por módulo y la suite Bun de Fevex en `copilot/`.
 - `api/integration/authorization/`: autorización y concurrencia de checkout sobre PostgreSQL desechable.
 - `api/integration/context-cache/`: caché y sesión con Redis desechable.
 - `api/integration/subscription-addons/`: construcción de SQL y cancelación contra PostgreSQL explícitamente desechable.
 - `api/tsconfig.json`: resolución de tipos y dependencias de las pruebas de API.
-- `api/jest-e2e.json`: configuración conservada para futuras suites `*.e2e-spec.ts`; actualmente no hay casos E2E de aplicación.
+- `workflows/`: YAML real, permisos efectivos por job y condiciones de publicacion/deploy; usa el parser nativo de Bun.
+- `release/`: versionado real de Changesets y aislamiento entre Billing y Payments.
+- `deploy/`: validacion de assets, migraciones explicitas y rollback del controlador.
+- `docker/`: arranque real de las imagenes con dependencias desechables.
 - `web/`: pruebas Bun de frontend por feature y su `tsconfig.json` de resolución.
 - `payments/package/`: instalación y exports del tarball publicable del SDK.
-- `payments/integration/atlas/`: host Nest independiente con PostgreSQL desechable para pagos y Legal opcional.
+- `payments/integration/database-optional/`: consumidores Node/Nest y copias opcionales MySQL/PostgreSQL desechables.
 
 ## Ejecución habitual
 
@@ -48,7 +51,19 @@ Los módulos y servicios se agrupan sin cambiar su lógica; los imports de prueb
 ```sh
 bun run test:payments:tarball
 bun run --cwd packages/payments build
-bash test/payments/integration/atlas/verify.sh
+bash test/payments/integration/database-optional/verify.sh
 ```
 
 La integración requiere Docker y conserva la infraestructura de prueba fuera de `packages/payments`. No usa bases ni credenciales residentes.
+
+## Workflows
+
+```sh
+bun run test:workflows
+```
+
+Estas pruebas parsean los workflows y calculan los permisos del token por job: una
+seccion `permissions` del job sustituye a la del workflow. Incluyen mutaciones
+que deben fallar al conceder escritura en CI, acceso al entorno prod o eliminar
+condiciones de publicacion y deploy. Los comandos shell se verifican aparte con
+las pruebas del controlador y el smoke; el analisis YAML no ejecuta GitHub Actions.

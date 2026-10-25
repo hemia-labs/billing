@@ -1,0 +1,196 @@
+name: Billing release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Retry an unpublished version committed on main: billing-vMAJOR.MINOR.PATCH'
+        type: string
+        required: true
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: billing-release-main
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  classify:
+    if: github.repository == 'hemia-labs/billing' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.batch.outputs.release }}
+      tag: ${{ steps.batch.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Identify an Billing version-only merge
+        id: batch
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$EVENT_NAME" == 'workflow_dispatch' ]]; then
+            node scripts/billing-version.mjs retry "$REQUESTED_TAG"
+          else
+            node scripts/billing-version.mjs classify "$BASE_SHA"
+          fi
+
+  version-pr:
+    needs: [classify, checks]
+    if: needs.classify.outputs.release != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
+      - name: Find pending Billing changesets
+        id: changesets
+        run: |
+          node scripts/billing-version.mjs pending
+      - name: Create a GitHub App token when configured
+        id: app-token
+        if: steps.changesets.outputs.pending == 'true' && vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: billing
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Apply Billing changesets
+        if: steps.changesets.outputs.pending == 'true'
+        run: |
+          bun run version:billing
+          node scripts/billing-version.mjs notes > "$RUNNER_TEMP/billing-release-notes.md"
+      - name: Create or update the Billing version PR
+        if: steps.changesets.outputs.pending == 'true'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          base: main
+          branch: changeset-release/billing
+          title: 'chore(billing): release application version'
+          commit-message: 'chore(billing): release application version'
+          body-path: ${{ runner.temp }}/billing-release-notes.md
+          add-paths: |
+            apps/api/package.json
+            apps/web/package.json
+            apps/api/CHANGELOG.md
+            apps/web/CHANGELOG.md
+            bun.lock
+            .changeset/*.md
+
+  checks:
+    needs: classify
+    if: needs.classify.outputs.release != 'true'
+    uses: ./.github/workflows/billing-ci.yml
+
+  publish:
+    needs: [classify, checks]
+    if: ${{ !cancelled() && needs.classify.result == 'success' && needs.classify.outputs.release == 'true' }}
+    environment: prod
+    outputs:
+      release_tag: ${{ needs.classify.outputs.tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - name: Test Billing and its production images
+        run: bash scripts/billing-checks.sh
+      - name: Join Tailscale with GitHub OIDC
+        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4
+        with:
+          oauth-client-id: ${{ vars.TS_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:hemia-ci
+      - name: Publish images and immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.classify.outputs.tag }}
+          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists. Redeploy its assets instead of rebuilding.' >&2
+            exit 1
+          fi
+          : "${REGISTRY_HOST:?Missing REGISTRY_HOST}" "${REGISTRY_USERNAME:?Missing REGISTRY_USERNAME}" "${REGISTRY_PASSWORD:?Missing REGISTRY_PASSWORD}"
+          export DOCKER_CONFIG="$RUNNER_TEMP/billing-registry-docker"
+          install -d -m 700 "$DOCKER_CONFIG"
+          trap 'docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true; rm -rf -- "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+          for service in backend frontend; do
+            if docker manifest inspect "$REGISTRY_HOST/billing/$service:$RELEASE_TAG" >/dev/null 2>&1; then
+              echo 'Image tag already exists; refusing to overwrite it.' >&2
+              exit 1
+            fi
+          done
+          for service in backend frontend; do
+            image="$REGISTRY_HOST/billing/$service:$RELEASE_TAG"
+            docker tag "hemia-billing-$service:local" "$image"
+            docker push "$image"
+            docker manifest inspect "$image" >/dev/null
+          done
+          python3 scripts/billing-release.py create "$RELEASE_TAG" "$RUNNER_TEMP/billing-release"
+          node scripts/billing-version.mjs notes > "$RUNNER_TEMP/billing-release-notes.md"
+          if git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          fi
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft \
+            --title "Billing ${RELEASE_TAG#billing-v}" --notes-file "$RUNNER_TEMP/billing-release-notes.md"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/billing-release/"*
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq 'if .immutable != true then error("Enable release immutability before publishing Billing releases") else .tag_name end'
+          echo "Release ready: $RELEASE_TAG. The next job checks whether automatic deployment is enabled in prod." >> "$GITHUB_STEP_SUMMARY"
+
+  auto-deploy:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/billing-deploy.yml
+    with:
+      operation: deploy
+      release_tag: ${{ needs.publish.outputs.release_tag }}
+      automatic: true
+    secrets: inherit

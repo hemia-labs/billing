@@ -34,7 +34,17 @@ export class CancelSubscriptionDto {
   reason?: string;
 }
 
+export class PlanChangeQuoteQueryDto {
+  @IsString() @MaxLength(100) target_plan_code: string;
+  @IsString() @MaxLength(100) target_plan_price_code: string;
+}
+
 export class ChangePlanDto {
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{1,10}(?:\.\d{1,2})?$/)
+  expectedAmountDueNow?: string;
+
   @IsString()
   @Matches(/^\S+$/)
   @MaxLength(120)

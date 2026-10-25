@@ -1,3 +1,4 @@
+import { BillingSnapshotsService } from './billing-snapshots.service';
 import { Cron } from '@nestjs/schedule';
 import { BillingQueueWakeup } from '../webhooks/billing-queue-wakeup';
 import {
@@ -11,7 +12,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { BillingLicensesService } from './billing-licenses.service';
 
 @Injectable()
 export class LicenseWebhookDeliveryService
@@ -29,7 +29,7 @@ export class LicenseWebhookDeliveryService
   constructor(
     private readonly db: DataSource,
     private readonly config: ConfigService,
-    private readonly licenses: BillingLicensesService,
+    private readonly snapshots: BillingSnapshotsService,
   ) {
     this.wakeup = new BillingQueueWakeup(
       this.db,
@@ -90,7 +90,7 @@ export class LicenseWebhookDeliveryService
         const resource = this.endpoint(item.resource);
         if (resource.origin !== url.origin)
           throw new Error('invalid_receiver_resource');
-        const license = await this.licenses.resolveLicense(
+        const snapshot = await this.snapshots.current(
           item.organization_id,
           item.product_code,
         );
@@ -106,10 +106,7 @@ export class LicenseWebhookDeliveryService
         );
         const body = JSON.stringify({
           type: 'billing.license.updated',
-          organizationId: item.organization_id,
-          productCode: item.product_code,
-          revision: item.revision,
-          license,
+          ...snapshot,
           checkouts,
         });
         const accessToken = await this.accessToken(item);

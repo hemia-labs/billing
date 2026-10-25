@@ -20,6 +20,7 @@ import {
   WebhookProcessingStatus,
 } from '../../billing-shared';
 import { BillingLicenseCalculatorService } from '../../licenses';
+import { paypalSubscription as normalizePaypalSubscription } from '../../providers/paypal-billing.adapter';
 import { PaypalClientService } from '../../paypal';
 import { BillingSubscriptionAddonPaymentsProcessorService } from '../../subscription-addons';
 import { BillingPaypalRefundsService } from './billing-paypal-refunds.service';
@@ -39,6 +40,8 @@ const SUPPORTED_EVENTS = new Set([
   'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
   'PAYMENT.SALE.COMPLETED',
   'PAYMENT.SALE.REFUNDED',
+  'PAYMENT.CAPTURE.REFUNDED',
+  'PAYMENT.CAPTURE.REVERSED',
   'PAYMENT.SALE.REVERSED',
   'BILLING.SUBSCRIPTION.SUSPENDED',
   'BILLING.SUBSCRIPTION.CANCELLED',
@@ -82,9 +85,15 @@ export class BillingSubscriptionPaymentsProcessorService {
         );
       case 'PAYMENT.SALE.COMPLETED':
         return this.processPaymentCompleted(manager, input, context);
+      case 'PAYMENT.CAPTURE.REFUNDED':
       case 'PAYMENT.SALE.REFUNDED':
         return (
           this.refunds?.process(manager, input) ??
+          this.retryableFailure('PayPal refund processor unavailable')
+        );
+      case 'PAYMENT.CAPTURE.REVERSED':
+        return (
+          this.refunds?.reverseCapture(manager, input) ??
           this.retryableFailure('PayPal refund processor unavailable')
         );
       case 'PAYMENT.SALE.REVERSED':
@@ -340,7 +349,7 @@ export class BillingSubscriptionPaymentsProcessorService {
     await applyConfirmedPlanChange(
       manager,
       subscription,
-      paypalSubscription,
+      normalizePaypalSubscription(paypalSubscription),
       new Date(),
       input.eventType === 'BILLING.SUBSCRIPTION.UPDATED' &&
         input.resource.plan_id === paypalSubscription.planId
@@ -412,6 +421,7 @@ export class BillingSubscriptionPaymentsProcessorService {
         licenseKeyHash: calculation.licenseKeyHash,
       });
 
+    license.planCode = calculation.planCode;
     license.status = calculation.status;
     license.seatsLimit = calculation.seatsLimit;
     license.usageLimit = calculation.usageLimit;
