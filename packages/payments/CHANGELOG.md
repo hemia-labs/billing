@@ -1,5 +1,11 @@
 # @hemia/payments
 
+## 0.8.0
+
+### Minor Changes
+
+- f95840a: Add buyer-bound cancellation of central payment attempts and expose cancellationRequested in plan-change state. Preserve approval recovery when a cancelled change requires restoring the existing subscription, with authorization checks before transport.
+
 ## 0.7.0
 
 ### Minor Changes
