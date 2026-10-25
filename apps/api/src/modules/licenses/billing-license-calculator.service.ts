@@ -5,7 +5,7 @@ import {
   BillingProductEntity,
   BillingSubscriptionEntity,
 } from '../billing-shared';
-import { LicenseStatus } from '../billing-shared';
+import { LicenseStatus, SubscriptionStatus } from '../billing-shared';
 
 export interface BillingLicenseCalculationInput {
   license?: BillingLicenseEntity | null;
@@ -35,8 +35,17 @@ export class BillingLicenseCalculatorService {
   calculate(
     input: BillingLicenseCalculationInput,
   ): BillingLicenseCalculationResult {
+    const paidThrough =
+      input.subscription.currentPeriodEnd ?? input.subscription.nextBillingTime;
+    const scheduledCancellation =
+      input.subscription.status === SubscriptionStatus.Cancelled &&
+      input.subscription.cancelAtPeriodEnd;
+    const status =
+      scheduledCancellation && paidThrough && paidThrough.getTime() > Date.now()
+        ? LicenseStatus.Active
+        : input.status;
     const version = input.subscription.plan
-      ? this.planResolver.publishedVersion(input.subscription.plan)
+      ? this.planResolver.contractVersion(input.subscription)
       : null;
     const featuresJson = version ? this.planResolver.entitlements(version) : {};
     const seatsLimit =
@@ -51,14 +60,17 @@ export class BillingLicenseCalculatorService {
       subscriptionId: input.subscription.id,
       planCode: input.subscription.planCode,
       licenseKeyHash: input.license?.licenseKeyHash ?? null,
-      status: input.status,
+      status,
       seatsLimit,
       usageLimit: null,
       featuresJson,
       validUntil:
-        input.status === LicenseStatus.Grace
+        status === LicenseStatus.Grace
           ? input.subscription.graceUntil
-          : input.subscription.nextBillingTime,
+          : scheduledCancellation || input.subscription.cancelAtPeriodEnd
+            ? paidThrough
+            : (input.subscription.nextBillingTime ??
+              input.subscription.currentPeriodEnd),
     };
   }
 

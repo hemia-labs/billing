@@ -9,14 +9,14 @@ import {
 } from 'typeorm';
 
 @Entity('usage_counters')
-@Index('IDX_usage_counters_organization_product_key_unique', [
-  'organizationId',
-  'productCode',
-  'key',
-], {
-  unique: true,
-  where: '"deleted_at" IS NULL',
-})
+@Index(
+  'IDX_usage_counters_organization_product_key_unique',
+  ['organizationId', 'productCode', 'key'],
+  {
+    unique: true,
+    where: '"deleted_at" IS NULL',
+  },
+)
 export class BillingUsageCounterEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

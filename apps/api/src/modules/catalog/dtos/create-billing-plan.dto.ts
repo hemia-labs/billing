@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  Allow,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -12,6 +13,7 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { BILLING_CURRENCIES } from '../../billing-shared';
@@ -66,6 +68,10 @@ export class CreatePlanPriceDto {
   currency: BillingCurrency;
 
   @IsString()
+  @Matches(/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/, {
+    message:
+      'amount must be a non-negative decimal with up to 10 integer and 2 fractional digits',
+  })
   amount: string;
 
   @IsOptional()
@@ -88,6 +94,8 @@ export class CreatePlanEntitlementDto {
   @MaxLength(120)
   featureCode?: string;
 
+  // The catalog resolver validates the value against the feature's valueType.
+  @Allow()
   valueJson: unknown;
 }
 

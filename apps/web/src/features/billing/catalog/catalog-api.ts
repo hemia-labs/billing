@@ -52,6 +52,10 @@ export type CatalogPlan = {
   versions: CatalogPlanVersion[];
 };
 
+export type CatalogPlanOverview = Omit<CatalogPlan, "versions"> & {
+  publishedVersion: CatalogPlanVersionSummary | null;
+};
+
 export type CatalogProviderPrice = {
   id: string;
   provider: BillingProvider;
@@ -99,6 +103,17 @@ export type CatalogPlanVersion = {
   effectiveUntil: string | null;
   prices: CatalogPlanPrice[];
   entitlements: CatalogPlanEntitlement[];
+};
+
+export type CatalogPlanVersionSummary = {
+  id: string;
+  version: number;
+  status: PlanVersionStatus;
+  effectiveFrom: string | null;
+  effectiveUntil: string | null;
+  createdAt: string;
+  priceCount: number;
+  entitlementCount: number;
 };
 
 export type CatalogProviderPricePayload = {
@@ -193,6 +208,7 @@ export type CatalogAddonPayload = {
 };
 
 export type CatalogFilters = {
+  q?: string;
   product_id?: string;
   status?: CatalogStatus;
   provider?: BillingProvider;
@@ -202,13 +218,15 @@ export type CatalogFilters = {
   limit?: number;
 };
 
-export function listCatalogProducts(filters: CatalogFilters) {
+export function listCatalogProducts(filters: CatalogFilters, signal?: AbortSignal) {
   return apiFetch<CatalogPage<CatalogProduct>>(
     `/billing/console/catalog/products${toQueryString({
+      q: filters.q,
       status: filters.status,
       page: filters.page,
       limit: filters.limit,
     })}`,
+    { signal },
   );
 }
 
@@ -238,6 +256,20 @@ export function listCatalogPlans(filters: CatalogFilters) {
 
 export function getCatalogPlan(id: string) {
   return apiFetch<CatalogPlan>(`/billing/console/catalog/plans/${id}`);
+}
+
+export function getCatalogPlanOverview(id: string) {
+  return apiFetch<CatalogPlanOverview>(`/billing/console/catalog/plans/${id}/overview`);
+}
+
+export function listCatalogPlanVersionSummaries(id: string, page: number, limit = 10) {
+  return apiFetch<CatalogPage<CatalogPlanVersionSummary>>(
+    `/billing/console/catalog/plans/${id}/version-summaries${toQueryString({ page, limit })}`,
+  );
+}
+
+export function getCatalogPlanVersion(id: string, versionId: string) {
+  return apiFetch<CatalogPlanVersion>(`/billing/console/catalog/plans/${id}/versions/${versionId}`);
 }
 
 export function createCatalogPlan(payload: CatalogPlanPayload) {
@@ -291,4 +323,8 @@ export function primaryPrice(plan: CatalogPlan) {
 
 export function primaryProviderPrice(plan: CatalogPlan) {
   return primaryPrice(plan)?.providerPrices.find((price) => price.status === "active");
+}
+
+export function publishCatalogVersion(id: string) {
+  return apiFetch(`/billing/console/catalog/plan-versions/${id}/publish`, { method: "POST" });
 }

@@ -11,5 +11,4 @@ export default registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   globalPrefix: process.env.APP_GLOBAL_PREFIX ?? 'api/v1',
   corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
-  billingInternalApiKey: process.env.BILLING_INTERNAL_API_KEY ?? '',
 }));

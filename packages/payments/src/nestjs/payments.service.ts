@@ -110,7 +110,8 @@ export class PaymentsService {
       checked &&
       !(
         change.action === "approve_payment" &&
-        checked.action === "approve_subscription"
+        checked.action === "approve_subscription" &&
+        !checked.cancellationRequested
       )
         ? { ...change, ...checked }
         : change;
@@ -200,6 +201,9 @@ export class PaymentsService {
   }
   async confirmAttempt(c: PaymentsContext, id: string) {
     return this.call(() => this.client.attempts.confirm(id, this.buyer(c)));
+  }
+  async cancelAttempt(c: PaymentsContext, id: string) {
+    return this.call(() => this.client.attempts.cancel(id, this.buyer(c)));
   }
   async planChangeQuote(
     c: PaymentsContext,

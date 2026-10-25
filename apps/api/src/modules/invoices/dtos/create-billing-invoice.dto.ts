@@ -8,7 +8,7 @@ export class CreateBillingInvoiceDto {
   @IsUUID()
   paymentId: string;
 
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toUpperCase() : value,
   )
   @IsString()
@@ -23,7 +23,7 @@ export class CreateBillingInvoiceDto {
   @Matches(/^\d{3}$/)
   taxRegime: string;
 
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toUpperCase() : value,
   )
   @IsString()

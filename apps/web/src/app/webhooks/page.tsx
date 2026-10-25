@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Card } from "@/components/zuno/card";
 import { PageHeading } from "@/components/page-heading";
 import { WebhooksClient } from "./webhooks-client";
 
@@ -8,10 +9,12 @@ export default function WebhooksPage() {
   return (
     <div>
       <PageHeading
-        description="Diagnostica eventos de proveedor y reintenta fallos verificados sin exponer payloads crudos."
+        description="Revisa los eventos recibidos, consulta su detalle y reintenta los fallos verificados."
         title="Webhooks"
       />
-      <WebhooksClient />
+      <Card className="overflow-hidden shadow-sm">
+        <WebhooksClient />
+      </Card>
     </div>
   );
 }

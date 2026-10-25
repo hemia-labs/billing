@@ -5,7 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, Repository } from 'typeorm';
+import {
+  EntityManager,
+  FindOptionsWhere,
+  ILike,
+  In,
+  IsNull,
+  Repository,
+} from 'typeorm';
 import {
   BillingAddonEntity,
   BillingFeatureDefinitionEntity,
@@ -21,6 +28,7 @@ import {
 import {
   AddonStatus,
   BillingAddonPricingModel,
+  BillingProvider,
   BillingPlanStatus,
   BillingProductStatus,
   FeatureAggregationStrategy,
@@ -40,8 +48,15 @@ import {
   ListBillingAddonsQueryDto,
   ListBillingPlansQueryDto,
   ListBillingProductsQueryDto,
+  ListPlanVersionSummariesQueryDto,
+  BillingPlanOverviewResponseDto,
   BillingPlanResponseDto,
+  BillingPlanVersionResponseDto,
+  BillingPlanVersionSummaryResponseDto,
   BillingProductResponseDto,
+  PublicCatalogPlanDto,
+  PublicCatalogPlansResponseDto,
+  PublicPaypalPlanResponseDto,
   CreateFeatureDefinitionDto,
   CreateBillingAddonDto,
   CreateBillingPlanDto,
@@ -81,20 +96,36 @@ export class BillingCatalogService {
     private readonly planResolver: BillingPlanCatalogResolver,
   ) {}
 
-  async listActiveProducts(): Promise<BillingActiveProductResponseDto[]> {
+  async listActiveProducts(
+    productCodes: string[],
+  ): Promise<BillingActiveProductResponseDto[]> {
     const products = await this.products.find({
-      where: { status: BillingProductStatus.Active },
+      where: {
+        status: BillingProductStatus.Active,
+        ...(productCodes.includes('*') ? {} : { code: In(productCodes) }),
+      },
       order: { createdAt: 'DESC', id: 'DESC' },
     });
 
-    return products.map(BillingCatalogMapper.toActiveProductDto);
+    return products.map((item) =>
+      BillingCatalogMapper.toActiveProductDto(item),
+    );
   }
 
   async listProducts(
     query: ListBillingProductsQueryDto,
   ): Promise<CatalogPageDto<BillingProductResponseDto>> {
-    const where: FindOptionsWhere<BillingProductEntity> = {};
-    if (query.status) where.status = query.status;
+    const status = query.status ? { status: query.status } : {};
+    const search = query.q?.trim().replace(/[\\%_]/g, '\\$&');
+    const where:
+      | FindOptionsWhere<BillingProductEntity>
+      | FindOptionsWhere<BillingProductEntity>[] = search
+      ? [
+          { ...status, code: ILike(`%${search}%`) },
+          { ...status, name: ILike(`%${search}%`) },
+          { ...status, description: ILike(`%${search}%`) },
+        ]
+      : status;
     const [items, total] = await this.products.findAndCount({
       where,
       order: { createdAt: 'DESC', id: 'DESC' },
@@ -102,7 +133,11 @@ export class BillingCatalogService {
       take: query.limit,
     });
 
-    return this.page(items.map(BillingCatalogMapper.toProductDto), total, query);
+    return this.page(
+      items.map((item) => BillingCatalogMapper.toProductDto(item)),
+      total,
+      query,
+    );
   }
 
   async listPlans(
@@ -120,7 +155,9 @@ export class BillingCatalogService {
     const start = (query.page - 1) * query.limit;
 
     return this.page(
-      items.slice(start, start + query.limit).map(BillingCatalogMapper.toPlanDto),
+      items
+        .slice(start, start + query.limit)
+        .map((item) => BillingCatalogMapper.toPlanDto(item)),
       items.length,
       query,
     );
@@ -129,12 +166,26 @@ export class BillingCatalogService {
   async listAddons(
     query: ListBillingAddonsQueryDto,
   ): Promise<CatalogPageDto<BillingAddonResponseDto>> {
-    const where: FindOptionsWhere<BillingAddonEntity> = {};
-    if (query.product_id) where.productId = query.product_id;
-    if (query.status) where.status = query.status;
-    if (query.provider) where.provider = query.provider;
-    if (query.currency) where.currency = query.currency;
-    if (query.billing_interval) where.billingInterval = query.billing_interval;
+    const filters: FindOptionsWhere<BillingAddonEntity> = {};
+    if (query.product_id) filters.productId = query.product_id;
+    if (query.status) filters.status = query.status;
+    if (query.provider) filters.provider = query.provider;
+    if (query.currency) filters.currency = query.currency;
+    if (query.billing_interval)
+      filters.billingInterval = query.billing_interval;
+    const search = query.q?.trim().replace(/[\\%_]/g, '\\$&');
+    const providerMatches = Object.values(BillingProvider).filter((provider) =>
+      provider.includes(query.q?.trim().toLowerCase() ?? ''),
+    );
+    const where:
+      | FindOptionsWhere<BillingAddonEntity>
+      | FindOptionsWhere<BillingAddonEntity>[] = search
+      ? [
+          { ...filters, code: ILike(`%${search}%`) },
+          { ...filters, name: ILike(`%${search}%`) },
+          ...providerMatches.map((provider) => ({ ...filters, provider })),
+        ]
+      : filters;
     const [items, total] = await this.addons.findAndCount({
       where,
       relations: { product: true },
@@ -143,7 +194,11 @@ export class BillingCatalogService {
       take: query.limit,
     });
 
-    return this.page(items.map(BillingCatalogMapper.toAddonDto), total, query);
+    return this.page(
+      items.map((item) => BillingCatalogMapper.toAddonDto(item)),
+      total,
+      query,
+    );
   }
 
   async getProduct(id: string): Promise<BillingProductResponseDto> {
@@ -152,6 +207,119 @@ export class BillingCatalogService {
 
   async getPlan(id: string): Promise<BillingPlanResponseDto> {
     return BillingCatalogMapper.toPlanDto(await this.findPlanById(id));
+  }
+
+  async getPlanOverview(id: string): Promise<BillingPlanOverviewResponseDto> {
+    const plan = await this.plans.findOne({
+      where: { id },
+      relations: { product: true },
+    });
+    if (!plan) throw new NotFoundException('Billing plan not found');
+    const published = await this.planVersions.findOne({
+      where: { planId: id, status: PlanVersionStatus.Published },
+      order: { version: 'DESC' },
+    });
+    if (!published) {
+      return {
+        ...BillingCatalogMapper.toPlanOverviewDto(plan),
+        publishedVersion: null,
+      };
+    }
+    const [priceCount, entitlementCount] = await Promise.all([
+      this.planPrices.count({ where: { planVersionId: published.id } }),
+      this.planEntitlements.count({ where: { planVersionId: published.id } }),
+    ]);
+    return {
+      ...BillingCatalogMapper.toPlanOverviewDto(plan),
+      publishedVersion: {
+        id: published.id,
+        version: published.version,
+        status: published.status,
+        effectiveFrom: published.effectiveFrom,
+        effectiveUntil: published.effectiveUntil,
+        createdAt: published.createdAt,
+        priceCount,
+        entitlementCount,
+      },
+    };
+  }
+
+  async listPlanVersionSummaries(
+    id: string,
+    query: ListPlanVersionSummariesQueryDto,
+  ): Promise<CatalogPageDto<BillingPlanVersionSummaryResponseDto>> {
+    const plan = await this.plans.findOne({
+      where: { id },
+      select: { id: true },
+    });
+    if (!plan) throw new NotFoundException('Billing plan not found');
+
+    const [versions, total] = await this.planVersions
+      .createQueryBuilder('version')
+      .where('version.planId = :planId', { planId: id })
+      .orderBy(
+        "CASE WHEN version.status = 'published' THEN 0 WHEN version.status = 'draft' THEN 1 ELSE 2 END",
+        'ASC',
+      )
+      .addOrderBy('version.version', 'DESC')
+      .addOrderBy('version.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getManyAndCount();
+
+    if (versions.length === 0) return this.page([], total, query);
+    const ids = versions.map((version) => version.id);
+    const [priceCounts, entitlementCounts] = await Promise.all([
+      this.planPrices
+        .createQueryBuilder('price')
+        .select('price.planVersionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('price.planVersionId IN (:...ids)', { ids })
+        .groupBy('price.planVersionId')
+        .getRawMany<{ versionId: string; count: string }>(),
+      this.planEntitlements
+        .createQueryBuilder('entitlement')
+        .select('entitlement.planVersionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('entitlement.planVersionId IN (:...ids)', { ids })
+        .groupBy('entitlement.planVersionId')
+        .getRawMany<{ versionId: string; count: string }>(),
+    ]);
+    const priceCountByVersion = new Map(
+      priceCounts.map((item) => [item.versionId, Number(item.count)]),
+    );
+    const entitlementCountByVersion = new Map(
+      entitlementCounts.map((item) => [item.versionId, Number(item.count)]),
+    );
+    return this.page(
+      versions.map((version) => ({
+        id: version.id,
+        version: version.version,
+        status: version.status,
+        effectiveFrom: version.effectiveFrom,
+        effectiveUntil: version.effectiveUntil,
+        createdAt: version.createdAt,
+        priceCount: priceCountByVersion.get(version.id) ?? 0,
+        entitlementCount: entitlementCountByVersion.get(version.id) ?? 0,
+      })),
+      total,
+      query,
+    );
+  }
+
+  async getPlanVersion(
+    id: string,
+    versionId: string,
+  ): Promise<BillingPlanVersionResponseDto> {
+    const version = await this.planVersions.findOne({
+      where: { id: versionId, planId: id },
+      relations: {
+        prices: { providerPrices: true },
+        entitlements: { feature: true },
+      },
+    });
+    if (!version) throw new NotFoundException('Billing plan version not found');
+    return BillingCatalogMapper.toPlanVersionDto(version);
   }
 
   async getAddon(id: string): Promise<BillingAddonResponseDto> {
@@ -175,10 +343,81 @@ export class BillingCatalogService {
       .filter((plan) => this.hasPublishedPrice(plan))
       .sort(
         (left, right) =>
-          Number(this.planResolver.activePrice(this.planResolver.publishedVersion(left)).amount) -
-          Number(this.planResolver.activePrice(this.planResolver.publishedVersion(right)).amount),
+          Number(
+            this.planResolver.activePrice(
+              this.planResolver.publishedVersion(left),
+            ).amount,
+          ) -
+          Number(
+            this.planResolver.activePrice(
+              this.planResolver.publishedVersion(right),
+            ).amount,
+          ),
       )
-      .map(BillingCatalogMapper.toPlanDto);
+      .map((item) => BillingCatalogMapper.toPlanDto(item));
+  }
+
+  async listPublicPlansByProduct(
+    productCode: string,
+  ): Promise<PublicCatalogPlansResponseDto> {
+    const product = await this.findActiveProductByCode(productCode);
+    const plans = await this.plans.find({
+      where: {
+        productId: product.id,
+        status: BillingPlanStatus.Active,
+      },
+      relations: this.planRelations(),
+      order: { createdAt: 'DESC', id: 'DESC' },
+    });
+
+    return {
+      productCode: product.code,
+      plans: plans
+        .map((plan) => this.toPublicPlan(plan))
+        .filter((plan): plan is PublicCatalogPlanDto => plan !== null)
+        .sort(
+          (left, right) =>
+            Number(left.prices[0]?.amount ?? 0) -
+            Number(right.prices[0]?.amount ?? 0),
+        ),
+    };
+  }
+
+  async getPublicPaypalPlanId(
+    productCode: string,
+    planCode: string,
+    planPriceCode: string,
+  ): Promise<PublicPaypalPlanResponseDto> {
+    const product = await this.findActiveProductByCode(productCode);
+    const plan = await this.plans.findOne({
+      where: {
+        productId: product.id,
+        code: planCode,
+        status: BillingPlanStatus.Active,
+      },
+      relations: this.planRelations(),
+    });
+
+    if (!plan) throw new NotFoundException('Billing plan not found');
+
+    const resolved = this.planResolver.resolve(
+      plan,
+      BillingProvider.Paypal,
+      planPriceCode,
+    );
+    const paypalPlanId = resolved.providerPrice.providerPriceId;
+
+    if (!paypalPlanId) {
+      throw new BadRequestException('PayPal plan id is required');
+    }
+
+    return {
+      productCode: product.code,
+      planCode: plan.code,
+      planPriceCode: resolved.price.code,
+      provider: BillingProvider.Paypal,
+      paypalPlanId,
+    };
   }
 
   async listFeatures(
@@ -191,21 +430,25 @@ export class BillingCatalogService {
     });
 
     return this.page(
-      items.map(BillingCatalogMapper.toFeatureDefinitionDto),
+      items.map((item) => BillingCatalogMapper.toFeatureDefinitionDto(item)),
       total,
       query,
     );
   }
 
   async createFeature(
-    dto: CreateFeatureDefinitionDto & { productId?: string; productCode?: string },
+    dto: CreateFeatureDefinitionDto & {
+      productId?: string;
+      productCode?: string;
+    },
   ): Promise<BillingFeatureDefinitionResponseDto> {
     const product = await this.resolveProduct(dto.productId, dto.productCode);
     await this.upsertFeatureDefinitions(product.id, [dto]);
     const feature = await this.featureDefinitions.findOne({
       where: { productId: product.id, code: dto.code },
     });
-    if (!feature) throw new NotFoundException('Billing feature definition not found');
+    if (!feature)
+      throw new NotFoundException('Billing feature definition not found');
     return BillingCatalogMapper.toFeatureDefinitionDto(feature);
   }
 
@@ -214,59 +457,128 @@ export class BillingCatalogService {
     dto: Partial<CreateFeatureDefinitionDto>,
   ): Promise<BillingFeatureDefinitionResponseDto> {
     const feature = await this.featureDefinitions.findOne({ where: { id } });
-    if (!feature) throw new NotFoundException('Billing feature definition not found');
+    if (!feature)
+      throw new NotFoundException('Billing feature definition not found');
     if (dto.name !== undefined) feature.name = dto.name;
     if (dto.description !== undefined) feature.description = dto.description;
     if (dto.valueType !== undefined) feature.valueType = dto.valueType;
     if (dto.unit !== undefined) feature.unit = dto.unit;
-    if (dto.aggregationStrategy !== undefined) feature.aggregationStrategy = dto.aggregationStrategy;
+    if (dto.aggregationStrategy !== undefined)
+      feature.aggregationStrategy = dto.aggregationStrategy;
     if (dto.isMetered !== undefined) feature.isMetered = dto.isMetered;
-    return BillingCatalogMapper.toFeatureDefinitionDto(await this.featureDefinitions.save(feature));
+    return BillingCatalogMapper.toFeatureDefinitionDto(
+      await this.featureDefinitions.save(feature),
+    );
   }
 
   async listPlanVersions(id: string) {
     const plan = await this.findPlanById(id);
-    return (plan.versions ?? []).map(BillingCatalogMapper.toPlanVersionDto);
+    return (plan.versions ?? []).map((item) =>
+      BillingCatalogMapper.toPlanVersionDto(item),
+    );
   }
 
   async createVersion(id: string, dto: CreatePlanVersionDto) {
+    this.requireDraft(dto);
     const plan = await this.findPlanById(id);
-    await this.createPlanVersion(plan, dto, []);
+    await this.planVersions.manager.transaction((manager) =>
+      this.createPlanVersion(manager, plan, dto, []),
+    );
     return this.listPlanVersions(id);
   }
 
+  private requireDraft(dto: Partial<CreatePlanVersionDto>) {
+    if (dto.status !== undefined && dto.status !== PlanVersionStatus.Draft)
+      throw new BadRequestException(
+        'Use the publication endpoint to publish a draft',
+      );
+  }
+
   async updateVersion(id: string, dto: Partial<CreatePlanVersionDto>) {
-    const version = await this.planVersions.findOne({
-      where: { id },
-      relations: { prices: { providerPrices: true }, entitlements: { feature: true } },
+    this.requireDraft(dto);
+    return this.planVersions.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(BillingPlanVersionEntity);
+      const version = await repository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!version)
+        throw new NotFoundException('Billing plan version not found');
+      if (version.status !== PlanVersionStatus.Draft)
+        throw new ConflictException('Only draft plan versions can be updated');
+      if (dto.effectiveFrom !== undefined)
+        version.effectiveFrom = dto.effectiveFrom
+          ? new Date(dto.effectiveFrom)
+          : null;
+      if (dto.effectiveUntil !== undefined)
+        version.effectiveUntil = dto.effectiveUntil
+          ? new Date(dto.effectiveUntil)
+          : null;
+      await repository.save(version);
+      return BillingCatalogMapper.toPlanVersionDto(
+        (await repository.findOne({
+          where: { id },
+          relations: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        }))!,
+      );
     });
-    if (!version) throw new NotFoundException('Billing plan version not found');
-    if (version.status !== PlanVersionStatus.Draft) {
-      throw new ConflictException('Only draft plan versions can be updated');
-    }
-    if (dto.effectiveFrom !== undefined) {
-      version.effectiveFrom = dto.effectiveFrom ? new Date(dto.effectiveFrom) : null;
-    }
-    if (dto.effectiveUntil !== undefined) {
-      version.effectiveUntil = dto.effectiveUntil ? new Date(dto.effectiveUntil) : null;
-    }
-    if (dto.status !== undefined) version.status = dto.status;
-    return BillingCatalogMapper.toPlanVersionDto(await this.planVersions.save(version));
   }
 
   async publishVersion(id: string) {
-    const version = await this.planVersions.findOne({
-      where: { id },
-      relations: { prices: { providerPrices: true }, entitlements: { feature: true } },
+    return this.planVersions.manager.transaction(async (manager) => {
+      const repository = manager.getRepository(BillingPlanVersionEntity);
+      const reference = await repository.findOneBy({ id });
+      if (!reference)
+        throw new NotFoundException('Billing plan version not found');
+      // Serialize publications of different versions of the same plan.
+      await manager.getRepository(BillingPlanEntity).findOne({
+        where: { id: reference.planId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const version = await repository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!version || version.status !== PlanVersionStatus.Draft)
+        throw new ConflictException('Only draft versions can be published');
+      const unpinnedContract = await manager
+        .getRepository(BillingSubscriptionEntity)
+        .findOne({
+          where: {
+            planId: version.planId,
+            planPriceId: IsNull(),
+            providerPriceId: IsNull(),
+            status: In([
+              SubscriptionStatus.Pending,
+              SubscriptionStatus.Active,
+              SubscriptionStatus.PastDue,
+              SubscriptionStatus.Suspended,
+            ]),
+          },
+        });
+      if (unpinnedContract)
+        throw new ConflictException(
+          'Live subscriptions must have a pinned price before publishing',
+        );
+      await repository.update(
+        { planId: version.planId, status: PlanVersionStatus.Published },
+        { status: PlanVersionStatus.Archived },
+      );
+      version.status = PlanVersionStatus.Published;
+      await repository.save(version);
+      return BillingCatalogMapper.toPlanVersionDto(
+        (await repository.findOne({
+          where: { id },
+          relations: {
+            prices: { providerPrices: true },
+            entitlements: { feature: true },
+          },
+        }))!,
+      );
     });
-    if (!version) throw new NotFoundException('Billing plan version not found');
-
-    await this.planVersions.update(
-      { planId: version.planId, status: PlanVersionStatus.Published },
-      { status: PlanVersionStatus.Archived },
-    );
-    version.status = PlanVersionStatus.Published;
-    return BillingCatalogMapper.toPlanVersionDto(await this.planVersions.save(version));
   }
 
   async listActiveAddonsByProduct(
@@ -282,7 +594,7 @@ export class BillingCatalogService {
       order: { unitPrice: 'ASC' },
     });
 
-    return addons.map(BillingCatalogMapper.toAddonDto);
+    return addons.map((item) => BillingCatalogMapper.toAddonDto(item));
   }
 
   async createProduct(
@@ -319,20 +631,30 @@ export class BillingCatalogService {
   }
 
   async createPlan(dto: CreateBillingPlanDto): Promise<BillingPlanResponseDto> {
+    this.requireDraft(dto.version);
     const product = await this.resolveProduct(dto.productId, dto.productCode);
     await this.ensurePlanCodeAvailable(product.id, dto.code);
 
-    const plan = this.plans.create({
-      productId: product.id,
-      product,
-      code: dto.code,
-      name: dto.name,
-      description: dto.description ?? null,
-      status: dto.status ?? BillingPlanStatus.Active,
+    const saved = await this.plans.manager.transaction(async (manager) => {
+      const plans = manager.getRepository(BillingPlanEntity);
+      const plan = await plans.save(
+        plans.create({
+          productId: product.id,
+          product,
+          code: dto.code,
+          name: dto.name,
+          description: dto.description ?? null,
+          status: dto.status ?? BillingPlanStatus.Active,
+        }),
+      );
+      await this.createPlanVersion(
+        manager,
+        plan,
+        dto.version,
+        dto.features ?? [],
+      );
+      return plan;
     });
-
-    const saved = await this.plans.save(plan);
-    await this.createPlanVersion(saved, dto.version, dto.features ?? []);
 
     return BillingCatalogMapper.toPlanDto(await this.findPlanById(saved.id));
   }
@@ -341,10 +663,8 @@ export class BillingCatalogService {
     id: string,
     dto: UpdateBillingPlanDto,
   ): Promise<BillingPlanResponseDto> {
+    if (dto.version) this.requireDraft(dto.version);
     const plan = await this.findPlanById(id);
-    if (dto.version) {
-      await this.ensurePlanHasNoLiveContracts(plan.id);
-    }
     const product =
       dto.productId || dto.productCode
         ? await this.resolveProduct(dto.productId, dto.productCode)
@@ -354,10 +674,8 @@ export class BillingCatalogService {
       throw new NotFoundException('Billing product not found');
     }
 
-    if (
-      (dto.code && dto.code !== plan.code) ||
-      product.id !== plan.productId
-    ) {
+    if ((dto.code && dto.code !== plan.code) || product.id !== plan.productId) {
+      await this.ensurePlanHasNoLiveContracts(plan.id);
       await this.ensurePlanCodeAvailable(product.id, dto.code ?? plan.code, id);
     }
 
@@ -368,10 +686,20 @@ export class BillingCatalogService {
     if (dto.description !== undefined) plan.description = dto.description;
     if (dto.status !== undefined) plan.status = dto.status;
 
-    const saved = await this.plans.save(plan);
-    if (dto.version) {
-      await this.createPlanVersion(saved, dto.version, dto.features ?? []);
-    }
+    const saved = await this.plans.manager.transaction(async (manager) => {
+      const savedPlan = await manager
+        .getRepository(BillingPlanEntity)
+        .save(plan);
+      if (dto.version) {
+        await this.createPlanVersion(
+          manager,
+          savedPlan,
+          dto.version,
+          dto.features ?? [],
+        );
+      }
+      return savedPlan;
+    });
 
     return BillingCatalogMapper.toPlanDto(await this.findPlanById(saved.id));
   }
@@ -404,7 +732,9 @@ export class BillingCatalogService {
           : (dto.maxQuantity ?? null),
       provider: dto.provider,
       providerPlanId: dto.providerPlanId ?? null,
-      entitlementEffects: this.normalizeEntitlementEffects(dto.entitlementEffects),
+      entitlementEffects: this.normalizeEntitlementEffects(
+        dto.entitlementEffects,
+      ),
       status: dto.status ?? AddonStatus.Active,
       metadata: dto.metadata ?? {},
     });
@@ -624,27 +954,36 @@ export class BillingCatalogService {
   }
 
   private async createPlanVersion(
+    manager: EntityManager,
     plan: BillingPlanEntity,
     dto: CreatePlanVersionDto,
     featureDtos: CreateFeatureDefinitionDto[],
   ): Promise<void> {
-    await this.ensurePlanVersionAvailable(plan.id, dto.version);
-    await this.upsertFeatureDefinitions(plan.productId, featureDtos);
+    this.requireDraft(dto);
+    const versions = manager.getRepository(BillingPlanVersionEntity);
+    const prices = manager.getRepository(BillingPlanPriceEntity);
+    const providerPrices = manager.getRepository(BillingProviderPriceEntity);
+    const entitlements = manager.getRepository(BillingPlanEntitlementEntity);
 
-    const version = await this.planVersions.save(
-      this.planVersions.create({
+    await this.ensurePlanVersionAvailable(manager, plan.id, dto.version);
+    await this.upsertFeatureDefinitions(plan.productId, featureDtos, manager);
+
+    const version = await versions.save(
+      versions.create({
         planId: plan.id,
         plan,
         version: dto.version,
         status: dto.status ?? PlanVersionStatus.Draft,
         effectiveFrom: dto.effectiveFrom ? new Date(dto.effectiveFrom) : null,
-        effectiveUntil: dto.effectiveUntil ? new Date(dto.effectiveUntil) : null,
+        effectiveUntil: dto.effectiveUntil
+          ? new Date(dto.effectiveUntil)
+          : null,
       }),
     );
 
     for (const priceDto of dto.prices) {
-      const price = await this.planPrices.save(
-        this.planPrices.create({
+      const price = await prices.save(
+        prices.create({
           planVersionId: version.id,
           planVersion: version,
           code: priceDto.code,
@@ -656,52 +995,59 @@ export class BillingCatalogService {
         }),
       );
 
-      await Promise.all(
-        priceDto.providerPrices.map((providerPrice) =>
-          this.providerPrices.save(
-            this.providerPrices.create({
-              planPriceId: price.id,
-              planPrice: price,
-              provider: providerPrice.provider,
-              providerProductId: providerPrice.providerProductId ?? null,
-              providerPriceId: providerPrice.providerPriceId ?? null,
-              providerMetadata: providerPrice.providerMetadata ?? {},
-              status: providerPrice.status ?? ProviderPriceStatus.Active,
-            }),
-          ),
-        ),
-      );
-    }
-
-    await Promise.all(
-      (dto.entitlements ?? []).map(async (entitlementDto) => {
-        const feature = await this.resolveFeature(plan.productId, entitlementDto);
-        this.planResolver.validateFeatureValue(feature.valueType, entitlementDto.valueJson);
-
-        return this.planEntitlements.save(
-          this.planEntitlements.create({
-            planVersionId: version.id,
-            planVersion: version,
-            featureId: feature.id,
-            feature,
-            valueJson: entitlementDto.valueJson,
+      for (const providerPrice of priceDto.providerPrices) {
+        await providerPrices.save(
+          providerPrices.create({
+            planPriceId: price.id,
+            planPrice: price,
+            provider: providerPrice.provider,
+            providerProductId: providerPrice.providerProductId ?? null,
+            providerPriceId: providerPrice.providerPriceId ?? null,
+            providerMetadata: providerPrice.providerMetadata ?? {},
+            status: providerPrice.status ?? ProviderPriceStatus.Active,
           }),
         );
-      }),
-    );
+      }
+    }
+
+    for (const entitlementDto of dto.entitlements ?? []) {
+      const feature = await this.resolveFeature(
+        manager,
+        plan.productId,
+        entitlementDto,
+      );
+      this.planResolver.validateFeatureValue(
+        feature.valueType,
+        entitlementDto.valueJson,
+      );
+
+      await entitlements.save(
+        entitlements.create({
+          planVersionId: version.id,
+          planVersion: version,
+          featureId: feature.id,
+          feature,
+          valueJson: entitlementDto.valueJson,
+        }),
+      );
+    }
   }
 
   private async upsertFeatureDefinitions(
     productId: string,
     featureDtos: CreateFeatureDefinitionDto[],
+    manager?: EntityManager,
   ): Promise<void> {
+    const repository =
+      manager?.getRepository(BillingFeatureDefinitionEntity) ??
+      this.featureDefinitions;
     for (const dto of featureDtos) {
-      const existing = await this.featureDefinitions.findOne({
+      const existing = await repository.findOne({
         where: { productId, code: dto.code },
       });
       const feature =
         existing ??
-        this.featureDefinitions.create({
+        repository.create({
           productId,
           code: dto.code,
         });
@@ -714,33 +1060,41 @@ export class BillingCatalogService {
         dto.aggregationStrategy ?? FeatureAggregationStrategy.Replace;
       feature.isMetered = dto.isMetered ?? false;
       feature.status = FeatureDefinitionStatus.Active;
-      await this.featureDefinitions.save(feature);
+      await repository.save(feature);
     }
   }
 
   private async resolveFeature(
+    manager: EntityManager,
     productId: string,
     dto: CreatePlanEntitlementDto,
   ): Promise<BillingFeatureDefinitionEntity> {
+    const repository = manager.getRepository(BillingFeatureDefinitionEntity);
     const feature = dto.featureId
-      ? await this.featureDefinitions.findOne({ where: { id: dto.featureId, productId } })
+      ? await repository.findOne({
+          where: { id: dto.featureId, productId },
+        })
       : dto.featureCode
-        ? await this.featureDefinitions.findOne({
+        ? await repository.findOne({
             where: { productId, code: dto.featureCode },
           })
         : null;
 
-    if (!feature) throw new NotFoundException('Billing feature definition not found');
+    if (!feature)
+      throw new NotFoundException('Billing feature definition not found');
     return feature;
   }
 
   private async ensurePlanVersionAvailable(
+    manager: EntityManager,
     planId: string,
     version: number,
   ): Promise<void> {
-    const existing = await this.planVersions.findOne({
-      where: { planId, version },
-    });
+    const existing = await manager
+      .getRepository(BillingPlanVersionEntity)
+      .findOne({
+        where: { planId, version },
+      });
     if (existing) throw new ConflictException('Billing plan version exists');
   }
 
@@ -748,17 +1102,45 @@ export class BillingCatalogService {
     plan: BillingPlanEntity,
     query: ListBillingPlansQueryDto,
   ): boolean {
+    const search = query.q?.trim().toLowerCase();
+    const matchesIdentity =
+      !search ||
+      [plan.code, plan.name].some((value) =>
+        value.toLowerCase().includes(search),
+      );
+    if (
+      !query.provider &&
+      !query.currency &&
+      !query.billing_interval &&
+      matchesIdentity
+    )
+      return true;
+
     try {
       const version = this.planResolver.publishedVersion(plan);
       const price = this.planResolver.activePrice(version);
+      const interval = String(
+        this.planResolver.toLegacyInterval(price.billingInterval),
+      );
       return (
         (!query.provider ||
           (price.providerPrices ?? []).some(
-            (item) => item.provider === query.provider && item.status === ProviderPriceStatus.Active,
+            (item) =>
+              item.provider === query.provider &&
+              item.status === ProviderPriceStatus.Active,
           )) &&
         (!query.currency || price.currency === query.currency) &&
         (!query.billing_interval ||
-          this.planResolver.toLegacyInterval(price.billingInterval) === query.billing_interval)
+          interval === String(query.billing_interval)) &&
+        (!search ||
+          matchesIdentity ||
+          [
+            price.currency,
+            interval,
+            ...(price.providerPrices ?? [])
+              .filter((item) => item.status === ProviderPriceStatus.Active)
+              .map((item) => item.provider),
+          ].some((value) => value.toLowerCase().includes(search)))
       );
     } catch {
       return false;
@@ -774,6 +1156,38 @@ export class BillingCatalogService {
     }
   }
 
+  private toPublicPlan(plan: BillingPlanEntity): PublicCatalogPlanDto | null {
+    try {
+      const version = this.planResolver.publishedVersion(plan);
+      const prices = [...(version.prices ?? [])]
+        .filter((price) => price.status === PlanPriceStatus.Active)
+        .sort(
+          (left, right) =>
+            left.billingInterval.localeCompare(right.billingInterval) ||
+            left.billingIntervalCount - right.billingIntervalCount ||
+            Number(left.amount) - Number(right.amount),
+        );
+
+      if (prices.length === 0) return null;
+
+      return {
+        code: plan.code,
+        name: plan.name,
+        description: plan.description,
+        prices: prices.map((price) => ({
+          code: price.code,
+          billingInterval: price.billingInterval,
+          billingIntervalCount: price.billingIntervalCount,
+          currency: price.currency,
+          amount: price.amount,
+        })),
+        features: this.planResolver.entitlements(version),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private planRelations() {
     return {
       product: true,
@@ -785,11 +1199,10 @@ export class BillingCatalogService {
   }
 
   private validateAddonPricing(addon: BillingAddonEntity): void {
-    if (
-      addon.maxQuantity !== null &&
-      addon.maxQuantity < addon.minQuantity
-    ) {
-      throw new BadRequestException('maxQuantity cannot be less than minQuantity');
+    if (addon.maxQuantity !== null && addon.maxQuantity < addon.minQuantity) {
+      throw new BadRequestException(
+        'maxQuantity cannot be less than minQuantity',
+      );
     }
 
     if (
@@ -809,7 +1222,8 @@ export class BillingCatalogService {
     if (
       !this.isRecord(numeric) ||
       !Object.values(numeric).every(
-        (item) => typeof item === 'number' && Number.isFinite(item) && item >= 0,
+        (item) =>
+          typeof item === 'number' && Number.isFinite(item) && item >= 0,
       )
     ) {
       throw new BadRequestException('Invalid numeric entitlement effects');

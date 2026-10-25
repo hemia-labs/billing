@@ -1,5 +1,8 @@
+import eventBusConfig from './config/event-bus.config';
+import { BillingEventBusModule } from './modules/event-bus/billing-event-bus.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CommonAuthModule } from './common/common-auth.module';
@@ -9,6 +12,7 @@ import billingFiscalConfig from './config/billing-fiscal.config';
 import databaseConfig from './config/database.config';
 import hemiaLegalConfig from './config/hemia-legal.config';
 import { envVarsSchema } from './config/env.validation';
+import { environmentFile } from './config/env-file';
 import paypalConfig from './config/paypal.config';
 import redisConfig from './config/redis.config';
 import ssoConfig from './config/sso.config';
@@ -19,11 +23,13 @@ import { BillingModule } from './modules/billing.module';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env', '.env.local'],
+      envFilePath: environmentFile(),
       load: [
         appConfig,
+        eventBusConfig,
         authConfig,
         billingFiscalConfig,
         databaseConfig,
@@ -37,6 +43,7 @@ import { BillingModule } from './modules/billing.module';
     }),
     CommonAuthModule,
     AuthModule,
+    BillingEventBusModule,
     DatabaseModule,
     IdentityModule,
     BillingModule,

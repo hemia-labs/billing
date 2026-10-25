@@ -14,6 +14,32 @@ export interface BillingSubscriptionPlanSummaryDto {
 }
 
 export interface BillingSubscriptionManagementResponseDto {
+  planPriceCode: string | null;
+  cancellation: {
+    state: 'pending' | 'scheduled';
+    requestedAt: string;
+    effectiveAt: string | null;
+  } | null;
+  pendingPlanChange:
+    | (Partial<
+        ReturnType<
+          typeof import('../subscription-management-state').planChangeResponse
+        >
+      > & {
+        state:
+          | 'preparing'
+          | 'awaiting_approval'
+          | 'scheduled'
+          | 'effective'
+          | 'failed';
+        targetPlanCode: string;
+        targetPlanPriceCode: string;
+        effectiveAt: string;
+        attemptId?: string;
+        checkoutId: string | null;
+        newSubscriptionId: string | null;
+      })
+    | null;
   id: string;
   organizationId: string;
   productCode: string;
@@ -34,6 +60,11 @@ export interface BillingSubscriptionManagementResponseDto {
 }
 
 export interface ChangePlanResponseDto {
+  planChange?: ReturnType<
+    typeof import('../subscription-management-state').planChangeResponse
+  >;
+  effectiveAt: string;
+  state: 'awaiting_approval' | 'scheduled' | 'effective';
   subscription: BillingSubscriptionManagementResponseDto;
   checkoutId: string;
   newSubscriptionId: string;
@@ -42,6 +73,10 @@ export interface ChangePlanResponseDto {
 }
 
 export interface VerifyCheckoutSessionResponseDto {
+  checkoutUrl?: string | null;
+  planChange?: ReturnType<
+    typeof import('../subscription-management-state').planChangeResponse
+  >;
   checkoutId: string;
   subscriptionId: string;
   provider: BillingProvider;

@@ -1,15 +1,18 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/zuno/skeleton";
+import { Button } from "@/components/zuno/button";
 import { ApiError, redirectToLogin } from "@/lib/api";
-import { getSession, logout, type Session } from "@/lib/api/session";
+import { getSession, logout, selectOrganization, type Session } from "@/lib/api/session";
 
 const SessionContext = createContext<Session | null>(null);
 
 export function AuthGate({ children }: Readonly<{ children: React.ReactNode }>) {
   const [session, setSession] = useState<Session | null>();
+
+  const [selectionError, setSelectionError] = useState("");
+  const [selecting, setSelecting] = useState(false);
 
   useEffect(() => {
     getSession()
@@ -51,6 +54,42 @@ export function AuthGate({ children }: Readonly<{ children: React.ReactNode }>) 
     );
   }
 
+  if (session.requiresOrganizationSelection) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background p-6">
+        <div className="w-full max-w-sm space-y-4 rounded-lg border bg-card p-5">
+          <h1 className="text-lg font-semibold">Selecciona tu organización</h1>
+          <p className="text-sm text-muted-foreground">Elige desde qué organización operar Billing.</p>
+          {(session.organizations ?? []).map((organization) => (
+            <Button key={organization.organizationId} className="w-full whitespace-normal" disabled={selecting}
+              onClick={async () => {
+                setSelecting(true);
+                setSelectionError("");
+                try {
+                  setSession(await selectOrganization(organization.organizationId));
+                } catch (error) {
+                  if (error instanceof ApiError && error.status === 401) {
+                    redirectToLogin();
+                  } else {
+                    setSelectionError(error instanceof ApiError && error.status === 429
+                      ? "Espera un momento antes de intentar de nuevo."
+                      : "No se pudo activar la organización. Actualiza la página o intenta de nuevo.");
+                  }
+                } finally {
+                  setSelecting(false);
+                }
+              }}>
+              {organization.name}
+            </Button>
+          ))}
+          {selecting && <p role="status">Validando acceso…</p>}
+          {selectionError && <p role="alert">{selectionError}</p>}
+          {!session.organizations?.length && <p role="alert">No hay organizaciones disponibles.</p>}
+        </div>
+      </main>
+    );
+  }
+
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }
 
@@ -61,12 +100,7 @@ export function useSession(): Session {
 }
 
 export function hasPermission(session: Session, permission: string): boolean {
-  const scopes = session.scopes;
-  if (!scopes) return true;
-  if (scopes.includes("*.*") || scopes.includes(permission)) return true;
-
-  const [resource] = permission.split(".");
-  return scopes.includes(`${resource}.*`);
+  return session.permissions?.includes(permission) === true;
 }
 
 export function useHasPermission(permission: string): boolean {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -17,8 +17,8 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
-import { Skeleton } from "@/components/ui/skeleton";
+} from "@/components/zuno/alert";
+import { Skeleton } from "@/components/zuno/skeleton";
 import { StatCard } from "@/components/stat-card";
 import { hasPermission, useSession } from "@/components/auth-gate";
 import {
@@ -164,12 +164,14 @@ export function DashboardSummaryClient() {
           label="Checkouts pendientes"
           value={formatCount(data.pendingCheckouts)}
         />
-        <CriticalMetricCard
+        <StatCard
+          tone="error"
           icon={<AlertTriangle className="size-5" />}
           label="Checkouts fallidos"
           value={formatCount(data.failedCheckouts)}
         />
-        <CriticalMetricCard
+        <StatCard
+          tone="warning"
           icon={<KeyRound className="size-5" />}
           label="Licencias no activas"
           value={formatCount(data.inactiveLicenses)}
@@ -177,15 +179,17 @@ export function DashboardSummaryClient() {
         <StatCard
           icon={<FileWarning className="size-5" />}
           label="Invoices pendientes"
-          tone="violet"
+          tone="warning"
           value={formatCount(data.pendingInvoices)}
         />
-        <CriticalMetricCard
+        <StatCard
+          tone="error"
           icon={<FileWarning className="size-5" />}
           label="Invoices fallidas"
           value={formatCount(data.failedInvoices)}
         />
-        <CriticalMetricCard
+        <StatCard
+          tone="error"
           icon={<Webhook className="size-5" />}
           label="Webhooks fallidos"
           value={formatCount(data.failedWebhooks)}
@@ -212,7 +216,7 @@ export function DashboardSummaryClient() {
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {quickLinks.map((link) => (
             <Link
-              className="group flex min-h-12 items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="group flex min-h-12 items-start gap-3 rounded-2xl border border-surface-line bg-card p-4 shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               href={link.href}
               key={link.href}
             >
@@ -234,32 +238,12 @@ export function DashboardSummaryClient() {
   );
 }
 
-function CriticalMetricCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
-      <div className="grid size-12 place-items-center rounded-full bg-red-50 text-red-700">
-        {icon}
-      </div>
-      <p className="mt-4 truncate text-sm font-bold">{label}</p>
-      <p className="mt-2 text-2xl font-bold">{value}</p>
-    </div>
-  );
-}
-
 function DashboardSkeleton() {
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {Array.from({ length: 8 }, (_, index) => (
         <div
-          className="rounded-lg border border-border bg-card p-5 shadow-sm"
+          className="rounded-2xl border border-surface-line bg-card p-6 shadow-sm"
           key={index}
         >
           <Skeleton className="size-12 rounded-full" />
@@ -290,6 +274,6 @@ function formatCount(value: number | undefined): string {
 
 function quickLinkTone(tone: string): string {
   if (tone === "danger")
-    return "grid size-12 shrink-0 place-items-center rounded-full bg-red-50 text-red-700";
-  return "grid size-12 shrink-0 place-items-center rounded-full bg-amber-50 text-amber-700";
+    return "grid size-12 shrink-0 place-items-center rounded-full bg-zuno-error-surface text-zuno-error";
+  return "grid size-12 shrink-0 place-items-center rounded-full bg-zuno-warning-surface text-zuno-warning";
 }

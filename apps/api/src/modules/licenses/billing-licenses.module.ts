@@ -1,3 +1,6 @@
+import { BillingSnapshotsService } from './billing-snapshots.service';
+import { BillingSnapshotsController } from './billing-snapshots.controller';
+import { LicenseWebhookDeliveryService } from './license-webhook-delivery.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingEntitlementsModule } from '../entitlements';
@@ -13,8 +16,18 @@ import { BillingLicensesService } from './billing-licenses.service';
     BillingCatalogModule,
     BillingEntitlementsModule,
   ],
-  controllers: [BillingLicensesController],
-  providers: [BillingLicenseCalculatorService, BillingLicensesService],
-  exports: [BillingLicenseCalculatorService, BillingLicensesService],
+  controllers: [BillingLicensesController, BillingSnapshotsController],
+  providers: [
+    BillingLicenseCalculatorService,
+    BillingLicensesService,
+    BillingSnapshotsService,
+    LicenseWebhookDeliveryService,
+  ],
+  exports: [
+    BillingLicenseCalculatorService,
+    BillingLicensesService,
+    BillingSnapshotsService,
+    LicenseWebhookDeliveryService,
+  ],
 })
 export class BillingLicensesModule {}

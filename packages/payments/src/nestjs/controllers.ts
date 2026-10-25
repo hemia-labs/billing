@@ -191,6 +191,15 @@ export class PaymentsController {
       id,
     );
   }
+  @Post("checkout-attempts/:id/cancel")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async cancelAttempt(@Req() request: unknown, @Param("id") id: string) {
+    return this.payments.cancelAttempt(
+      await this.payments.authorizeAttempt(request, id),
+      id,
+    );
+  }
   @Post("checkout-attempts/:id/retry")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")

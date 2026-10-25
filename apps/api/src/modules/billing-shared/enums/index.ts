@@ -5,6 +5,7 @@ export * from './billing-checkout-session-status.enum';
 export * from './billing-customer-status.enum';
 export * from './billing-plan-status.enum';
 export * from './billing-product-status.enum';
+export * from './billing-tenant-status.enum';
 export * from './billing-provider.enum';
 export * from './entitlement-status.enum';
 export * from './invoice-status.enum';

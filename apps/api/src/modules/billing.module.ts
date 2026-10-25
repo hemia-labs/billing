@@ -1,7 +1,9 @@
+import { BillingPaymentAttemptsModule } from './payment-attempts/billing-payment-attempts.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingAuditModule } from './audit';
 import { BillingCatalogModule } from './catalog/billing-catalog.module';
+import { BillingCopilotModule } from './copilot/billing-copilot.module';
 import { BillingCheckoutModule } from './checkout';
 import { BillingEntitlementsModule } from './entitlements';
 import { BillingInvoicesModule } from './invoices';
@@ -27,6 +29,7 @@ import {
   BillingPlanPriceEntity,
   BillingPlanVersionEntity,
   BillingProductEntity,
+  BillingTenantEntity,
   BillingProviderPriceEntity,
   BillingSubscriptionAddonEntity,
   BillingSubscriptionEntity,
@@ -51,6 +54,7 @@ import {
       BillingPlanPriceEntity,
       BillingPlanVersionEntity,
       BillingProductEntity,
+      BillingTenantEntity,
       BillingProviderPriceEntity,
       BillingSubscriptionAddonEntity,
       BillingSubscriptionEntity,
@@ -59,11 +63,13 @@ import {
     ]),
     BillingAuditModule,
     BillingCatalogModule,
+    BillingCopilotModule,
     BillingCheckoutModule,
     BillingEntitlementsModule,
     BillingInvoicesModule,
     BillingLicensesModule,
     BillingIntegrationsModule,
+    BillingPaymentAttemptsModule,
     BillingOperationsModule,
     BillingSubscriptionsManagementModule,
     BillingSubscriptionAddonsModule,

@@ -128,6 +128,37 @@ test("central operation determines management authorization, and GET cannot conf
   assert.ok(gets >= 2);
   assert.deepEqual(auth, ["checkout.manage", "subscription.manage"]);
 });
+test("cancel authorizes the central attempt owner and management before transport", async () => {
+  const { service, auth } = fixture();
+  const id = randomUUID();
+  service.client.attempts.get = async (attempt, buyer) => {
+    assert.equal(attempt, id);
+    assert.deepEqual(buyer, {
+      organizationId: c.organizationId,
+      userId: c.subjectId,
+    });
+    return { attemptId: id, operation: "change_plan" };
+  };
+  let cancelled = 0;
+  service.client.attempts.cancel = async (attempt, buyer) => {
+    assert.equal(attempt, id);
+    assert.deepEqual(buyer, {
+      organizationId: c.organizationId,
+      userId: c.subjectId,
+    });
+    cancelled++;
+    return { cancelled: true };
+  };
+  const controller = new PaymentsController(service);
+  assert.deepEqual(await controller.cancelAttempt({}, id), { cancelled: true });
+  assert.equal(cancelled, 1);
+  assert.deepEqual(auth, ["checkout.manage", "subscription.manage"]);
+  service.client.attempts.get = async () => {
+    throw new Error("Different owner");
+  };
+  await assert.rejects(controller.cancelAttempt({}, id), /Different owner/);
+  assert.equal(cancelled, 1);
+});
 test("retry delegates frozen intent without deriving a new subscription", async () => {
   const { service } = fixture();
   const id = randomUUID();
@@ -222,7 +253,7 @@ test("cross-device recovery uses only the matching central buyer receipt and pre
     });
     return row;
   };
-  for (const operation of ["create", "retry", "confirm"])
+  for (const operation of ["create", "retry", "confirm", "cancel"])
     service.client.attempts[operation] = async () =>
       assert.fail("A subscription GET cannot mutate payment attempts");
   let recovered = await service.getSubscription(c);
@@ -238,6 +269,17 @@ test("cross-device recovery uses only the matching central buyer receipt and pre
   assert.equal(recovered.pendingPlanChange.attemptId, attemptId);
   assert.equal(recovered.pendingPlanChange.action, "approve_payment");
   assert.equal(recovered.pendingPlanChange.checkoutUrl, null);
+  row.planChange.cancellationRequested = true;
+  row.planChange.action = "approve_subscription";
+  row.planChange.checkoutUrl = "https://www.paypal.com/restore-original-plan";
+  recovered = await service.getSubscription(c);
+  assert.equal(recovered.pendingPlanChange.cancellationRequested, true);
+  assert.equal(recovered.pendingPlanChange.action, "approve_subscription");
+  assert.equal(
+    recovered.pendingPlanChange.checkoutUrl,
+    row.planChange.checkoutUrl,
+  );
+  delete row.planChange.cancellationRequested;
   row.statusFresh = false;
   row.planChange.action = "approve_subscription";
   row.planChange.checkoutUrl = row.checkoutUrl;

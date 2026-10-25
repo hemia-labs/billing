@@ -82,8 +82,13 @@ export type Subscription = {
         newSubscriptionId: string | null;
         attemptId?: string;
         checkoutUrl?: string | null;
+        cancellationRequested?: boolean;
       })
     | null;
+};
+export type CancelCheckoutAttemptResponse = {
+  cancelled: boolean;
+  approvalUrl?: string;
 };
 export type CancelSubscriptionInput = {
   idempotencyKey: string;
@@ -99,6 +104,7 @@ export type PlanChangeQuote = {
   recurringAmount: string;
 };
 export type PlanChangeState = {
+  cancellationRequested?: boolean;
   kind?: "upgrade" | "downgrade";
   amountDueNow?: string;
   currency?: string;
@@ -440,6 +446,31 @@ export function createPaymentsClient(config: PaymentsConfig) {
         ),
         id,
       );
+    },
+    async cancel(
+      id: string,
+      c: PaymentAttemptContext,
+    ): Promise<CancelCheckoutAttemptResponse> {
+      const value = await request(
+        `payment-attempts/${id}/cancel?${attemptContext(id, c)}`,
+        permissions.subscriptions,
+        {},
+      );
+      if (
+        !record(value) ||
+        typeof value.cancelled !== "boolean" ||
+        (value.approvalUrl !== undefined &&
+          (typeof value.approvalUrl !== "string" ||
+            !checkoutUrl(value.approvalUrl))) ||
+        (value.cancelled && value.approvalUrl !== undefined)
+      )
+        throw new PaymentsError("contract");
+      return {
+        cancelled: value.cancelled,
+        ...(value.approvalUrl === undefined
+          ? {}
+          : { approvalUrl: value.approvalUrl }),
+      };
     },
   };
   const checkout = {
@@ -1041,11 +1072,21 @@ function planChangeState(v: unknown): PlanChangeState {
       "failed",
     ].includes(String(v.state)) ||
     !date(v.effectiveAt) ||
-    v.effectiveAt === null
+    v.effectiveAt === null ||
+    (v.cancellationRequested !== undefined &&
+      typeof v.cancellationRequested !== "boolean")
   )
     throw new PaymentsError("contract");
+  const cancellation =
+    v.cancellationRequested === undefined
+      ? {}
+      : { cancellationRequested: v.cancellationRequested };
   if (v.kind === undefined)
-    return { state: v.state, effectiveAt: v.effectiveAt } as PlanChangeState;
+    return {
+      state: v.state,
+      effectiveAt: v.effectiveAt,
+      ...cancellation,
+    } as PlanChangeState;
   const quote = planChangeQuote(v);
   if (
     !["approve_subscription", "approve_payment", "none"].includes(
@@ -1057,6 +1098,7 @@ function planChangeState(v: unknown): PlanChangeState {
     throw new PaymentsError("contract");
   return {
     ...quote,
+    ...cancellation,
     state: v.state,
     action: v.action,
     checkoutUrl: v.checkoutUrl,
@@ -1095,18 +1137,24 @@ function checkoutStatus(v: unknown, id: string): CheckoutStatus {
 
 function pendingChangeDetails(
   v: Record<string, unknown>,
-): Partial<PlanChangeQuote> & Pick<PlanChangeState, "action" | "checkoutUrl"> {
+): Partial<PlanChangeQuote> &
+  Pick<PlanChangeState, "action" | "checkoutUrl" | "cancellationRequested"> {
   const quote = v.kind === undefined ? {} : planChangeQuote(v);
   if (
     (v.action !== undefined &&
       !["approve_subscription", "approve_payment", "none"].includes(
         String(v.action),
       )) ||
-    (v.checkoutUrl !== undefined && !checkoutUrl(v.checkoutUrl))
+    (v.checkoutUrl !== undefined && !checkoutUrl(v.checkoutUrl)) ||
+    (v.cancellationRequested !== undefined &&
+      typeof v.cancellationRequested !== "boolean")
   )
     throw new PaymentsError("contract");
   return {
     ...quote,
+    ...(v.cancellationRequested === undefined
+      ? {}
+      : { cancellationRequested: v.cancellationRequested as boolean }),
     ...(v.action === undefined
       ? {}
       : { action: v.action as PlanChangeState["action"] }),

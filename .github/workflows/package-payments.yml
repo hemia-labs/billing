@@ -46,8 +46,14 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/payments-release.mjs classify "$BASE_SHA"
+      - name: Identify a Billing application version-only PR
+        id: billing-version-pr
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/billing-version.mjs classify "$BASE_SHA"
       - name: Verify Changesets on PRs
-        if: github.event_name == 'pull_request' && steps.version-pr.outputs.release != 'true'
+        if: github.event_name == 'pull_request' && steps.version-pr.outputs.release != 'true' && steps.billing-version-pr.outputs.release != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bun run changeset status --since "$BASE_SHA"
@@ -55,6 +61,8 @@ jobs:
       - run: bun run --cwd packages/payments build
       - run: bun run --cwd packages/payments test
       - run: bun run --cwd packages/payments test:nest
+      - name: Verify central durable attempts against PostgreSQL
+        run: bash test/api/integration/payment-attempts/central-payment-attempts.docker.sh
       - name: Verify Node and Nest with optional MySQL and PostgreSQL copies
         run: bash test/payments/integration/database-optional/verify.sh
       - name: Validate the npm tarball

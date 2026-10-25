@@ -2,8 +2,8 @@
 
 import { AlertCircle } from "lucide-react";
 import { PageHeading } from "@/components/page-heading";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/zuno/alert";
+import { Button } from "@/components/zuno/button";
 
 export default function Error({ reset }: { error: Error; reset: () => void }) {
   return (
@@ -18,7 +18,7 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
         <AlertDescription>
           Intenta nuevamente. Si el problema continúa, contacta al equipo de soporte.
         </AlertDescription>
-        <Button className="mt-3 h-12 w-fit" onClick={reset} variant="outline">
+        <Button className="mt-3 w-fit" onClick={reset} variant="outline">
           Reintentar
         </Button>
       </Alert>

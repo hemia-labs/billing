@@ -1,9 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   BillingPlanEntity,
   BillingPlanPriceEntity,
   BillingPlanVersionEntity,
   BillingProviderPriceEntity,
+  BillingSubscriptionEntity,
   FeatureAggregationStrategy,
   FeatureValueType,
   PlanPriceBillingInterval,
@@ -34,7 +40,32 @@ export class BillingPlanCatalogResolver {
       )
       .sort((left, right) => right.version - left.version)[0];
 
-    if (!version) throw new NotFoundException('Published billing plan version not found');
+    if (!version)
+      throw new NotFoundException('Published billing plan version not found');
+    return version;
+  }
+
+  contractVersion(
+    subscription: BillingSubscriptionEntity,
+  ): BillingPlanVersionEntity {
+    const versions = subscription.plan?.versions ?? [];
+    const priceId =
+      subscription.planPriceId ?? subscription.providerPrice?.planPriceId;
+    const providerPriceId = subscription.providerPriceId;
+    if (!priceId && !providerPriceId)
+      return this.publishedVersion(subscription.plan);
+
+    const version = versions.find((item) =>
+      (item.prices ?? []).some((price) =>
+        priceId
+          ? price.id === priceId
+          : (price.providerPrices ?? []).some(
+              (providerPrice) => providerPrice.id === providerPriceId,
+            ),
+      ),
+    );
+    if (!version)
+      throw new NotFoundException('Contracted billing plan version not found');
     return version;
   }
 
@@ -44,17 +75,36 @@ export class BillingPlanCatalogResolver {
   ): BillingPlanPriceEntity {
     const prices = [...(version.prices ?? [])]
       .filter((price) => price.status === PlanPriceStatus.Active)
-      .sort((left, right) =>
-        left.billingInterval.localeCompare(right.billingInterval) ||
-        left.billingIntervalCount - right.billingIntervalCount ||
-        Number(left.amount) - Number(right.amount),
+      .sort(
+        (left, right) =>
+          left.billingInterval.localeCompare(right.billingInterval) ||
+          left.billingIntervalCount - right.billingIntervalCount ||
+          Number(left.amount) - Number(right.amount),
       );
     const price = planPriceCode
       ? prices.find((item) => item.code === planPriceCode)
       : prices[0];
 
-    if (!price) throw new NotFoundException('Active billing plan price not found');
+    if (!price)
+      throw new NotFoundException('Active billing plan price not found');
     return price;
+  }
+
+  configuredProvider(price: BillingPlanPriceEntity): BillingProvider {
+    const providers = [
+      ...new Set(
+        (price.providerPrices ?? [])
+          .filter((item) => item.status === ProviderPriceStatus.Active)
+          .map((item) => item.provider),
+      ),
+    ];
+    if (!providers.length)
+      throw new NotFoundException('Active provider price not found');
+    if (providers.length !== 1)
+      throw new ConflictException(
+        'Billing price provider configuration is ambiguous',
+      );
+    return providers[0];
   }
 
   providerPrice(
@@ -62,10 +112,13 @@ export class BillingPlanCatalogResolver {
     provider: BillingProvider,
   ): BillingProviderPriceEntity {
     const providerPrice = (price.providerPrices ?? []).find(
-      (item) => item.provider === provider && item.status === ProviderPriceStatus.Active,
+      (item) =>
+        item.provider === provider &&
+        item.status === ProviderPriceStatus.Active,
     );
 
-    if (!providerPrice) throw new NotFoundException('Active provider price not found');
+    if (!providerPrice)
+      throw new NotFoundException('Active provider price not found');
     return providerPrice;
   }
 
@@ -105,7 +158,9 @@ export class BillingPlanCatalogResolver {
       (type === FeatureValueType.String && typeof value !== 'string') ||
       (type === FeatureValueType.Json && value === undefined)
     ) {
-      throw new BadRequestException('Invalid entitlement value for feature type');
+      throw new BadRequestException(
+        'Invalid entitlement value for feature type',
+      );
     }
   }
 
@@ -122,11 +177,17 @@ export class BillingPlanCatalogResolver {
     } else if (strategy === FeatureAggregationStrategy.Max) {
       base[code] = Math.max(this.number(current), this.number(value));
     } else if (strategy === FeatureAggregationStrategy.Min) {
-      base[code] = current === undefined ? value : Math.min(this.number(current), this.number(value));
+      base[code] =
+        current === undefined
+          ? value
+          : Math.min(this.number(current), this.number(value));
     } else if (strategy === FeatureAggregationStrategy.BooleanOr) {
       base[code] = Boolean(current) || Boolean(value);
     } else if (strategy === FeatureAggregationStrategy.BooleanAnd) {
-      base[code] = current === undefined ? Boolean(value) : Boolean(current) && Boolean(value);
+      base[code] =
+        current === undefined
+          ? Boolean(value)
+          : Boolean(current) && Boolean(value);
     } else {
       base[code] = value;
     }

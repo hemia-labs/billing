@@ -1,10 +1,18 @@
+import { webhookOrganizationSql } from '../webhooks/webhook-organization.sql';
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThanOrEqual, Repository } from 'typeorm';
+import {
+  In,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+  SelectQueryBuilder,
+  ObjectLiteral,
+} from 'typeorm';
 import {
   BillingCheckoutSessionEntity,
   BillingInvoiceEntity,
@@ -14,7 +22,6 @@ import {
   BillingAuditLogEntity,
   SubscriptionStatus,
   WebhookProcessingStatus,
-  WebhookVerificationStatus,
 } from '../billing-shared';
 import {
   BillingCheckoutSessionStatus,
@@ -52,9 +59,15 @@ export class BillingOperationsService {
 
   async listSubscriptions(
     query: ListConsoleSubscriptionsQueryDto,
+    scope: string[] | null,
   ): Promise<CatalogPageDto<ConsoleSubscriptionResponseDto>> {
     this.validateRange(query);
     const builder = this.subscriptions.createQueryBuilder('subscription');
+    if (scope !== null)
+      builder.andWhere(
+        'subscription.organizationId IN (:...authorizedOrganizations)',
+        { authorizedOrganizations: scope },
+      );
     if (query.organization_id)
       builder.andWhere('subscription.organizationId = :organizationId', {
         organizationId: query.organization_id,
@@ -83,7 +96,7 @@ export class BillingOperationsService {
       .take(query.limit)
       .getManyAndCount();
     return this.page(
-      items.map(BillingOperationsMapper.subscription),
+      items.map((item) => BillingOperationsMapper.subscription(item)),
       total,
       query,
     );
@@ -98,11 +111,17 @@ export class BillingOperationsService {
 
   async listCheckouts(
     query: ListConsoleCheckoutsQueryDto,
+    scope: string[] | null,
   ): Promise<CatalogPageDto<ConsoleCheckoutResponseDto>> {
     this.validateRange(query);
     const builder = this.checkouts
       .createQueryBuilder('checkout')
       .leftJoinAndSelect('checkout.plan', 'plan');
+    if (scope !== null)
+      builder.andWhere(
+        'checkout.organizationId IN (:...authorizedOrganizations)',
+        { authorizedOrganizations: scope },
+      );
     if (query.organization_id)
       builder.andWhere('checkout.organizationId = :organizationId', {
         organizationId: query.organization_id,
@@ -125,7 +144,11 @@ export class BillingOperationsService {
       .skip((query.page - 1) * query.limit)
       .take(query.limit)
       .getManyAndCount();
-    return this.page(items.map(BillingOperationsMapper.checkout), total, query);
+    return this.page(
+      items.map((item) => BillingOperationsMapper.checkout(item)),
+      total,
+      query,
+    );
   }
 
   async getCheckout(id: string): Promise<ConsoleCheckoutResponseDto> {
@@ -140,9 +163,17 @@ export class BillingOperationsService {
 
   async listLicenses(
     query: ListConsoleLicensesQueryDto,
+    scope: string[] | null,
   ): Promise<CatalogPageDto<ConsoleLicenseResponseDto>> {
     const where: Record<string, unknown> = {};
-    if (query.organization_id) where.organizationId = query.organization_id;
+    if (scope !== null)
+      where.organizationId = In(
+        query.organization_id
+          ? scope.filter((id) => id === query.organization_id)
+          : scope,
+      );
+    else if (query.organization_id)
+      where.organizationId = query.organization_id;
     if (query.product_code) where.productCode = query.product_code;
     if (query.status) where.status = query.status;
     const [items, total] = await this.licenses.findAndCount({
@@ -151,7 +182,11 @@ export class BillingOperationsService {
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     });
-    return this.page(items.map(BillingOperationsMapper.license), total, query);
+    return this.page(
+      items.map((item) => BillingOperationsMapper.license(item)),
+      total,
+      query,
+    );
   }
 
   async getLicense(id: string): Promise<ConsoleLicenseResponseDto> {
@@ -160,29 +195,58 @@ export class BillingOperationsService {
     return BillingOperationsMapper.license(license);
   }
 
-  async dashboard(): Promise<BillingDashboardSummaryDto> {
-    // ponytail: dummy temporal; volver a consultas reales cuando auth/DB del dashboard esté listo.
+  async dashboard(scope: string[] | null): Promise<BillingDashboardSummaryDto> {
+    const where = scope === null ? {} : { organizationId: In(scope) };
+    const subscriptions = {} as Record<SubscriptionStatus, number>;
+    for (const status of Object.values(SubscriptionStatus))
+      subscriptions[status] = await this.subscriptions.count({
+        where: { ...where, status },
+      });
     return {
-      subscriptions: {
-        [SubscriptionStatus.Pending]: 3,
-        [SubscriptionStatus.Active]: 12,
-        [SubscriptionStatus.PastDue]: 2,
-        [SubscriptionStatus.Suspended]: 0,
-        [SubscriptionStatus.Cancelled]: 1,
-        [SubscriptionStatus.Expired]: 0,
-      },
-      pendingCheckouts: 4,
-      failedCheckouts: 1,
-      inactiveLicenses: 3,
-      pendingInvoices: 5,
-      failedInvoices: 2,
-      failedWebhooks: 1,
-      webhookRetries24h: 7,
+      subscriptions,
+      pendingCheckouts: await this.checkouts.count({
+        where: { ...where, status: BillingCheckoutSessionStatus.Created },
+      }),
+      failedCheckouts: await this.checkouts.count({
+        where: { ...where, status: BillingCheckoutSessionStatus.Failed },
+      }),
+      inactiveLicenses: await this.licenses.count({
+        where: { ...where, status: Not(LicenseStatus.Active) },
+      }),
+      pendingInvoices: await this.invoices.count({
+        where: { ...where, status: InvoiceStatus.Pending },
+      }),
+      failedInvoices: await this.invoices.count({
+        where: { ...where, status: InvoiceStatus.Failed },
+      }),
+      // Webhooks have no trusted organization ownership in the current storage model.
+      failedWebhooks:
+        scope === null
+          ? await this.webhooks.count({
+              where: { processingStatus: WebhookProcessingStatus.Failed },
+            })
+          : await this.webhooks
+              .createQueryBuilder('webhook')
+              .where('webhook.processingStatus = :status', {
+                status: WebhookProcessingStatus.Failed,
+              })
+              .andWhere(
+                `${webhookOrganizationSql('webhook')} IN (:...authorizedOrganizations)`,
+                { authorizedOrganizations: scope },
+              )
+              .getCount(),
+      webhookRetries24h: await this.auditLogs.count({
+        where: {
+          ...where,
+          action: 'billing.webhook.manual_retry',
+          createdAt: MoreThanOrEqual(new Date(Date.now() - 86400000)),
+        },
+      }),
     };
   }
 
-  private range(
-    builder: any,
+  private range<T extends ObjectLiteral>(
+    builder: SelectQueryBuilder<T>,
     alias: string,
     query: { created_from?: Date; created_to?: Date },
   ): void {

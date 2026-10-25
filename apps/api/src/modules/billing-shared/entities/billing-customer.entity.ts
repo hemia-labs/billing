@@ -13,6 +13,14 @@ import { BillingCustomerStatus, BillingProvider } from '../enums';
 @Index('IDX_customers_organization_id', ['organizationId'])
 @Index('IDX_customers_provider', ['provider'])
 @Index('IDX_customers_provider_payer_id', ['providerPayerId'])
+@Index(
+  'UQ_customers_active_organization_provider',
+  ['organizationId', 'provider'],
+  {
+    unique: true,
+    where: '"deleted_at" IS NULL',
+  },
+)
 export class BillingCustomerEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

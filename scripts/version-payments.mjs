@@ -1,3 +1,4 @@
+import { withChangesetScope } from './changeset-scope.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -10,9 +11,9 @@ const lockFile = join(root, 'bun.lock');
 const version = () => JSON.parse(readFileSync(packageFile, 'utf8')).version;
 const before = version();
 
-execFileSync(process.execPath, [join(root, 'node_modules/@changesets/cli/bin.js'), 'version'], {
+withChangesetScope('payments', () => execFileSync(process.execPath, [join(root, 'node_modules/@changesets/cli/bin.js'), 'version'], {
   cwd: root, stdio: 'inherit',
-});
+}));
 
 const after = version();
 assert.notEqual(after, before, 'Changesets did not update @hemia/payments');

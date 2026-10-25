@@ -1,28 +1,38 @@
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { BillingServiceClientEntity } from './entities/billing-service-client.entity';
+import { BillingServiceClientRegistryService } from './services/billing-service-client-registry.service';
 import { Global, Module } from '@nestjs/common';
 import { AuthModule } from '../modules/auth/auth.module';
 import { BillingConsoleAuthGuard } from './guards/billing-console-auth.guard';
-import { BillingInternalApiKeyGuard } from './guards/billing-internal-api-key.guard';
 import { BillingInternalAuthGuard } from './guards/billing-internal-auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { SsoBearerGuard } from './guards/sso-bearer.guard';
+import { BillingServicePolicyGuard } from './guards/billing-service-policy.guard';
+import { BillingServicePolicyService } from './services/billing-service-policy.service';
+import { BillingResourceContextRepository } from './repositories/billing-resource-context.repository';
 
 @Global()
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, TypeOrmModule.forFeature([BillingServiceClientEntity])],
   providers: [
-    BillingInternalApiKeyGuard,
     BillingConsoleAuthGuard,
     BillingInternalAuthGuard,
     PermissionsGuard,
     SsoBearerGuard,
+    BillingServicePolicyGuard,
+    BillingServicePolicyService,
+    BillingServiceClientRegistryService,
+    BillingResourceContextRepository,
   ],
   exports: [
     AuthModule,
-    BillingInternalApiKeyGuard,
     BillingConsoleAuthGuard,
     BillingInternalAuthGuard,
     PermissionsGuard,
     SsoBearerGuard,
+    BillingServicePolicyGuard,
+    BillingServicePolicyService,
+    BillingServiceClientRegistryService,
   ],
 })
 export class CommonAuthModule {}

@@ -1,6 +1,6 @@
 import { PageHeading } from "@/components/page-heading";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent } from "@/components/zuno/card";
+import { Skeleton } from "@/components/zuno/skeleton";
 
 export default function Loading() {
   return (

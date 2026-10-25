@@ -24,14 +24,22 @@ import type { AddonEntitlementEffects } from '../types';
 @Index('IDX_subscription_addons_subscription_id', ['subscriptionId'])
 @Index('IDX_subscription_addons_addon_id', ['addonId'])
 @Index('IDX_subscription_addons_status', ['status'])
-@Index('IDX_subscription_addons_provider_subscription_id', ['providerSubscriptionId'], {
-  unique: true,
-  where: '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
-})
-@Index('IDX_subscription_addons_subscription_idempotency_key', ['subscriptionId', 'idempotencyKey'], {
-  unique: true,
-  where: '"idempotency_key" IS NOT NULL AND "deleted_at" IS NULL',
-})
+@Index(
+  'IDX_subscription_addons_provider_subscription_id',
+  ['providerSubscriptionId'],
+  {
+    unique: true,
+    where: '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
+  },
+)
+@Index(
+  'IDX_subscription_addons_subscription_idempotency_key',
+  ['subscriptionId', 'idempotencyKey'],
+  {
+    unique: true,
+    where: '"idempotency_key" IS NOT NULL AND "deleted_at" IS NULL',
+  },
+)
 @Index(
   'IDX_subscription_addons_subscription_addon_status_unique',
   ['subscriptionId', 'addonId', 'status'],
@@ -81,7 +89,11 @@ export class BillingSubscriptionAddonEntity {
   @Column({ name: 'billing_interval', type: 'enum', enum: BillingInterval })
   billingInterval: BillingInterval;
 
-  @Column({ name: 'pricing_model', type: 'enum', enum: BillingAddonPricingModel })
+  @Column({
+    name: 'pricing_model',
+    type: 'enum',
+    enum: BillingAddonPricingModel,
+  })
   pricingModel: BillingAddonPricingModel;
 
   @Column({ name: 'entitlement_effects', type: 'jsonb' })
@@ -106,7 +118,12 @@ export class BillingSubscriptionAddonEntity {
   })
   providerSubscriptionId: string | null;
 
-  @Column({ name: 'idempotency_key', type: 'varchar', length: 120, nullable: true })
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
   idempotencyKey: string | null;
 
   @Column({

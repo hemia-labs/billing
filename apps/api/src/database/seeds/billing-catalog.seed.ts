@@ -128,10 +128,16 @@ async function upsertPlan(
   },
 ): Promise<void> {
   const repository = AppDataSource.getRepository(BillingPlanEntity);
-  const versionRepository = AppDataSource.getRepository(BillingPlanVersionEntity);
+  const versionRepository = AppDataSource.getRepository(
+    BillingPlanVersionEntity,
+  );
   const priceRepository = AppDataSource.getRepository(BillingPlanPriceEntity);
-  const providerPriceRepository = AppDataSource.getRepository(BillingProviderPriceEntity);
-  const entitlementRepository = AppDataSource.getRepository(BillingPlanEntitlementEntity);
+  const providerPriceRepository = AppDataSource.getRepository(
+    BillingProviderPriceEntity,
+  );
+  const entitlementRepository = AppDataSource.getRepository(
+    BillingPlanEntitlementEntity,
+  );
   const existing = await repository.findOne({
     where: { productId: product.id, code: input.code },
   });
@@ -236,7 +242,9 @@ async function upsertFeature(
   code: string,
   type: string,
 ): Promise<BillingFeatureDefinitionEntity> {
-  const repository = AppDataSource.getRepository(BillingFeatureDefinitionEntity);
+  const repository = AppDataSource.getRepository(
+    BillingFeatureDefinitionEntity,
+  );
   const feature =
     (await repository.findOne({ where: { productId: product.id, code } })) ??
     repository.create({ productId: product.id, product, code });
@@ -264,8 +272,12 @@ function featureUnit(code: string): string | null {
   return null;
 }
 
-async function archiveObsoleteFeatures(product: BillingProductEntity): Promise<void> {
-  const repository = AppDataSource.getRepository(BillingFeatureDefinitionEntity);
+async function archiveObsoleteFeatures(
+  product: BillingProductEntity,
+): Promise<void> {
+  const repository = AppDataSource.getRepository(
+    BillingFeatureDefinitionEntity,
+  );
   const features = await repository.find({
     where: { productId: product.id },
   });

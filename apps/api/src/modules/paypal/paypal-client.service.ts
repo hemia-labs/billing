@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   CreatePaypalSubscriptionInput,
+  RevisePaypalSubscriptionInput,
   CancelPaypalSubscriptionInput,
   PaypalApiErrorBody,
   PaypalApiException,
@@ -27,7 +28,10 @@ export class PaypalClientService {
       return this.cachedToken.accessToken;
     }
 
-    const body = await this.request<{ access_token: string; expires_in: number }>(
+    const body = await this.request<{
+      access_token: string;
+      expires_in: number;
+    }>(
       '/v1/oauth2/token',
       {
         method: 'POST',
@@ -75,6 +79,7 @@ export class PaypalClientService {
         headers: input.requestId
           ? { 'PayPal-Request-Id': input.requestId }
           : undefined,
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify(payload),
       },
     );
@@ -104,6 +109,88 @@ export class PaypalClientService {
       approvalUrl: this.findApprovalUrl(raw),
       raw,
     };
+  }
+
+  async reviseSubscription(
+    input: RevisePaypalSubscriptionInput,
+  ): Promise<PaypalSubscriptionResult> {
+    const raw = await this.request<Record<string, unknown>>(
+      `/v1/billing/subscriptions/${encodeURIComponent(input.providerSubscriptionId)}/revise`,
+      {
+        method: 'POST',
+        headers: { 'PayPal-Request-Id': input.requestId },
+        body: JSON.stringify({
+          plan_id: input.providerPlanId,
+          application_context: {
+            return_url: input.returnUrl,
+            cancel_url: input.cancelUrl,
+          },
+        }),
+      },
+    );
+    return {
+      id: input.providerSubscriptionId,
+      status: typeof raw.status === 'string' ? raw.status : undefined,
+      approvalUrl: this.findApprovalUrl(raw),
+      raw,
+    };
+  }
+
+  async createOrder(input: {
+    requestId: string;
+    checkoutId: string;
+    amount: string;
+    currency: string;
+    returnUrl: string;
+    cancelUrl: string;
+  }): Promise<Record<string, unknown>> {
+    return this.request('/v2/checkout/orders', {
+      method: 'POST',
+      headers: {
+        'PayPal-Request-Id': input.requestId,
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            custom_id: input.checkoutId,
+            invoice_id: input.requestId,
+            amount: { currency_code: input.currency, value: input.amount },
+          },
+        ],
+        payment_source: {
+          paypal: {
+            experience_context: {
+              return_url: input.returnUrl,
+              cancel_url: input.cancelUrl,
+              user_action: 'PAY_NOW',
+            },
+          },
+        },
+      }),
+    });
+  }
+  async getOrder(id: string): Promise<Record<string, unknown>> {
+    return this.request(`/v2/checkout/orders/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+  }
+  async captureOrder(
+    id: string,
+    requestId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/v2/checkout/orders/${encodeURIComponent(id)}/capture`,
+      {
+        method: 'POST',
+        headers: {
+          'PayPal-Request-Id': requestId,
+          Prefer: 'return=representation',
+        },
+        body: '{}',
+      },
+    );
   }
 
   async cancelSubscription(
@@ -165,6 +252,7 @@ export class PaypalClientService {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       ...init,
       headers,
+      signal: init.signal ?? AbortSignal.timeout(15_000),
     });
     const body = await this.parseResponse(response);
 
@@ -209,8 +297,8 @@ export class PaypalClientService {
     const links = raw.links;
     if (!Array.isArray(links)) return undefined;
 
-    const approveLink = links.find(
-      (link) =>
+    const approveLink: unknown = links.find(
+      (link: unknown) =>
         this.asRecord(link)?.rel === 'approve' &&
         typeof this.asRecord(link)?.href === 'string',
     );

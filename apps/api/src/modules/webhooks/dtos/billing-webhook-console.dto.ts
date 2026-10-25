@@ -1,5 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsDate,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import {
   BillingProvider,
   WebhookProcessingStatus,
@@ -55,6 +61,10 @@ export class ConsoleWebhookResponseDto {
   verificationStatus: WebhookVerificationStatus;
   processingStatus: WebhookProcessingStatus;
   errorMessage: string | null;
+  attempts: number;
+  nextRetryAt: Date;
+  lockedUntil: Date | null;
+  requiresManualReview: boolean;
   receivedAt: Date;
   processedAt: Date | null;
 }
@@ -62,4 +72,13 @@ export class ConsoleWebhookResponseDto {
 export class ConsoleWebhookDetailResponseDto extends ConsoleWebhookResponseDto {
   transmissionId: string | null;
   references: Record<string, string>;
+  summary: Record<string, string>;
+}
+
+export class ConsoleWebhookManualRetryResponseDto {
+  id: string;
+  actorUserId: string | null;
+  reason: string | null;
+  attempt: number | null;
+  createdAt: Date;
 }

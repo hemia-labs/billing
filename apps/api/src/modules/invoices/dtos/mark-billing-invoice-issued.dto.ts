@@ -1,4 +1,10 @@
-import { IsISO8601, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
+import {
+  IsISO8601,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+} from 'class-validator';
 
 export class MarkBillingInvoiceIssuedDto {
   @IsString()

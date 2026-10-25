@@ -5,11 +5,19 @@ import {
   IsString,
   IsUrl,
   IsUUID,
+  Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { BillingProvider } from '../../billing-shared';
+import { checkoutReturnUrlOptions } from '../../../common/utils/checkout-return-url';
 
 export class CreateIntegrationCheckoutSessionDto {
+  @IsString()
+  @Matches(/^\S+$/)
+  @MaxLength(120)
+  idempotencyKey: string;
+
   @IsOptional()
   @IsUUID()
   organizationId?: string;
@@ -30,17 +38,18 @@ export class CreateIntegrationCheckoutSessionDto {
   @MaxLength(100)
   planPriceCode: string;
 
+  @ValidateIf((_, value) => value !== undefined)
   @IsEnum(BillingProvider)
-  provider: BillingProvider;
+  provider?: BillingProvider;
 
-  @IsString()
-  @MaxLength(150)
-  legalAcceptanceId: string;
+  @ValidateIf((_, value) => value !== undefined)
+  @IsUUID()
+  legalAcceptanceId?: string;
 
-  @IsUrl({ require_tld: false })
+  @IsUrl(checkoutReturnUrlOptions)
   successUrl: string;
 
-  @IsUrl({ require_tld: false })
+  @IsUrl(checkoutReturnUrlOptions)
   cancelUrl: string;
 
   @IsOptional()

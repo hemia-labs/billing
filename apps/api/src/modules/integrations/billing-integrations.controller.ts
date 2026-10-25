@@ -8,8 +8,14 @@ import {
   Query,
   Req,
   UseGuards,
+  UseFilters,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
+import { BillingServiceAccess } from '../../common/decorators/billing-service-access.decorator';
+import {
+  billingServiceActor,
+  billingServiceAuthorization,
+} from '../../common/types/billing-service-authorization.type';
 import { BillingInternalAuthGuard } from '../../common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import type { AuthenticatedRequest } from '../../common/types/authenticated-request.type';
@@ -20,6 +26,7 @@ import {
   BillingPlanResponseDto,
 } from '../catalog/dtos';
 import { BillingCheckoutService } from '../checkout';
+import { CheckoutInProgressFilter } from '../checkout/filters/checkout-in-progress.filter';
 import {
   CheckoutSessionResponseDto,
   CheckoutSessionStatusResponseDto,
@@ -46,11 +53,17 @@ export class BillingIntegrationsController {
 
   @Get('catalog/products')
   @Permissions('billing.integration.catalog.read')
-  listProducts(): Promise<BillingActiveProductResponseDto[]> {
-    return this.catalog.listActiveProducts();
+  @BillingServiceAccess('catalog')
+  listProducts(
+    @Req() request: AuthenticatedRequest,
+  ): Promise<BillingActiveProductResponseDto[]> {
+    return this.catalog.listActiveProducts(
+      billingServiceAuthorization(request).policy.products,
+    );
   }
 
   @Get('catalog/products/:productCode/plans')
+  @BillingServiceAccess({ product: 'productCode', source: 'params' })
   @Permissions('billing.integration.catalog.read')
   listPlans(
     @Param('productCode') productCode: string,
@@ -59,6 +72,7 @@ export class BillingIntegrationsController {
   }
 
   @Get('catalog/products/:productCode/addons')
+  @BillingServiceAccess({ product: 'productCode', source: 'params' })
   @Permissions('billing.integration.catalog.read')
   listAddons(
     @Param('productCode') productCode: string,
@@ -67,6 +81,12 @@ export class BillingIntegrationsController {
   }
 
   @Post('checkout/sessions')
+  @UseFilters(CheckoutInProgressFilter)
+  @BillingServiceAccess({
+    product: 'productCode',
+    organization: 'organizationId',
+    source: 'body',
+  })
   @Permissions('billing.integration.checkout.create')
   createCheckoutSession(
     @Body() dto: CreateIntegrationCheckoutSessionDto,
@@ -77,30 +97,42 @@ export class BillingIntegrationsController {
       dto.organizationId,
     );
 
-    return this.checkout.createCheckoutSession({
-      ...dto,
-      organizationId,
-      userId: resolveIntegrationUserId(request.principal, dto.userId),
-    });
+    return this.checkout.createCheckoutSession(
+      {
+        ...dto,
+        organizationId,
+        userId: resolveIntegrationUserId(request.principal, dto.userId),
+      },
+      billingServiceActor(request),
+    );
   }
 
   @Get('checkout/sessions/:id/status')
+  @BillingServiceAccess({ resource: 'checkout_sessions' })
   @Permissions('billing.integration.checkout.read')
   getCheckoutStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() request: AuthenticatedRequest,
   ): Promise<CheckoutSessionStatusResponseDto> {
-    return this.checkout.getCheckoutStatus(id, request.principal?.organizationId);
+    return this.checkout.getCheckoutStatus(id, billingServiceActor(request));
   }
 
   @Get('licenses/resolve')
+  @BillingServiceAccess({
+    product: 'product_code',
+    organization: 'organization_id',
+    source: 'query',
+  })
   @Permissions('billing.integration.licenses.read')
   resolveLicense(
     @Query() query: ResolveIntegrationLicenseQueryDto,
     @Req() request: AuthenticatedRequest,
   ): Promise<BillingLicenseResolveResponseDto> {
     return this.licenses.resolveLicense(
-      resolveIntegrationOrganizationId(request.principal, query.organization_id),
+      resolveIntegrationOrganizationId(
+        request.principal,
+        query.organization_id,
+      ),
       query.product_code,
     );
   }

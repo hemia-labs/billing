@@ -3,9 +3,7 @@ import { BillingProvider } from '../../billing-shared';
 
 export type BillingAuditLegalReference = {
   legalAcceptanceId: string;
-  termsVersion: string;
-  privacyVersion: string;
-  refundPolicyVersion: string;
+  evidence?: unknown[];
   acceptedAt: Date | string;
   legalSnapshotHash: string;
 };

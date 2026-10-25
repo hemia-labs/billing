@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Eye, Filter, MoreHorizontal, RefreshCw, Search } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Eye, Filter, MoreHorizontal, RefreshCw, Search } from "lucide-react";
+import { StatusBadge as ZunoStatusBadge } from "@/components/zuno/status-badge";
+import { Button } from "@/components/zuno/button";
+import { CardContent, CardFooter } from "@/components/zuno/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,10 +14,10 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@/components/zuno/dropdown-menu";
+import { Alert, AlertDescription } from "@/components/zuno/alert";
+import { Input } from "@/components/zuno/input";
+import { Label } from "@/components/zuno/label";
 import {
   Pagination,
   PaginationContent,
@@ -60,22 +60,27 @@ export function CatalogClient() {
   const [data, setData] = useState<CatalogPage<CatalogProduct> | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchTimeoutRef = useRef<number | null>(null);
+  const requestId = useRef(0);
 
   async function load(nextFilters = filters, dedupe = true) {
+    const currentRequest = ++requestId.current;
     setLoading(true);
     setMessage("");
 
     try {
-      setData(await listProducts(nextFilters, dedupe));
+      const result = await listProducts(nextFilters, dedupe);
+      if (currentRequest === requestId.current) setData(result);
     } catch (error) {
+      if (currentRequest !== requestId.current) return;
       if (error instanceof ApiError && error.status === 401) {
         redirectToLogin();
         return;
       }
       setMessage(apiErrorMessage(error, "No se pudieron cargar los productos."));
     } finally {
-      setLoading(false);
+      if (currentRequest === requestId.current) setLoading(false);
     }
   }
 
@@ -85,17 +90,33 @@ export function CatalogClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead, queryKey]);
 
+  useEffect(() => {
+    if (searchInputRef.current) searchInputRef.current.value = filters.q ?? "";
+  }, [filters.q]);
+
+  useEffect(() => () => {
+    if (searchTimeoutRef.current) window.clearTimeout(searchTimeoutRef.current);
+  }, [queryKey]);
+
   const pushQuery = (nextFilters: CatalogFilters) => {
-    const params = new URLSearchParams();
-    params.set("limit", String(limit));
-    params.set("page", String(nextFilters.page ?? 1));
-    setIfAny(params, "status", nextFilters.status);
-    router.push(`${pathname}?${params.toString()}`);
+    if (searchTimeoutRef.current) window.clearTimeout(searchTimeoutRef.current);
+    router.push(pageHref(pathname, nextFilters, nextFilters.page ?? 1), { scroll: false });
+  };
+
+  const scheduleSearch = (value: string) => {
+    if (searchTimeoutRef.current) window.clearTimeout(searchTimeoutRef.current);
+    const q = value.trim();
+    if (q === (filters.q ?? "")) return;
+    searchTimeoutRef.current = window.setTimeout(() => {
+      router.replace(pageHref(pathname, { ...filters, q: q || undefined }, 1), { scroll: false });
+    }, 300);
   };
 
   if (!canRead) {
     return (
-      <Alert variant="destructive"><AlertDescription>No tienes permiso para consultar productos.</AlertDescription></Alert>
+      <CardContent className="p-5">
+        <Alert variant="destructive"><AlertDescription>No tienes permiso para consultar productos.</AlertDescription></Alert>
+      </CardContent>
     );
   }
 
@@ -105,40 +126,46 @@ export function CatalogClient() {
   const totalPages = Math.max(1, Math.ceil(total / pageLimit));
   const hasNext = page < totalPages;
   const items = data?.items ?? [];
-  const filteredItems = filterProducts(items, search);
+  const firstItem = (page - 1) * pageLimit + 1;
+  const lastItem = (page - 1) * pageLimit + items.length;
+  const rangeLabel = items.length === 0
+    ? `0 de ${total} ${total === 1 ? "producto" : "productos"}`
+    : `${firstItem}${firstItem === lastItem ? "" : `–${lastItem}`} de ${total} ${total === 1 ? "producto" : "productos"}`;
+  const emptyMessage = filters.q || filters.status ? "No hay productos que coincidan con los filtros." : "Aún no hay productos.";
 
   return (
-    <div className="space-y-5">
-      {message ? (
-        <Alert variant="destructive"><AlertDescription>{message}</AlertDescription></Alert>
-      ) : null}
-
-      <Card className="rounded-lg border border-border py-0 shadow-sm ring-0">
-        <CardContent className="p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="min-w-0 flex-1">
-              <Label className="sr-only" htmlFor="products-search">Buscar</Label>
+    <>
+      <CardContent className="space-y-4 p-5">
+        {message ? (
+          <Alert variant="destructive"><AlertDescription>{message}</AlertDescription></Alert>
+        ) : null}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span aria-live="polite" className="text-sm text-muted-foreground">{loading ? "Cargando..." : `${total} ${total === 1 ? "producto" : "productos"}`}</span>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="w-full sm:w-72">
+              <Label className="sr-only" htmlFor="products-search">Buscar por código, nombre o descripción</Label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  className="h-12 bg-card pl-10 text-sm"
+                  className="pl-10 text-sm"
+                  defaultValue={filters.q ?? ""}
                   id="products-search"
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Buscar por código, nombre o descripción"
-                  value={search}
+                  maxLength={120}
+                  onChange={(event) => scheduleSearch(event.target.value)}
+                  placeholder="Buscar productos"
+                  ref={searchInputRef}
                 />
               </div>
             </div>
-            <div className="flex gap-3">
-              <Label className="sr-only">Estado</Label>
+            <div className="flex justify-end gap-2">
               <DropdownMenu>
-                <DropdownMenuTrigger render={<Button className="h-12 min-w-56 justify-start gap-2 bg-card px-3 font-semibold" variant="outline" />}>
-                  <Filter className="size-4 text-muted-foreground" />
-                  {statusLabel(filters.status)}
+                <DropdownMenuTrigger render={<Button className="min-w-28 px-4 font-semibold" variant="outline" />}>
+                  <Filter className="size-4" />Filtros
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-56">
                   <DropdownMenuRadioGroup
-                    onValueChange={(value) => pushQuery({ ...filters, page: 1, status: value === "all" ? undefined : value as CatalogStatus })}
+                    aria-label="Estado del producto"
+                    onValueChange={(value) => pushQuery({ ...filters, q: searchInputRef.current?.value.trim() || undefined, page: 1, status: value === "all" ? undefined : value as CatalogStatus })}
                     value={filters.status ?? "all"}
                   >
                     <DropdownMenuRadioItem value="all">Todos los estados</DropdownMenuRadioItem>
@@ -146,29 +173,27 @@ export function CatalogClient() {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button aria-label="Recargar productos" className="size-12" onClick={() => void load(filters, false)} size="icon" variant="outline"><RefreshCw className="size-5" /></Button>
+              <Button aria-label="Recargar productos" onClick={() => void load(filters, false)} size="icon" variant="ghost"><RefreshCw className="size-4" /></Button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </CardContent>
 
-      <Card className="gap-0 rounded-lg border border-border py-0 shadow-sm ring-0">
-        <CardContent className="p-0">
-          <ProductsTable items={filteredItems} loading={loading} />
-        </CardContent>
-        <CardFooter className="flex items-center justify-between border-t border-border bg-card px-5 py-4 text-sm text-muted-foreground">
-          <span>Página {page} · {total} registros</span>
-          <ProductPagination
-            currentPage={page}
-            disabled={loading}
-            filters={filters}
-            hasNext={hasNext}
-            pathname={pathname}
-            totalPages={totalPages}
-          />
-        </CardFooter>
-      </Card>
-    </div>
+      <div className="border-t border-border">
+        <ProductsTable emptyMessage={emptyMessage} items={items} loading={loading} />
+      </div>
+      <CardFooter className="flex flex-col gap-3 border-t border-border bg-card px-5 py-4 text-sm text-muted-foreground sm:flex-row sm:justify-between">
+        <span>{loading ? "Cargando..." : rangeLabel}</span>
+        <ProductPagination
+          currentPage={page}
+          disabled={loading}
+          filters={filters}
+          hasNext={hasNext}
+          pathname={pathname}
+          totalPages={totalPages}
+        />
+      </CardFooter>
+    </>
   );
 }
 
@@ -219,28 +244,28 @@ function ProductPagination({
   );
 }
 
-function ProductsTable({ items, loading }: { items: CatalogProduct[]; loading: boolean }) {
+function ProductsTable({ emptyMessage, items, loading }: { emptyMessage: string; items: CatalogProduct[]; loading: boolean }) {
   return (
-    <Table className="min-w-4xl">
+    <Table className="min-w-[36rem] table-fixed md:min-w-0">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="h-10 px-5 text-xs font-bold text-muted-foreground">Producto</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Nombre</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Estado</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Descripción</TableHead>
-          <TableHead className="px-5 text-right">Acciones</TableHead>
+          <TableHead className="h-10 w-[32%] px-4 text-xs font-medium text-muted-foreground md:w-[25%] md:px-5">Nombre</TableHead>
+          <TableHead className="w-[28%] text-xs font-medium text-muted-foreground md:w-[20%]">Código</TableHead>
+          <TableHead className="w-24 text-xs font-medium text-muted-foreground md:w-32">Estado</TableHead>
+          <TableHead className="hidden text-xs font-medium text-muted-foreground md:table-cell">Descripción</TableHead>
+          <TableHead className="w-14 px-3 text-right md:w-16 md:px-5"><span className="sr-only">Acciones</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {loading ? <EmptyRow colSpan={5} text="Cargando productos..." /> : items.length === 0 ? <EmptyRow colSpan={5} text="No hay productos para mostrar." /> : items.map((product) => (
-          <TableRow className="h-[4.5rem] hover:bg-muted/30" key={product.id}>
-            <TableCell className="px-5">
-              <Link className="font-bold text-primary hover:underline" href={`/products/${product.id}`}>{product.code}</Link>
+        {loading ? <EmptyRow colSpan={5} text="Cargando productos..." /> : items.length === 0 ? <EmptyRow colSpan={5} text={emptyMessage} /> : items.map((product) => (
+          <TableRow className="h-[60px] hover:bg-muted/30" key={product.id}>
+            <TableCell className="min-w-0 px-4 md:px-5">
+              <Link className="block truncate font-semibold text-foreground hover:underline" href={`/products/${product.id}`} title={product.name}>{product.name}</Link>
             </TableCell>
-            <TableCell>{product.name}</TableCell>
+            <TableCell className="max-w-0 text-muted-foreground"><span className="block truncate" title={product.code}>{product.code}</span></TableCell>
             <TableCell><StatusBadge status={product.status} /></TableCell>
-            <TableCell className="max-w-96 truncate text-muted-foreground">{product.description ?? "Sin descripción"}</TableCell>
-            <TableCell className="px-5 text-right"><ProductActions productId={product.id} /></TableCell>
+            <TableCell className="hidden max-w-0 text-muted-foreground md:table-cell"><span className="block truncate">{product.description ?? "Sin descripción"}</span></TableCell>
+            <TableCell className="px-3 text-right md:px-5"><ProductActions productId={product.id} /></TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -251,7 +276,7 @@ function ProductsTable({ items, loading }: { items: CatalogProduct[]; loading: b
 function ProductActions({ productId }: { productId: string }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button aria-label="Acciones del producto" className="size-12 border-border" size="icon" variant="outline" />}>
+      <DropdownMenuTrigger render={<Button aria-label="Acciones del producto" className="size-9" size="icon" variant="ghost" />}>
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
@@ -266,21 +291,19 @@ function ProductActions({ productId }: { productId: string }) {
 
 export function PlansTable({ items, loading }: { items: CatalogPlan[]; loading: boolean }) {
   return (
-    <Table className="min-w-5xl">
+    <Table className="min-w-[760px]">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="h-10 px-5 text-xs font-bold text-muted-foreground">Código</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Producto</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Nombre</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Proveedor</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Precio</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Intervalo</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Estado</TableHead>
-          <TableHead className="px-5 text-right text-xs font-bold text-muted-foreground">Acciones</TableHead>
+          <TableHead className="h-10 px-5 text-xs font-medium text-muted-foreground">Nombre</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Código</TableHead>
+          <TableHead className="text-right text-xs font-medium text-muted-foreground">Precio</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Proveedor</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Estado</TableHead>
+          <TableHead className="w-14 px-5 text-right"><span className="sr-only">Acciones</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {loading ? <EmptyRow colSpan={8} text="Cargando planes..." /> : items.length === 0 ? <EmptyRow colSpan={8} text="No hay planes para mostrar." /> : items.map((plan) => (
+        {loading ? <EmptyRow colSpan={6} text="Cargando planes..." /> : items.length === 0 ? <EmptyRow colSpan={6} text="No hay planes para mostrar." /> : items.map((plan) => (
           <PlanRow key={plan.id} plan={plan} />
         ))}
       </TableBody>
@@ -293,13 +316,15 @@ function PlanRow({ plan }: { plan: CatalogPlan }) {
   const providerPrice = primaryProviderPrice(plan);
 
   return (
-    <TableRow className="h-[4.5rem] hover:bg-muted/30">
-      <TableCell className="px-5 font-semibold">{plan.code}</TableCell>
-      <TableCell>{plan.productCode ?? plan.productId}</TableCell>
-      <TableCell>{plan.name}</TableCell>
-      <TableCell>{providerPrice ? label(providerPrice.provider) : "Sin proveedor"}</TableCell>
-      <TableCell>{price ? `${price.currency} ${price.amount}` : "Sin precio"}</TableCell>
-      <TableCell>{price ? label(price.billingInterval) : "Sin intervalo"}</TableCell>
+    <TableRow className="h-12 hover:bg-muted/30">
+      <TableCell className="px-5">
+        <Link className="block truncate font-semibold text-foreground hover:underline" href={"/products/plans/" + plan.id} title={plan.name}>{plan.name}</Link>
+      </TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">{plan.code}</TableCell>
+      <TableCell className="whitespace-nowrap text-right tabular-nums">
+        {price ? formatPrice(price.currency, price.amount, price.billingInterval) : "Sin precio"}
+      </TableCell>
+      <TableCell>{providerPrice ? providerLabel(providerPrice.provider) : "Sin proveedor"}</TableCell>
       <TableCell><StatusBadge status={plan.status} /></TableCell>
       <TableCell className="px-5 text-right"><PlanActions planId={plan.id} /></TableCell>
     </TableRow>
@@ -309,13 +334,12 @@ function PlanRow({ plan }: { plan: CatalogPlan }) {
 function PlanActions({ planId }: { planId: string }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button aria-label="Acciones del plan" className="size-12 border-border" size="icon" variant="outline" />}>
+      <DropdownMenuTrigger render={<Button aria-label="Acciones del plan" className="size-8" size="icon" variant="ghost" />}>
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem render={<Link href={`/products/plans/${planId}`} />}>
-          <Eye className="size-4" />
-          Ver detalle
+        <DropdownMenuItem render={<Link href={"/products/plans/" + planId} />}>
+          <Eye className="size-4" />Ver detalle
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -324,30 +348,26 @@ function PlanActions({ planId }: { planId: string }) {
 
 export function AddonsTable({ items, loading }: { items: CatalogAddon[]; loading: boolean }) {
   return (
-    <Table className="min-w-5xl">
+    <Table className="min-w-[760px]">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="h-10 px-5 text-xs font-bold text-muted-foreground">Producto</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Código</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Nombre</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Proveedor</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Precio unitario</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Intervalo</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Tipo</TableHead>
-          <TableHead className="text-xs font-bold text-muted-foreground">Estado</TableHead>
-          <TableHead className="px-5 text-right text-xs font-bold text-muted-foreground">Acciones</TableHead>
+          <TableHead className="h-10 px-5 text-xs font-medium text-muted-foreground">Nombre</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Código</TableHead>
+          <TableHead className="text-right text-xs font-medium text-muted-foreground">Precio</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Proveedor</TableHead>
+          <TableHead className="text-xs font-medium text-muted-foreground">Estado</TableHead>
+          <TableHead className="w-14 px-5 text-right"><span className="sr-only">Acciones</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {loading ? <EmptyRow colSpan={9} text="Cargando add-ons..." /> : items.length === 0 ? <EmptyRow colSpan={9} text="No hay add-ons para mostrar." /> : items.map((addon) => (
-          <TableRow className="h-[4.5rem] hover:bg-muted/30" key={addon.id}>
-            <TableCell className="px-5">{addon.productCode}</TableCell>
-            <TableCell className="font-semibold">{addon.code}</TableCell>
-            <TableCell>{addon.name}</TableCell>
-            <TableCell>{label(addon.provider)}</TableCell>
-            <TableCell>{addon.currency} {addon.unitPrice}</TableCell>
-            <TableCell>{label(addon.billingInterval)}</TableCell>
-            <TableCell>{label(addon.type)}</TableCell>
+        {loading ? <EmptyRow colSpan={6} text="Cargando add-ons..." /> : items.length === 0 ? <EmptyRow colSpan={6} text="No hay add-ons para mostrar." /> : items.map((addon) => (
+          <TableRow className="h-12 hover:bg-muted/30" key={addon.id}>
+            <TableCell className="px-5">
+              <Link className="block truncate font-semibold text-foreground hover:underline" href={"/products/addons/" + addon.id} title={addon.name}>{addon.name}</Link>
+            </TableCell>
+            <TableCell className="font-mono text-xs text-muted-foreground">{addon.code}</TableCell>
+            <TableCell className="whitespace-nowrap text-right tabular-nums">{formatPrice(addon.currency, addon.unitPrice, addon.billingInterval)}</TableCell>
+            <TableCell>{providerLabel(addon.provider)}</TableCell>
             <TableCell><StatusBadge status={addon.status} /></TableCell>
             <TableCell className="px-5 text-right"><AddonActions addonId={addon.id} /></TableCell>
           </TableRow>
@@ -360,17 +380,26 @@ export function AddonsTable({ items, loading }: { items: CatalogAddon[]; loading
 function AddonActions({ addonId }: { addonId: string }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button aria-label="Acciones del add-on" className="size-12 border-border" size="icon" variant="outline" />}>
+      <DropdownMenuTrigger render={<Button aria-label="Acciones del add-on" className="size-8" size="icon" variant="ghost" />}>
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem render={<Link href={`/products/addons/${addonId}`} />}>
-          <Eye className="size-4" />
-          Ver detalle
+        <DropdownMenuItem render={<Link href={"/products/addons/" + addonId} />}>
+          <Eye className="size-4" />Ver detalle
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function formatPrice(currency: string, amount: string, interval: string) {
+  const number = new Intl.NumberFormat("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(amount));
+  const period = interval === "month" || interval === "monthly" ? "mes" : "año";
+  return currency + " " + number + " / " + period;
+}
+
+function providerLabel(provider: string) {
+  return ({ paypal: "PayPal", stripe: "Stripe", mercado_pago: "Mercado Pago", manual_transfer: "Transferencia" } as Record<string, string>)[provider] ?? provider;
 }
 
 function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
@@ -379,14 +408,15 @@ function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
 
 function StatusBadge({ status }: { status: CatalogStatus }) {
   if (status === "active") {
-    return <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-50" variant="secondary"><CheckCircle2 className="size-3" />{label(status)}</Badge>;
+    return <ZunoStatusBadge status="success">Activo</ZunoStatusBadge>;
   }
 
-  return <Badge variant={status === "archived" ? "outline" : "secondary"}>{label(status)}</Badge>;
+  return <ZunoStatusBadge status={status === "archived" ? "neutral" : "warning"}>{status === "archived" ? "Archivado" : "Inactivo"}</ZunoStatusBadge>;
 }
 
 function getFilters(searchParams: URLSearchParams): CatalogFilters {
   return {
+    q: searchParams.get("q") || undefined,
     status: (searchParams.get("status") || undefined) as CatalogStatus | undefined,
     page: Number(searchParams.get("page") || 1),
     limit,
@@ -401,6 +431,7 @@ function pageHref(pathname: string, filters: CatalogFilters, page: number) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("page", String(page));
+  setIfAny(params, "q", filters.q);
   setIfAny(params, "status", filters.status);
   return `${pathname}?${params.toString()}`;
 }
@@ -416,16 +447,4 @@ function listProducts(filters: CatalogFilters, dedupe: boolean) {
 
 function label(value: string) {
   return value.replaceAll("_", " ");
-}
-
-function statusLabel(status: CatalogStatus | undefined) {
-  return status ? label(status) : "Todos los estados";
-}
-
-function filterProducts(items: CatalogProduct[], search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return items;
-  return items.filter((product) =>
-    [product.code, product.name, product.description ?? ""].some((value) => value.toLowerCase().includes(query)),
-  );
 }

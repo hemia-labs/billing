@@ -13,6 +13,8 @@ import {
 } from '../types/authenticated-request.type';
 
 type SsoJwtPayload = JwtPayload & {
+  exp: number;
+  iat: number;
   scope?: unknown;
   scopes?: unknown;
   client_id?: unknown;
@@ -70,20 +72,44 @@ export class SsoBearerGuard implements CanActivate {
     const decoded = decode(token, { complete: true });
     const kid = decoded?.header.kid;
 
-    if (!decoded || decoded.header.alg !== 'RS256' || !kid) {
+    if (
+      !decoded ||
+      decoded.header.alg !== 'RS256' ||
+      typeof kid !== 'string' ||
+      !kid.trim()
+    ) {
       throw new UnauthorizedException('Invalid bearer token');
+    }
+
+    const audience = this.config.get<string>('auth.audience');
+    const issuer =
+      this.config.get<string>('auth.requiredIssuer') ??
+      this.config.get<string>('auth.issuerUrl');
+    if (!audience || !issuer) {
+      throw new UnauthorizedException('Bearer auth is not configured');
     }
 
     const publicKey = await this.getPublicKey(kid);
 
     try {
-      return verify(token, publicKey, {
+      const payload = verify(token, publicKey, {
         algorithms: ['RS256'],
-        audience: this.config.get<string>('auth.audience'),
-        issuer:
-          this.config.get<string>('auth.requiredIssuer') ??
-          this.config.get<string>('auth.issuerUrl'),
-      }) as SsoJwtPayload;
+        audience,
+        issuer,
+      });
+      if (
+        typeof payload === 'string' ||
+        typeof payload.exp !== 'number' ||
+        !Number.isFinite(payload.exp) ||
+        typeof payload.iat !== 'number' ||
+        !Number.isFinite(payload.iat) ||
+        payload.iat <= 0 ||
+        payload.exp <= payload.iat ||
+        payload.iat > Math.floor(Date.now() / 1000) + 30
+      ) {
+        throw new Error('Invalid token lifetime');
+      }
+      return payload as SsoJwtPayload;
     } catch {
       throw new UnauthorizedException('Invalid bearer token');
     }
@@ -130,14 +156,22 @@ export class SsoBearerGuard implements CanActivate {
     }
 
     const scopes = this.normalizeScopes(payload);
-    const clientId = this.firstString(
-      payload.client_id,
-      payload.clientId,
-      payload.azp,
-    );
+    const isMachine = payload.grant_type === 'client_credentials';
+    const clientId = isMachine
+      ? this.firstString(payload.client_id)
+      : this.firstString(payload.client_id, payload.clientId, payload.azp);
+    if (isMachine && !clientId) {
+      throw new UnauthorizedException('Service client_id is required');
+    }
+    if (isMachine && payload.exp - payload.iat > 600) {
+      throw new UnauthorizedException(
+        'Service token lifetime exceeds 10 minutes',
+      );
+    }
     const email = this.firstString(payload.email);
 
     return {
+      issuer: payload.iss,
       sub: payload.sub,
       clientId,
       email,
@@ -146,9 +180,7 @@ export class SsoBearerGuard implements CanActivate {
         payload.organizationId,
         payload.organization_id,
       ),
-      isMachine:
-        payload.grant_type === 'client_credentials' ||
-        Boolean(clientId && !email),
+      isMachine,
     };
   }
 

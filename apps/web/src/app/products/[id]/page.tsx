@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ProductDetailClient } from "@/features/billing/catalog/product-detail-client";
+import { ProductDetailClient } from "@/features/billing/catalog/products/product-detail-client";
 
 export const metadata: Metadata = {
   title: "Producto",

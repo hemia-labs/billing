@@ -1,36 +1,45 @@
 {
   "name": "api",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "test:authorization:docker": "bash ../../test/api/integration/authorization/authorization-completion.docker.sh",
     "build": "node ./node_modules/.bin/nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"../../test/api/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "start:prod": "NODE_ENV=production node dist/src/main.js",
+    "lint": "cd ../.. && apps/api/node_modules/.bin/eslint --config apps/api/eslint.config.mjs \"apps/api/src/**/*.ts\" \"test/api/**/*.ts\" --fix",
     "test": "node ./node_modules/.bin/jest",
     "test:watch": "node ./node_modules/.bin/jest --watch",
     "test:cov": "node ./node_modules/.bin/jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
     "typeorm": "typeorm-ts-node-commonjs -d data-source.ts",
     "migration:create": "bun run typeorm migration:create",
     "migration:generate": "bun run typeorm migration:generate src/database/migrations/migration",
     "migration:run": "bun run typeorm migration:run",
     "migration:revert": "bun run typeorm migration:revert",
-    "seed:run": "ts-node -r tsconfig-paths/register src/database/seeds/billing-catalog.seed.ts"
+    "seed:run": "ts-node -r tsconfig-paths/register src/database/seeds/billing-catalog.seed.ts",
+    "test:redis": "bash ../../test/api/integration/context-cache/system-context-cache.redis.sh",
+    "test:bun": "bun test --tsconfig-override ../../test/api/tsconfig.json ../../test/api/unit/copilot/copilot-fevex.test.mjs",
+    "test:addon-cancellation:docker": "bash ../../test/api/integration/subscription-addons/subscription-addon-cancellation.docker.sh"
   },
   "dependencies": {
-    "@hemia/auth": "0.0.6",
+    "@fevex/core": "0.1.0-alpha.3",
+    "@fevex/deepseek": "0.1.0-alpha.3",
+    "@fevex/openai": "0.1.0-alpha.3",
+    "@hemia/auth": "1.0.8",
+    "@hemia/event-bus": "0.0.3",
+    "@hemia/secrets": "^0.0.2",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/schedule": "^6.0.0",
     "@nestjs/typeorm": "^11.0.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -43,10 +52,10 @@
     "pg": "^8.21.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "typeorm": "^1.0.0"
+    "typeorm": "^1.0.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
@@ -64,10 +73,8 @@
     "globals": "^17.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
-    "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
-    "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
@@ -79,18 +86,33 @@
       "json",
       "ts"
     ],
-    "rootDir": ".",
-    "testRegex": "test/.*\\.spec\\.ts$",
+    "rootDir": "../..",
+    "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "<rootDir>/apps/api/node_modules/ts-jest",
+        {
+          "tsconfig": "<rootDir>/test/api/tsconfig.json"
+        }
+      ]
     },
     "moduleNameMapper": {
-      "^src/(.*)$": "<rootDir>/src/$1"
+      "^src/(.*)$": "<rootDir>/apps/api/src/$1"
     },
     "collectCoverageFrom": [
-      "src/**/*.(t|j)s"
+      "apps/api/src/**/*.ts"
     ],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "coverageDirectory": "<rootDir>/coverage/api",
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/test/api/unit"
+    ],
+    "modulePaths": [
+      "<rootDir>/apps/api/node_modules"
+    ],
+    "moduleDirectories": [
+      "<rootDir>/apps/api/node_modules",
+      "node_modules"
+    ]
   }
 }

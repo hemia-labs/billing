@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import type { EntityManager } from 'typeorm';
 import { BillingAuditService } from '../audit';
 import { BillingPlanCatalogResolver } from '../catalog';
 import { DEFAULT_BILLING_CURRENCY } from '../billing-shared';
@@ -44,13 +45,20 @@ export class BillingEntitlementsService {
 
   async recalculate(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
-    const subscription = await this.findSubscription(subscriptionId);
-    const activeAddons = await this.findActiveAddons(subscriptionId);
+    const subscription = await this.findSubscription(subscriptionId, manager);
+    const activeAddons = await this.findActiveAddons(subscriptionId, manager);
     const resolution = this.calculate(subscription, activeAddons);
 
-    await this.upsertEntitlements(subscription, resolution.entitlements);
+    await this.upsertEntitlements(
+      subscription,
+      resolution.entitlements,
+      this.planResolver.contractVersion(subscription).id,
+      manager,
+    );
     await this.audit.record({
+      manager,
       organizationId: subscription.organizationId,
       action: 'billing.entitlements.recalculated',
       resourceType: 'billing_subscription',
@@ -66,10 +74,14 @@ export class BillingEntitlementsService {
 
   async resolveForSubscription(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
-    const subscription = await this.findSubscription(subscriptionId);
-    const activeAddons = await this.findActiveAddons(subscriptionId);
-    const persisted = await this.entitlements.find({
+    const subscription = await this.findSubscription(subscriptionId, manager);
+    const activeAddons = await this.findActiveAddons(subscriptionId, manager);
+    const version = this.planResolver.contractVersion(subscription);
+    const persisted = await (
+      manager?.getRepository(BillingEntitlementEntity) ?? this.entitlements
+    ).find({
       where: {
         subscriptionId,
         status: EntitlementStatus.Active,
@@ -79,13 +91,20 @@ export class BillingEntitlementsService {
     if (
       CORE_ENTITLEMENT_KEYS.some(
         (key) => !persisted.some((entitlement) => entitlement.key === key),
+      ) ||
+      persisted.some(
+        (entitlement) => entitlement.metadata?.planVersionId !== version.id,
       )
     ) {
-      return this.recalculate(subscriptionId);
+      return this.recalculate(subscriptionId, manager);
     }
 
     return {
-      entitlements: this.toEntitlementsSummary(persisted, activeAddons),
+      entitlements: this.toEntitlementsSummary(
+        persisted,
+        activeAddons,
+        this.planResolver.entitlements(version),
+      ),
       billing: this.calculateBilling(subscription, activeAddons),
     };
   }
@@ -132,11 +151,19 @@ export class BillingEntitlementsService {
     const eligibleAddons = activeAddons.filter(
       (addon) => addon.status === SubscriptionAddonStatus.Active,
     );
-    const version = this.planResolver.publishedVersion(subscription.plan);
-    const price = subscription.planPrice ?? this.planResolver.activePrice(version, subscription.planPriceCode ?? undefined);
+    const version = this.planResolver.contractVersion(subscription);
+    const price =
+      subscription.planPrice ??
+      this.planResolver.activePrice(
+        version,
+        subscription.planPriceCode ?? undefined,
+      );
     const planEntitlements = this.planResolver.entitlements(version);
     const numeric: Record<string, number> = {
-      included_users: this.numberFromFeature(planEntitlements['users.included'], 0),
+      included_users: this.numberFromFeature(
+        planEntitlements['users.included'],
+        0,
+      ),
       max_users: this.numberFromFeature(
         planEntitlements['users.max'],
         this.numberFromFeature(planEntitlements['users.included'], 0),
@@ -148,7 +175,9 @@ export class BillingEntitlementsService {
       ),
     };
     const featureFlags: Record<string, boolean> = Object.fromEntries(
-      Object.entries(planEntitlements).filter(([, value]) => typeof value === 'boolean'),
+      Object.entries(planEntitlements).filter(
+        ([, value]) => typeof value === 'boolean',
+      ),
     ) as Record<string, boolean>;
 
     for (const addon of eligibleAddons) {
@@ -180,11 +209,12 @@ export class BillingEntitlementsService {
         includedUsers: numeric.included_users,
         extraUsers: numeric.max_users - numeric.included_users,
         maxAgents: numeric.max_agents,
-        maxConversationsMonthly: this.nullableNumberFromFeature(
-          planEntitlements['conversations.monthly'],
-        ) === null && numeric.max_conversations_monthly === 0
-          ? null
-          : numeric.max_conversations_monthly,
+        maxConversationsMonthly:
+          this.nullableNumberFromFeature(
+            planEntitlements['conversations.monthly'],
+          ) === null && numeric.max_conversations_monthly === 0
+            ? null
+            : numeric.max_conversations_monthly,
         additional,
         featureFlags,
       },
@@ -195,10 +225,11 @@ export class BillingEntitlementsService {
   private calculateBilling(
     subscription: BillingSubscriptionEntity,
     activeAddons: BillingSubscriptionAddonEntity[],
-    price = subscription.planPrice ?? this.planResolver.activePrice(
-      this.planResolver.publishedVersion(subscription.plan),
-      subscription.planPriceCode ?? undefined,
-    ),
+    price = subscription.planPrice ??
+      this.planResolver.activePrice(
+        this.planResolver.contractVersion(subscription),
+        subscription.planPriceCode ?? undefined,
+      ),
   ): BillingAmountsSummary {
     const baseCents = this.toCents(price.amount);
     const addonsCents = activeAddons.reduce(
@@ -217,7 +248,11 @@ export class BillingEntitlementsService {
   private async upsertEntitlements(
     subscription: BillingSubscriptionEntity,
     summary: BillingEntitlementsSummary,
+    planVersionId: string,
+    manager?: EntityManager,
   ): Promise<void> {
+    const entitlements =
+      manager?.getRepository(BillingEntitlementEntity) ?? this.entitlements;
     const values = new Map<string, number | null>([
       ['max_users', summary.maxUsers],
       ['included_users', summary.includedUsers],
@@ -229,12 +264,12 @@ export class BillingEntitlementsService {
 
     await Promise.all(
       Array.from(values.entries()).map(async ([key, rawValue]) => {
-        const existing = await this.entitlements.findOne({
+        const existing = await entitlements.findOne({
           where: { subscriptionId: subscription.id, key },
         });
         const entitlement =
           existing ??
-          this.entitlements.create({
+          entitlements.create({
             organizationId: subscription.organizationId,
             subscriptionId: subscription.id,
             subscription,
@@ -244,8 +279,8 @@ export class BillingEntitlementsService {
 
         entitlement.value = rawValue ?? 0;
         entitlement.status = EntitlementStatus.Active;
-        entitlement.metadata = { nullable: rawValue === null };
-        await this.entitlements.save(entitlement);
+        entitlement.metadata = { nullable: rawValue === null, planVersionId };
+        await entitlements.save(entitlement);
       }),
     );
   }
@@ -253,17 +288,18 @@ export class BillingEntitlementsService {
   private toEntitlementsSummary(
     entitlements: BillingEntitlementEntity[],
     activeAddons: BillingSubscriptionAddonEntity[],
+    planEntitlements: Record<string, unknown>,
   ): BillingEntitlementsSummary {
     const values = new Map(entitlements.map((item) => [item.key, item]));
     const conversations = values.get('max_conversations_monthly');
 
-    const featureFlags = activeAddons.reduce<Record<string, boolean>>(
-      (flags, addon) => ({
-        ...flags,
-        ...(addon.entitlementEffects?.features ?? {}),
-      }),
-      {},
-    );
+    const featureFlags: Record<string, boolean> = {};
+    for (const [code, value] of Object.entries(planEntitlements)) {
+      if (typeof value === 'boolean') featureFlags[code] = value;
+    }
+    for (const addon of activeAddons) {
+      Object.assign(featureFlags, addon.entitlementEffects?.features ?? {});
+    }
     const additional = Object.fromEntries(
       entitlements
         .filter((item) => !CORE_ENTITLEMENT_KEYS.includes(item.key))
@@ -277,7 +313,7 @@ export class BillingEntitlementsService {
       maxAgents: values.get('max_agents')?.value ?? 0,
       maxConversationsMonthly: conversations?.metadata?.nullable
         ? null
-        : conversations?.value ?? null,
+        : (conversations?.value ?? null),
       additional,
       featureFlags,
     };
@@ -285,8 +321,11 @@ export class BillingEntitlementsService {
 
   private async findSubscription(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingSubscriptionEntity> {
-    const subscription = await this.subscriptions.findOne({
+    const subscriptions =
+      manager?.getRepository(BillingSubscriptionEntity) ?? this.subscriptions;
+    const subscription = await subscriptions.findOne({
       where: { id: subscriptionId },
       relations: {
         plan: {
@@ -300,20 +339,27 @@ export class BillingEntitlementsService {
       },
     });
 
-    if (!subscription) throw new NotFoundException('Billing subscription not found');
+    if (!subscription)
+      throw new NotFoundException('Billing subscription not found');
     return subscription;
   }
 
   private findActiveAddons(
     subscriptionId: string,
+    manager?: EntityManager,
   ): Promise<BillingSubscriptionAddonEntity[]> {
-    return this.subscriptionAddons.find({
+    const subscriptionAddons =
+      manager?.getRepository(BillingSubscriptionAddonEntity) ??
+      this.subscriptionAddons;
+    return subscriptionAddons.find({
       where: { subscriptionId, status: SubscriptionAddonStatus.Active },
     });
   }
 
   private numberFromFeature(value: unknown, fallback: number): number {
-    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : fallback;
   }
 
   private nullableNumberFromFeature(value: unknown): number | null {

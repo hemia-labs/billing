@@ -1,16 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, type EntityManager } from 'typeorm';
 import { BillingEntitlementsService } from '../entitlements';
 import { BillingLicenseEntity } from '../billing-shared';
 import { LicenseStatus } from '../billing-shared';
 import { BillingLicenseResolveResponseDto } from './dtos';
 import { BillingLicenseMapper } from './mappers';
 
-const ACCESSIBLE_LICENSE_STATUSES = [
-  LicenseStatus.Active,
-  LicenseStatus.Grace,
-];
+const ACCESSIBLE_LICENSE_STATUSES = [LicenseStatus.Active, LicenseStatus.Grace];
 
 @Injectable()
 export class BillingLicensesService {
@@ -23,48 +20,32 @@ export class BillingLicensesService {
   async resolveLicense(
     organizationId: string,
     productCode: string,
+    manager?: EntityManager,
   ): Promise<BillingLicenseResolveResponseDto> {
-    const prioritizedLicense = await this.licenses.findOne({
+    const licenses =
+      manager?.getRepository(BillingLicenseEntity) ?? this.licenses;
+    const prioritizedLicense = await licenses.findOne({
       where: {
         organizationId,
         productCode,
         status: In(ACCESSIBLE_LICENSE_STATUSES),
       },
-      relations: {
-        product: true,
-        subscription: {
-          plan: {
-            versions: {
-              prices: { providerPrices: true },
-              entitlements: { feature: true },
-            },
-          },
-        },
-      },
+      relations: { subscription: true },
       order: { updatedAt: 'DESC' },
     });
 
     const fallbackLicense =
       prioritizedLicense ??
-      (await this.licenses.findOne({
+      (await licenses.findOne({
         where: { organizationId, productCode },
-        relations: {
-          product: true,
-          subscription: {
-            plan: {
-              versions: {
-                prices: { providerPrices: true },
-                entitlements: { feature: true },
-              },
-            },
-          },
-        },
+        relations: { subscription: true },
         order: { updatedAt: 'DESC' },
       }));
 
     const calculated = fallbackLicense?.subscriptionId
       ? await this.entitlements.resolveForSubscription(
           fallbackLicense.subscriptionId,
+          manager,
         )
       : this.entitlements.emptyResolution();
 

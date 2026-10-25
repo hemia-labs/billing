@@ -15,6 +15,7 @@ export type BillingAmountsSummary = {
   addonsMonthly: string;
   totalMonthly: string;
   currency: BillingCurrency;
+  nextBillingTime?: string | null;
 };
 
 export type BillingEntitlementsResolution = {

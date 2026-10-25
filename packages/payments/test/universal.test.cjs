@@ -138,6 +138,115 @@ test("central attempts preserve known UUID, operation, buyer and exact scopes wi
   await client.attempts.confirm(id, { organizationId: org, userId: user });
   assert.match(calls.at(-1).url, /\/confirm\?/);
 });
+test("cancels the owned attempt with management scope and validates its result", async () => {
+  const id = randomUUID();
+  let result = { cancelled: true, privateProviderSecret: "not-for-consumer" };
+  const calls = transport(() => Response.json(result));
+  const client = createPaymentsClient(config);
+  const buyer = { organizationId: org, userId: user };
+  assert.deepEqual(await client.attempts.cancel(id, buyer), {
+    cancelled: true,
+  });
+  assert.equal(calls[0].init.body.get("scope"), "billing.subscriptions.manage");
+  const request = calls.at(-1);
+  const url = new URL(request.url);
+  assert.equal(
+    url.pathname,
+    `/api/v1/billing/integrations/v1/payment-attempts/${id}/cancel`,
+  );
+  assert.equal(url.searchParams.get("organizationId"), org);
+  assert.equal(url.searchParams.get("userId"), user);
+  assert.equal(url.searchParams.get("productCode"), "atlas");
+  assert.equal(request.init.method, "POST");
+  assert.equal(request.init.body, "{}");
+  result = {
+    cancelled: false,
+    approvalUrl: "https://www.sandbox.paypal.com/approve",
+  };
+  assert.deepEqual(await client.attempts.cancel(id, buyer), result);
+  for (const invalid of [
+    null,
+    {},
+    { cancelled: "true" },
+    { cancelled: false, approvalUrl: "http://localhost/approve" },
+    { cancelled: false, approvalUrl: null },
+    { cancelled: true, approvalUrl: "https://www.paypal.com/approve" },
+  ]) {
+    result = invalid;
+    await assert.rejects(client.attempts.cancel(id, buyer), {
+      code: "contract",
+    });
+  }
+  const before = calls.length;
+  await assert.rejects(client.attempts.cancel("invalid", buyer), {
+    status: 400,
+  });
+  assert.equal(calls.length, before);
+});
+test("attempt and subscription parsers preserve only a boolean cancellation intent", async () => {
+  const id = randomUUID();
+  const change = {
+    kind: "upgrade",
+    amountDueNow: "150.00",
+    currency: "MXN",
+    recurringAmount: "600.00",
+    nextBillingAt: "2030-05-01T00:00:00Z",
+    state: "awaiting_approval",
+    effectiveAt: "2030-04-16T00:00:00Z",
+    action: "approve_subscription",
+    checkoutUrl: "https://www.paypal.com/restore",
+    cancellationRequested: true,
+    privateRestoreState: "must-not-leak",
+  };
+  let flag = true;
+  const calls = transport((url) => {
+    const planChange = { ...change, cancellationRequested: flag };
+    return Response.json(
+      url.includes("/payment-attempts/")
+        ? {
+            attemptId: id,
+            operation: "change_plan",
+            status: "ready",
+            statusFresh: true,
+            subscriptionId: sub,
+            planChange,
+          }
+        : {
+            ...snapshot().subscription,
+            pendingPlanChange: {
+              ...planChange,
+              targetPlanCode: "pro",
+              targetPlanPriceCode: "monthly",
+              checkoutId: randomUUID(),
+              newSubscriptionId: sub,
+            },
+          },
+    );
+  });
+  const client = createPaymentsClient(config);
+  const buyer = { organizationId: org, userId: user };
+  for (const accepted of [true, false]) {
+    flag = accepted;
+    const attempt = await client.attempts.get(id, buyer);
+    assert.equal(attempt.planChange.cancellationRequested, accepted);
+    assert.equal(attempt.planChange.privateRestoreState, undefined);
+    const subscription = await client.subscriptions.current(org);
+    assert.equal(
+      subscription.pendingPlanChange.cancellationRequested,
+      accepted,
+    );
+    assert.equal(subscription.pendingPlanChange.privateRestoreState, undefined);
+  }
+  flag = "true";
+  await assert.rejects(client.attempts.get(id, buyer), { code: "contract" });
+  await assert.rejects(client.subscriptions.current(org), { code: "contract" });
+  const before = calls.length;
+  await assert.rejects(
+    client.attempts.get(id, { ...buyer, userId: "invalid" }),
+    { status: 400 },
+  );
+  assert.equal(calls.length, before);
+});
 test("attempt rejection keeps its durable ID and canonical no-action removes stale redirect", async () => {
   const id = randomUUID();
   transport(() =>

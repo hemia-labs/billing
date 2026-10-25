@@ -8,25 +8,27 @@ import {
 
 @Injectable()
 export class NoopIdentityClient implements IdentityClientPort {
-  async getUserBySub(): Promise<IdentityUser> {
+  getUserBySub(): Promise<IdentityUser> {
     return this.notImplemented();
   }
 
-  async getUserByEmail(): Promise<IdentityUser> {
+  getUserByEmail(): Promise<IdentityUser> {
     return this.notImplemented();
   }
 
-  async getMemberships(): Promise<IdentityMembership[]> {
+  getMemberships(): Promise<IdentityMembership[]> {
     return this.notImplemented();
   }
 
-  async getTeams(): Promise<IdentityTeam[]> {
+  getTeams(): Promise<IdentityTeam[]> {
     return this.notImplemented();
   }
 
-  private notImplemented(): never {
-    throw new NotImplementedException(
-      'IdentityClientPort is pending @hemia/auth SsoClient integration',
+  private notImplemented(): Promise<never> {
+    return Promise.reject(
+      new NotImplementedException(
+        'IdentityClientPort is pending @hemia/auth SsoClient integration',
+      ),
     );
   }
 }

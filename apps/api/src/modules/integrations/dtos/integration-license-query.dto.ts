@@ -1,10 +1,8 @@
-import { Transform } from 'class-transformer';
 import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class ResolveIntegrationLicenseQueryDto {
   @IsOptional()
   @IsUUID('4', { message: 'organization_id must be a valid UUID' })
-  @Transform(({ value }) => value)
   organization_id?: string;
 
   @IsString({ message: 'product_code must be a string' })

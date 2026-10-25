@@ -64,7 +64,11 @@ export class BillingAddonEntity {
   @Column({ type: 'enum', enum: BillingAddonType })
   type: BillingAddonType;
 
-  @Column({ name: 'pricing_model', type: 'enum', enum: BillingAddonPricingModel })
+  @Column({
+    name: 'pricing_model',
+    type: 'enum',
+    enum: BillingAddonPricingModel,
+  })
   pricingModel: BillingAddonPricingModel;
 
   @Column({ name: 'min_quantity', type: 'int', default: 1 })
@@ -87,7 +91,7 @@ export class BillingAddonEntity {
   @Column({
     name: 'entitlement_effects',
     type: 'jsonb',
-    default: () => "'{\"numeric\":{},\"features\":{}}'::jsonb",
+    default: () => '\'{"numeric":{},"features":{}}\'::jsonb',
   })
   entitlementEffects: AddonEntitlementEffects;
 

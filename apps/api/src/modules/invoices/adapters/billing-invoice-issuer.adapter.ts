@@ -10,8 +10,15 @@ export type BillingInvoiceIssuerResult = {
 };
 
 export interface BillingInvoiceIssuerAdapter {
-  issue(invoice: BillingInvoiceEntity): Promise<BillingInvoiceIssuerResult>;
-  cancel(invoice: BillingInvoiceEntity): Promise<{ providerReference?: string } | void>;
+  assertAvailable?(): void;
+  issue(
+    invoice: BillingInvoiceEntity,
+    idempotencyKey: string,
+  ): Promise<BillingInvoiceIssuerResult>;
+  cancel(
+    invoice: BillingInvoiceEntity,
+    idempotencyKey: string,
+  ): Promise<{ providerReference?: string } | void>;
 }
 
 export const BILLING_INVOICE_ISSUER_ADAPTER = Symbol(

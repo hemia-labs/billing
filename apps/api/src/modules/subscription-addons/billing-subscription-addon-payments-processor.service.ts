@@ -30,7 +30,7 @@ export class BillingSubscriptionAddonPaymentsProcessorService {
     const addon = await addons.findOne({
       where: { provider: BillingProvider.Paypal, providerSubscriptionId },
       relations: { subscription: true },
-      lock: { mode: 'pessimistic_write' },
+      lock: { mode: 'pessimistic_write', tables: ['subscription_addons'] },
     });
     if (!addon) return null;
 
@@ -60,7 +60,7 @@ export class BillingSubscriptionAddonPaymentsProcessorService {
         eventType: input.eventType,
       },
     });
-    await this.entitlements.recalculate(saved.subscriptionId);
+    await this.entitlements.recalculate(saved.subscriptionId, manager);
     return { processingStatus: WebhookProcessingStatus.Processed };
   }
 
@@ -88,7 +88,9 @@ export class BillingSubscriptionAddonPaymentsProcessorService {
     return null;
   }
 
-  private providerSubscriptionId(resource: Record<string, unknown>): string | null {
+  private providerSubscriptionId(
+    resource: Record<string, unknown>,
+  ): string | null {
     const value =
       resource.id ?? resource.subscription_id ?? resource.billing_agreement_id;
     return typeof value === 'string' && value.trim() ? value : null;

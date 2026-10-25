@@ -1,0 +1,15 @@
+{
+  "extends": "../../apps/web/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../../apps/web",
+    "paths": {
+      "@/*": [
+        "src/*"
+      ],
+      "*": [
+        "node_modules/*"
+      ]
+    },
+    "incremental": false
+  }
+}

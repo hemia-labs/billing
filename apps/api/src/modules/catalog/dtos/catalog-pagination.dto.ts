@@ -4,8 +4,10 @@ import {
   IsIn,
   IsInt,
   IsOptional,
+  IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { BillingInterval } from '../../billing-shared';
@@ -33,13 +35,27 @@ export class CatalogPaginationQueryDto {
   limit = 20;
 }
 
+export class ListPlanVersionSummariesQueryDto extends CatalogPaginationQueryDto {
+  limit = 10;
+}
+
 export class ListBillingProductsQueryDto extends CatalogPaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+
   @IsOptional()
   @IsEnum(BillingProductStatus)
   status?: BillingProductStatus;
 }
 
 export class ListBillingPlansQueryDto extends CatalogPaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+
   @IsOptional()
   @IsUUID()
   product_id?: string;
@@ -62,6 +78,11 @@ export class ListBillingPlansQueryDto extends CatalogPaginationQueryDto {
 }
 
 export class ListBillingAddonsQueryDto extends CatalogPaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+
   @IsOptional()
   @IsUUID()
   product_id?: string;

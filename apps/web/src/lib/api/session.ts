@@ -1,4 +1,4 @@
-import { apiBaseUrl, apiFetch } from "@/lib/api";
+import { ApiError, authBaseUrl } from "@/lib/api";
 
 export type SessionUser = {
   ssoUserId: string;
@@ -9,11 +9,26 @@ export type SessionUser = {
 export type Session = {
   authenticated: true;
   user: SessionUser;
-  scopes?: string[];
+  organizationId?: string;
+  permissions?: string[];
+  requiresOrganizationSelection?: boolean;
+  organizations?: {
+    organizationId: string;
+    code: string;
+    name: string;
+  }[];
 };
 
 export function getSession(): Promise<Session> {
-  return apiFetch<Session>("/auth/session");
+  return fetch(`${authBaseUrl}/auth/session`, {
+    credentials: "include",
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new ApiError(response.status, response.statusText || "Request failed");
+    }
+
+    return response.json() as Promise<Session>;
+  });
 }
 
 type LogoutResponse = {
@@ -21,19 +36,38 @@ type LogoutResponse = {
 };
 
 export async function logout(): Promise<void> {
-  try {
-    const out = (await fetch(`${apiBaseUrl}/auth/logout`, {
-      credentials: "include",
-      method: "POST",
-    }).then((response) => response.json())) as LogoutResponse;
-
-    if (out.logoutUrl) {
-      await fetch(out.logoutUrl, {
-        credentials: "include",
-        method: "POST",
-      });
-    }
-  } finally {
-    window.location.assign("/");
+  const response = await fetch(`${authBaseUrl}/auth/logout`, {
+    credentials: "include",
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText || "Logout failed");
   }
+
+  const { logoutUrl } = (await response.json()) as LogoutResponse;
+  if (!logoutUrl) throw new Error("Identity logout URL is missing");
+
+  const identityResponse = await fetch(logoutUrl, {
+    credentials: "include",
+    method: "POST",
+  });
+  if (!identityResponse.ok) {
+    throw new ApiError(
+      identityResponse.status,
+      identityResponse.statusText || "Identity logout failed",
+    );
+  }
+
+  window.location.assign("/");
+}
+
+export async function selectOrganization(organizationId: string): Promise<Session> {
+  const response = await fetch(`${authBaseUrl}/auth/organization`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+  if (!response.ok) throw new ApiError(response.status, response.statusText);
+  return response.json() as Promise<Session>;
 }

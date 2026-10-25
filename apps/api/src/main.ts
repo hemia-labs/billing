@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -15,7 +15,9 @@ async function bootstrap() {
     'http://localhost:3015',
   ];
 
-  app.setGlobalPrefix(globalPrefix);
+  app.setGlobalPrefix(globalPrefix, {
+    exclude: [{ path: 'auth/{*path}', method: RequestMethod.ALL }],
+  });
   app.use(helmet());
   app.use(cookieParser());
   app.useGlobalFilters(new SsoExceptionFilter());
@@ -28,6 +30,7 @@ async function bootstrap() {
   );
   app.enableCors({ origin: corsOrigins, credentials: true });
 
+  app.enableShutdownHooks();
   await app.listen(config.get<number>('app.port') ?? 3015);
 }
-bootstrap();
+void bootstrap();

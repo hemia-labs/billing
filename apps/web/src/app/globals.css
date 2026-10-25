@@ -1,61 +1,115 @@
+@import "./zuno-tokens.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* ponytail: light-only design system. No dark mode by design — do not add .dark. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  color-scheme: light;
   --radius: 0.5rem;
 
-  --background: #f7faff;
-  --foreground: #07154a;
+  --hemia-navy: #0f0f72;
+  --hemia-royal: #1c3fc5;
+  --hemia-bright: #266af9;
+  --hemia-sky: #5596ff;
+  --hemia-white: #ffffff;
+  --hemia-gray-100: #f2f4f8;
+  --hemia-gray-400: #9aa3b2;
+  --hemia-ink: #0a0a1a;
 
-  --card: #ffffff;
-  --card-foreground: #07154a;
-  --popover: #ffffff;
-  --popover-foreground: #07154a;
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0.20 0 0);
+  --card: oklch(0.99 0 0);
+  --card-foreground: oklch(0.20 0 0);
+  --popover: oklch(0.99 0 0);
+  --popover-foreground: oklch(0.44 0 0);
+  --primary: var(--hemia-royal);
+  --primary-foreground: var(--hemia-white);
+  --primary-text: var(--hemia-royal);
+  --secondary: oklch(0.99 0 0);
+  --secondary-foreground: oklch(0.20 0 0);
+  --muted: oklch(0.95 0 0);
+  --muted-foreground: oklch(0.50 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.24 0 0);
+  --destructive: oklch(0.55 0.19 32.73);
+  --border: oklch(0.90 0 0);
+  --input: oklch(0.88 0 0);
+  --ring: var(--hemia-royal);
+  --chart-1: var(--hemia-royal);
+  --chart-2: oklch(0.62 0.19 259.81);
+  --chart-3: oklch(0.61 0.22 292.72);
+  --chart-4: oklch(0.77 0.16 70.08);
+  --chart-5: var(--hemia-bright);
+  --sidebar: oklch(0.99 0 0);
+  --sidebar-foreground: oklch(0.55 0 0);
+  --sidebar-primary: var(--hemia-royal);
+  --sidebar-primary-foreground: var(--hemia-white);
+  --sidebar-accent: oklch(0.95 0 0);
+  --sidebar-selected: var(--sidebar-accent);
+  --sidebar-accent-foreground: oklch(0.24 0 0);
+  --sidebar-border: oklch(0.90 0 0);
+  --sidebar-ring: var(--hemia-royal);
+  --heading: var(--foreground);
+  --supporting: var(--muted-foreground);
+  --chart-secondary: var(--chart-2);
+  --surface-soft: var(--card);
+  --surface-line: var(--border);
 
-  --primary: #075cff;
-  --primary-foreground: #ffffff;
-
-  --secondary: #eaf1ff;
-  --secondary-foreground: #07154a;
-
-  --muted: #eef4ff;
-  --muted-foreground: #64719a;
-
-  --accent: #eaf1ff;
-  --accent-foreground: #07154a;
-
-  --destructive: #ef4444;
-  --border: #d9e2f4;
-  --input: #c9d6ee;
-  --ring: #075cff;
-
-  --sidebar: #02046f;
-  --sidebar-foreground: #ffffff;
-  --sidebar-primary: #075cff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #15187e;
-  --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: #25288c;
-  --sidebar-ring: #075cff;
-
-  --supporting: #536180;
-  --chart-secondary: #9fc2ff;
-  --surface-soft: #edf2fb;
-  --surface-line: #e3e9f4;
-
-  --layout-sidebar-width: 18.25rem;
-  --layout-sidebar-collapsed-width: 5.5rem;
-  --layout-topbar-height: 5.25rem;
+  --layout-sidebar-width: 16rem;
+  --layout-sidebar-collapsed-width: 3.5rem;
+  --layout-topbar-height: 4rem;
   --panel-min-height: 20rem;
 }
 
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.18 0 0);
+  --foreground: oklch(0.93 0.01 255.51);
+  --card: oklch(0.20 0 0);
+  --card-foreground: oklch(0.93 0.01 255.51);
+  --popover: oklch(0.26 0 0);
+  --popover-foreground: oklch(0.73 0 0);
+  --primary: var(--hemia-bright);
+  --primary-foreground: var(--hemia-white);
+  --primary-text: var(--hemia-sky);
+  --secondary: oklch(0.26 0 0);
+  --secondary-foreground: oklch(0.99 0 0);
+  --muted: oklch(0.24 0 0);
+  --muted-foreground: oklch(0.71 0 0);
+  --accent: oklch(0.31 0 0);
+  --accent-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.31 0.09 29.79);
+  --border: oklch(0.28 0 0);
+  --input: oklch(0.26 0 0);
+  --ring: var(--hemia-sky);
+  --chart-1: var(--hemia-bright);
+  --chart-2: oklch(0.71 0.14 254.62);
+  --chart-3: oklch(0.71 0.16 293.54);
+  --chart-4: oklch(0.84 0.16 84.43);
+  --chart-5: var(--hemia-sky);
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-foreground: oklch(0.63 0 0);
+  --sidebar-primary: var(--hemia-bright);
+  --sidebar-primary-foreground: var(--hemia-white);
+  --sidebar-accent: oklch(0.31 0 0);
+  --sidebar-selected: var(--sidebar-accent);
+  --sidebar-accent-foreground: oklch(0.99 0 0);
+  --sidebar-border: oklch(0.28 0 0);
+  --sidebar-ring: var(--hemia-sky);
+  --heading: var(--foreground);
+  --supporting: var(--muted-foreground);
+  --chart-secondary: var(--chart-2);
+  --surface-soft: var(--card);
+  --surface-line: var(--border);
+}
+
 @theme inline {
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-geist-sans);
+  --font-heading: var(--font-inter);
+  --font-display: var(--font-inter);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -85,6 +139,7 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-selected: var(--sidebar-selected);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -92,6 +147,15 @@
   --color-chart-secondary: var(--chart-secondary);
   --color-surface-soft: var(--surface-soft);
   --color-surface-line: var(--surface-line);
+  --color-heading: var(--heading);
+  --color-hemia-navy: var(--hemia-navy);
+  --color-hemia-royal: var(--hemia-royal);
+  --color-hemia-bright: var(--hemia-bright);
+  --color-hemia-sky: var(--hemia-sky);
+  --color-hemia-white: var(--hemia-white);
+  --color-hemia-gray-100: var(--hemia-gray-100);
+  --color-hemia-gray-400: var(--hemia-gray-400);
+  --color-hemia-ink: var(--hemia-ink);
 
   --text-2xs: 0.625rem;
   --text-2xs--line-height: 0.75rem;
@@ -111,4 +175,18 @@
   html {
     @apply font-sans;
   }
+  h1, h2, h3, h4 {
+    @apply text-heading;
+  }
 }
+
+@layer utilities {
+  .text-primary {
+    color: var(--primary-text);
+  }
+  .dark .text-destructive {
+    color: oklch(0.75 0.13 32.73);
+  }
+}
+
+@source "./../components";

@@ -1,25 +1,27 @@
 {
-  "$schema": "https://ui.shadcn.com/schema.json",
   "style": "base-nova",
   "rsc": true,
   "tsx": true,
+  "$schema": "https://ui.shadcn.com/schema.json",
   "tailwind": {
     "config": "",
-    "css": "src/app/globals.css",
     "baseColor": "neutral",
     "cssVariables": true,
+    "css": "src/app/globals.css",
     "prefix": ""
   },
   "iconLibrary": "lucide",
   "rtl": false,
   "aliases": {
     "components": "@/components",
+    "ui": "@/components/zuno",
     "utils": "@/lib/utils",
-    "ui": "@/components/ui",
     "lib": "@/lib",
     "hooks": "@/hooks"
   },
   "menuColor": "default",
   "menuAccent": "subtle",
-  "registries": {}
+  "registries": {
+    "@zuno": "https://zunoui.dev/r/{name}.json"
+  }
 }
