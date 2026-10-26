@@ -95,7 +95,7 @@
     },
     "packages/payments": {
       "name": "@hemia/payments",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "devDependencies": {
         "@hemia/auth": "1.1.0",
         "@types/node": "^24.0.0",

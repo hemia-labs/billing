@@ -1,5 +1,11 @@
 # @hemia/payments
 
+## 0.9.0
+
+### Minor Changes
+
+- 01cc47b: Add an explicit read-only verifyCompatibility preflight requiring Billing >=1.0.1 and <2.0.0. Verify the deployed server contract before Nest reports integration readiness, and document server-first consumer upgrades independently of npm publication.
+
 ## 0.8.0
 
 ### Minor Changes
