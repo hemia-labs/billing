@@ -1,5 +1,11 @@
 # api
 
+## 1.0.1
+
+### Patch Changes
+
+- 01cc47b: Expose an authenticated, read-only Billing integration compatibility contract and deployed application version for consumer deployment preflight checks.
+
 ## 1.0.0
 
 ### Major Changes
