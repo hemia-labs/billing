@@ -2,6 +2,7 @@
 export class PaymentsError extends Error {
   constructor(
     public readonly code:
+      | "compatibility"
       | "configuration"
       | "transport"
       | "authentication"

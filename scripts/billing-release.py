@@ -50,7 +50,7 @@ def validate(directory, expected_tag=None, registry_host=None):
     return manifest
 
 
-def create(tag, output):
+def create(tag, output, images=None):
     if not TAG.fullmatch(tag):
         raise ValueError('Expected billing-vMAJOR.MINOR.PATCH')
     root = Path(__file__).resolve().parents[1]
@@ -62,12 +62,15 @@ def create(tag, output):
     registry_host = os.environ.get('REGISTRY_HOST') or DEFAULT_REGISTRY
     if not re.fullmatch(r'[a-z0-9]+(?:[.-][a-z0-9]+)*', registry_host):
         raise ValueError('Invalid registry hostname')
-    images = {}
+    images = dict(images or {})
     for service in ['backend', 'frontend']:
         image = f'{registry_host}/billing/{service}:{tag}'
         info = json.loads(subprocess.check_output(['docker', 'image', 'inspect', image], text=True))[0]
         prefix = f'{registry_host}/billing/{service}@'
-        images[service] = next(value for value in info['RepoDigests'] if value.startswith(prefix))
+        if service not in images:
+            images[service] = next(value for value in info['RepoDigests'] if value.startswith(prefix))
+        if images[service] not in info['RepoDigests']:
+            raise ValueError('Selected image digest differs from local image')
         config['services'][service].pop('build', None)
         config['services'][service]['image'] = images[service]
     config['services']['backend']['env_file'] = [{'path': '${BILLING_API_ENV_FILE:?Set the server environment file}', 'format': 'raw'}]

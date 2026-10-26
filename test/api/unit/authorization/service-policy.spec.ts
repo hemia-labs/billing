@@ -503,7 +503,8 @@ describe('service route authorization', () => {
       }
     }
     expect(checked).toContain('BillingSubscriptionsManagementController.quote');
-    expect(checked.length).toBe(36);
+    expect(checked).toContain('BillingIntegrationsController.compatibility');
+    expect(checked.length).toBe(37);
   });
 });
 

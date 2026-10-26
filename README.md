@@ -122,9 +122,23 @@ permite CI automatico en el PR de version de Billing; sin ella, ejecutar
 **Billing CI** manualmente en esa rama antes de fusionarla.
 
 El disparador manual de **Billing release** solo permite reintentar la version
-ya comprometida en `main`; no admite versiones arbitrarias. Se rechaza
-sobrescribir imagenes o releases existentes. Una publicacion interrumpida
-requiere revisar sus imagenes y assets antes de recuperarla.
+ya comprometida en `main`; no admite versiones arbitrarias. Una publicacion
+interrumpida se recupera reejecutando su workflow original o solicitando esa
+version desde el disparador manual. Las imagenes existentes se reutilizan por
+digest solo si su etiqueta OCI identifica el mismo commit. Los assets ya subidos
+al borrador deben coincidir byte a byte; se suben unicamente los faltantes.
+Nunca se sobrescriben imagenes, assets ni releases publicados. Una release
+inmutable ya completa se reconoce sin volver a publicarla.
+
+Ambos flujos comprueban que su commit siga siendo el `main` actual antes de
+actualizar el PR de version. Si `main` avanza durante la actualizacion y esta
+falla, la ejecucion posterior se encarga; los demas fallos siguen siendo errores.
+
+Antes de actualizar un consumidor, verificar el Billing desplegado con
+`createPaymentsClient(config).verifyCompatibility()` del SDK candidato.
+La publicacion npm no confirma que el backend este desplegado. El SDK declara
+su version minima de Billing y rechaza servidores antiguos o de otro major;
+ver los pasos y el comando de comprobacion en [Payments](packages/payments/README.md).
 
 La Release contiene `release.json`, `compose.json` y `billing-deploy.py`:
 commit, imágenes por SHA-256, hashes de assets y manifiesto de migraciones.

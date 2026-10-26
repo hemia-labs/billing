@@ -7,6 +7,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { SsoExceptionFilter } from '@hemia/auth/nestjs';
+import { version as billingVersion } from '../../../../apps/api/package.json';
 import { CheckoutInProgressException } from '../../../../apps/api/src/modules/checkout/errors/checkout-in-progress.exception';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import type { Server } from 'node:http';
@@ -201,6 +202,36 @@ describe('service isolation through the actual HTTP guards', () => {
   afterEach(async () => {
     await app.close();
     fetcher.mockRestore();
+  });
+
+  it('reports the deployed compatibility contract only to an authorized registered client', async () => {
+    const endpoint = '/api/v1/billing/integrations/v1/compatibility';
+    const response = await http()
+      .get(endpoint)
+      .set(
+        'Authorization',
+        bearer(clientId, 'billing.integration.catalog.read'),
+      )
+      .expect('Cache-Control', 'no-store')
+      .expect(200);
+    expect(response.body).toEqual({
+      contract: 'billing.integrations.v1',
+      billingVersion,
+    });
+    await http().get(endpoint).expect(401);
+    await http()
+      .get(endpoint)
+      .set('Authorization', bearer('unregistered-service'))
+      .expect(403);
+    await http()
+      .get(endpoint)
+      .set(
+        'Authorization',
+        bearer(clientId, 'billing.integration.checkout.read'),
+      )
+      .expect(403);
+    expect(catalog.listActiveProducts).not.toHaveBeenCalled();
+    expect(checkout.createCheckoutSession).not.toHaveBeenCalled();
   });
 
   it('accepts the universal SDK checkout body without a provider field', async () => {

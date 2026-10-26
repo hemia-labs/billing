@@ -14,6 +14,8 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN cd apps/web && bun run build
 
 FROM node:22-bookworm-slim AS runtime
+ARG BILLING_REVISION=local
+LABEL org.opencontainers.image.revision=$BILLING_REVISION
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=5175 HOSTNAME=0.0.0.0
 WORKDIR /app
 COPY --from=builder --chown=node:node /app/apps/web/.next/standalone ./

@@ -12,6 +12,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        BILLING_REVISION: ${GITHUB_SHA:-local}
       target: runtime
     restart: unless-stopped
     init: true
@@ -50,6 +52,7 @@ services:
       dockerfile: apps/web/Dockerfile
       target: runtime
       args:
+        BILLING_REVISION: ${GITHUB_SHA:-local}
         NEXT_PUBLIC_API_URL: ${BILLING_PUBLIC_API_URL:-https://billing.hemia.cloud/api/v1}
     restart: unless-stopped
     init: true

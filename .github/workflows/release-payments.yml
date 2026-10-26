@@ -56,8 +56,14 @@ jobs:
         run: |
           bun run changeset status --output "$RUNNER_TEMP/changeset-status.json"
           node -e "const s=require(process.env.RUNNER_TEMP+'/changeset-status.json'); require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'pending='+(s.releases.some(r=>r.name==='@hemia/payments'))+'\n')"
-      - name: Create or update the version PR
+      - name: Check that this version PR update is still current
+        id: current-version
         if: steps.changesets.outputs.pending == 'true'
+        run: node scripts/release-current.mjs check
+      - name: Create or update the version PR
+        id: version-update
+        continue-on-error: true
+        if: steps.changesets.outputs.pending == 'true' && steps.current-version.outputs.current == 'true'
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1 for Changesets CLI 2
         with:
           github-token: ${{ github.token }}
@@ -66,6 +72,9 @@ jobs:
           commit: 'chore(payments): release package versions'
           commitMode: github-api
           createGithubReleases: false
+      - name: Preserve failures unless main advanced during the update
+        if: steps.version-update.outcome == 'failure'
+        run: node scripts/release-current.mjs recover
 
   validate:
     needs: classify

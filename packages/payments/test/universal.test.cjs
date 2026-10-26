@@ -497,3 +497,86 @@ test("Legal works directly in Node and binds verified context to prepared reques
     legalAcceptanceId,
   );
 });
+
+test("compatibility preflight checks the deployed contract using a read-only catalog-scoped request", async () => {
+  const { MINIMUM_BILLING_VERSION, BILLING_API_CONTRACT } = require("../dist");
+  const calls = transport((url, init) => {
+    assert.equal(
+      url,
+      "https://billing.test/api/v1/billing/integrations/v1/compatibility",
+    );
+    assert.equal(init.method, "GET");
+    assert.equal(init.body, undefined);
+    return Response.json({
+      contract: BILLING_API_CONTRACT,
+      billingVersion: MINIMUM_BILLING_VERSION,
+    });
+  });
+  assert.deepEqual(await createPaymentsClient(config).verifyCompatibility(), {
+    contract: BILLING_API_CONTRACT,
+    billingVersion: MINIMUM_BILLING_VERSION,
+  });
+  assert.equal(
+    calls[0].init.body.get("scope"),
+    "billing.integration.catalog.read",
+  );
+  assert.equal(calls.length, 2);
+});
+
+test("compatibility accepts later stable Billing 1.x but rejects old, future-major, malformed and missing contracts", async () => {
+  for (const version of ["1.0.1", "1.0.2", "1.10.0"]) {
+    transport(() =>
+      Response.json({
+        contract: "billing.integrations.v1",
+        billingVersion: version,
+      }),
+    );
+    assert.equal(
+      (await createPaymentsClient(config).verifyCompatibility()).billingVersion,
+      version,
+    );
+  }
+  for (const value of [
+    null,
+    {},
+    { contract: "other", billingVersion: "1.0.1" },
+    ...[
+      "0.9.0",
+      "1.0.0",
+      "2.0.0",
+      "1.0.1-beta.1",
+      "01.0.1",
+      "1.0.1\n",
+      "1.0.999999999999999999999999",
+    ].map((billingVersion) => ({
+      contract: "billing.integrations.v1",
+      billingVersion,
+    })),
+  ]) {
+    transport(() => Response.json(value));
+    await assert.rejects(createPaymentsClient(config).verifyCompatibility(), {
+      code: "compatibility",
+      status: 503,
+    });
+  }
+});
+
+test("compatibility preflight stops on absent endpoint, forbidden access and transport failure without retry", async () => {
+  for (const status of [401, 403, 404, 503]) {
+    const calls = transport(() =>
+      Response.json({ error: "fixture" }, { status }),
+    );
+    await assert.rejects(createPaymentsClient(config).verifyCompatibility(), {
+      code: "http",
+      status,
+    });
+    assert.equal(calls.length, 2);
+  }
+  const calls = transport(() => {
+    throw new Error("unavailable");
+  });
+  await assert.rejects(createPaymentsClient(config).verifyCompatibility(), {
+    code: "transport",
+  });
+  assert.equal(calls.length, 2);
+});

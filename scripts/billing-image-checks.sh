@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+for service in backend frontend; do
+  revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "hemia-billing-$service:local")
+  test "$revision" = "${GITHUB_SHA:-local}"
+done
 docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --entrypoint node hemia-billing-backend:local -e '
     const fs=require("node:fs");

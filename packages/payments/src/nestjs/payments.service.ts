@@ -263,10 +263,14 @@ export class PaymentsService {
     });
   }
   async integrationStatus() {
-    await this.client.catalog.listPlans();
+    const compatibility = await this.call(() =>
+      this.client.verifyCompatibility(),
+    );
+    await this.call(() => this.client.catalog.listPlans());
     const c = this.options.connection;
     return {
       ready: true,
+      compatibility,
       clientId: c.clientId,
       productCode: c.productCode,
       connection: {
