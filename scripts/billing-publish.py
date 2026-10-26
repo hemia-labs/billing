@@ -28,6 +28,24 @@ def api(path):
     return json.loads(value) if value is not None else None
 
 
+def find_release(path, tag):
+    existing = api(f'{path}/releases/tags/{tag}')
+    if existing is not None:
+        return existing
+    # A draft may not be visible through the published-release tag endpoint.
+    page = 1
+    while True:
+        releases = api(f'{path}/releases?per_page=100&page={page}')
+        if not isinstance(releases, list):
+            raise ValueError('Expected an authenticated release listing')
+        matches = [item for item in releases if item['tag_name'] == tag]
+        if matches:
+            return matches[0]
+        if len(releases) < 100:
+            return None
+        page += 1
+
+
 def publish(tag, directory):
     if not release.TAG.fullmatch(tag):
         raise ValueError('Expected billing-vMAJOR.MINOR.PATCH')
@@ -39,7 +57,7 @@ def publish(tag, directory):
         raise ValueError('Invalid registry hostname')
     repository = os.environ['GITHUB_REPOSITORY']
     path = f'repos/{repository}'
-    existing = api(f'{path}/releases/tags/{tag}')
+    existing = find_release(path, tag)
     ref = api(f'{path}/git/ref/tags/{tag}')
     if ref and (ref['object']['type'] != 'commit' or ref['object']['sha'] != commit):
         raise ValueError('Existing release tag points to another commit')
@@ -93,12 +111,15 @@ def publish(tag, directory):
     if manifest['commit'] != commit:
         raise ValueError('Release assets belong to another commit')
     if existing is None:
-        notes = Path(directory) / 'notes.md'
-        notes.write_text(run(['node', 'scripts/billing-version.mjs', 'notes']))
-        run(['gh', 'release', 'create', tag, '--target', commit, '--draft', '--title',
-             f'Billing {tag.removeprefix("billing-v")}', '--notes-file', str(notes)])
-        notes.unlink()
-        existing = api(f'{path}/releases/tags/{tag}')
+        notes = run(['node', 'scripts/billing-version.mjs', 'notes'])
+        existing = json.loads(run([
+            'gh', 'api', '--method', 'POST', f'{path}/releases',
+            '-f', f'tag_name={tag}', '-f', f'target_commitish={commit}',
+            '-f', f'name=Billing {tag.removeprefix("billing-v")}',
+            '-f', f'body={notes}', '-F', 'draft=true',
+        ]))
+        if existing['tag_name'] != tag or not existing['draft'] or existing['target_commitish'] != commit:
+            raise ValueError('Created draft differs from the requested release')
     assets = {asset['name']: asset for asset in existing['assets']}
     for name in ['release.json', 'compose.json', 'billing-deploy.py']:
         if name in assets:
@@ -109,7 +130,7 @@ def publish(tag, directory):
         else:
             run(['gh', 'release', 'upload', tag, str(Path(directory) / name)])
     run(['gh', 'release', 'edit', tag, '--draft=false'])
-    published = api(f'{path}/releases/tags/{tag}')
+    published = api(f'{path}/releases/{existing["id"]}')
     if published['draft'] or not published.get('immutable'):
         raise ValueError('Enable release immutability before publishing Billing releases')
     print(f'Release ready: {tag}')

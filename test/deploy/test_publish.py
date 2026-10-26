@@ -31,13 +31,28 @@ class PublishTest(unittest.TestCase):
         self.fail_finalize = False
         self.unauthorized = False
         self.multi_platform = False
+        self.hide_draft_tag = False
 
     def command(self, args, missing=()):
         if args == ['git', 'rev-parse', 'HEAD']:
             return SHA
         if args[:2] == ['gh', 'api']:
+            if '--method' in args:
+                self.assertEqual(args[3], 'POST')
+                self.assertIn(f'tag_name={TAG}', args)
+                self.assertIn(f'target_commitish={SHA}', args)
+                self.assertIn('draft=true', args)
+                self.existing = dict(id=123, tag_name=TAG, name='Billing 1.0.1', draft=True,
+                                     prerelease=False, target_commitish=SHA)
+                self.mutations.append(('create', TAG))
+                return json.dumps({**self.existing, 'assets': []})
             if '/git/ref/' in args[2]:
                 return json.dumps(self.ref) if self.ref else None
+            if '/releases?' in args[2]:
+                return json.dumps([{**self.existing, 'assets': [{'name': name} for name in self.assets]}]
+                                  if self.existing else [])
+            if self.hide_draft_tag and '/releases/tags/' in args[2] and self.existing and self.existing['draft']:
+                return None
             if self.existing is None:
                 return None
             return json.dumps({**self.existing, 'assets': [{'name': name} for name in self.assets]})
@@ -74,10 +89,6 @@ class PublishTest(unittest.TestCase):
                                 'RepoDigests': [f'{REGISTRY}/billing/{service}@sha256:' + service[0] * 64]}])
         if args[:2] == ['node', 'scripts/billing-version.mjs']:
             return 'Reviewed notes'
-        if args[:3] == ['gh', 'release', 'create']:
-            self.existing = dict(tag_name=TAG, name='Billing 1.0.1', draft=True, prerelease=False, target_commitish=SHA)
-            self.mutations.append(('create', TAG))
-            return ''
         if args[:3] == ['gh', 'release', 'upload']:
             path = Path(args[4])
             if path.name == self.fail_upload:
@@ -110,6 +121,29 @@ class PublishTest(unittest.TestCase):
              patch.object(publish.release, 'validate', return_value={'commit': SHA}), \
              patch.dict(os.environ, GITHUB_SHA=SHA, GITHUB_REPOSITORY='hemia-labs/billing', REGISTRY_HOST=REGISTRY):
             publish.publish(TAG, self.directory)
+
+    def test_draft_lookup_paginates_instead_of_creating_a_duplicate(self):
+        draft = {'id': 123, 'tag_name': TAG, 'draft': True}
+        pages = [None, [{'tag_name': f'other-{n}'} for n in range(100)], [draft]]
+        with patch.object(publish, 'api', side_effect=pages) as api:
+            self.assertEqual(publish.find_release('repos/hemia-labs/billing', TAG), draft)
+        self.assertTrue(api.call_args_list[-1].args[0].endswith('page=2'))
+
+    def test_release_listing_failure_does_not_mean_missing_release(self):
+        with patch.object(publish, 'api', side_effect=[None, RuntimeError('forbidden')]):
+            with self.assertRaisesRegex(RuntimeError, 'forbidden'):
+                publish.find_release('repos/hemia-labs/billing', TAG)
+
+    def test_draft_not_visible_by_tag_can_be_created_and_resumed(self):
+        self.hide_draft_tag = True
+        self.fail_upload = 'compose.json'
+        with self.assertRaisesRegex(RuntimeError, 'disconnected'):
+            self.publish()
+        self.fail_upload = None
+        self.publish()
+        self.assertEqual(self.mutations.count(('create', TAG)), 1)
+        self.assertEqual(self.mutations.count(('upload', 'release.json')), 1)
+        self.assertTrue(self.existing['immutable'])
 
     def test_resumes_after_backend_push_without_overwriting_it(self):
         self.fail_push = 'frontend'
