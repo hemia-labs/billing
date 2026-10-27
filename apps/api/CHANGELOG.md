@@ -1,5 +1,11 @@
 # api
 
+## 1.0.3
+
+### Patch Changes
+
+- 0f0ef4a: Recover missing PayPal refund webhook deliveries for known Billing payments using signed redelivery from the provider history.
+
 ## 1.0.2
 
 ### Patch Changes
