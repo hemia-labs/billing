@@ -1,5 +1,11 @@
 # api
 
+## 1.1.0
+
+### Minor Changes
+
+- 78364d0: Add an opt-in authenticated authorization mode for Console while preserving signed sessions and organization isolation. Scope service-client policy management to the selected organization and isolate cached contexts by authorization mode.
+
 ## 1.0.4
 
 ### Patch Changes
