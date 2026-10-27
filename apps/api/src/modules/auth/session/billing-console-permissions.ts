@@ -1,3 +1,4 @@
+import type { AuthorizationMode } from '../../../config/authorization.config';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import catalog from '../billing-authorization-v1.json';
 
@@ -12,6 +13,8 @@ export type BillingAssignment = {
 export type BillingAuthorization = {
   assignments: BillingAssignment[];
   expiresAt: number;
+  mode?: AuthorizationMode;
+  organizationId?: string;
 };
 const uuid = (v: unknown): v is string =>
   typeof v === 'string' &&
@@ -39,6 +42,7 @@ export function validateBillingContext(
     organizationId: string;
     membershipId: string;
   },
+  mode: AuthorizationMode = 'roles',
 ): BillingAuthorization {
   if (claims.contract_version !== 1 || claims.catalog_version !== 1)
     throw new ConflictException('BILLING_AUTHORIZATION_CONTRACT_MISMATCH');
@@ -83,7 +87,7 @@ export function validateBillingContext(
     claims.exp <= claims.iat ||
     claims.exp > claims.iat + 300 ||
     !Array.isArray(claims.assignments) ||
-    !claims.assignments.length ||
+    (mode !== 'authenticated' && !claims.assignments.length) ||
     claims.assignments.length > 64
   )
     deny();
@@ -135,7 +139,13 @@ export function validateBillingContext(
     assignments.push(value as unknown as BillingAssignment);
   }
   if (targetCount > 1000) deny();
-  return { assignments, expiresAt: claims.exp };
+  return {
+    assignments,
+    expiresAt: claims.exp,
+    ...(mode === 'authenticated'
+      ? { mode, organizationId: expected.organizationId }
+      : {}),
+  };
 }
 
 export function permissionScope(
@@ -145,6 +155,12 @@ export function permissionScope(
   if (auth.expiresAt <= Math.floor(Date.now() / 1000)) deny();
   const definition = catalog.permissions.find((p) => p.code === permission);
   if (!definition) deny();
+  if (auth.mode === 'authenticated') {
+    if (!uuid(auth.organizationId)) deny();
+    return definition.resource_domain === 'catalog'
+      ? null
+      : [auth.organizationId];
+  }
   const matching = auth.assignments.filter((a) => {
     const role = catalog.roles.find((r) => r.code === a.role_code);
     return (

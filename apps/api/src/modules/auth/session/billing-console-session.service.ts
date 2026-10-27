@@ -1,3 +1,4 @@
+import type { AuthorizationMode } from '../../../config/authorization.config';
 import {
   ConflictException,
   ForbiddenException,
@@ -65,6 +66,8 @@ export class BillingConsoleSessionService {
     options: { allowOrganizationSelection?: boolean } = {},
   ): Promise<BillingConsoleSession | BillingOrganizationSelectionSession> {
     const user = this.sessionUser(request);
+    const mode =
+      this.config.get<AuthorizationMode>('authorization.mode') ?? 'roles';
     const organization = this.resolveOrganization(request, options);
 
     if ('requiresOrganizationSelection' in organization) {
@@ -80,7 +83,7 @@ export class BillingConsoleSessionService {
           subject: user.ssoUserId,
           organizationId: organization.organization_id,
           membershipId: organization.membership_id,
-          product: 'billing',
+          product: `billing:${mode}`,
           audience: 'billing-api',
         },
         !['GET', 'HEAD'].includes(request.method),
@@ -96,14 +99,18 @@ export class BillingConsoleSessionService {
               audience: 'billing-api',
             },
           );
-          validateBillingContext(fresh, {
-            subject: user.ssoUserId,
-            issuer: this.config.getOrThrow<string>('sso.issuer'),
-            identityReferenceId:
-              request.accessContext!.identity.identity_reference_id,
-            organizationId: organization.organization_id,
-            membershipId: organization.membership_id,
-          });
+          validateBillingContext(
+            fresh,
+            {
+              subject: user.ssoUserId,
+              issuer: this.config.getOrThrow<string>('sso.issuer'),
+              identityReferenceId:
+                request.accessContext!.identity.identity_reference_id,
+              organizationId: organization.organization_id,
+              membershipId: organization.membership_id,
+            },
+            mode,
+          );
           return fresh;
         },
       );
@@ -119,14 +126,18 @@ export class BillingConsoleSessionService {
         throw new HttpException(error.message, error.status);
       throw new ServiceUnavailableException('Access authorization unavailable');
     }
-    const authorization = validateBillingContext(claims, {
-      subject: user.ssoUserId,
-      issuer: this.config.getOrThrow<string>('sso.issuer'),
-      identityReferenceId:
-        request.accessContext!.identity.identity_reference_id,
-      organizationId: organization.organization_id,
-      membershipId: organization.membership_id,
-    });
+    const authorization = validateBillingContext(
+      claims,
+      {
+        subject: user.ssoUserId,
+        issuer: this.config.getOrThrow<string>('sso.issuer'),
+        identityReferenceId:
+          request.accessContext!.identity.identity_reference_id,
+        organizationId: organization.organization_id,
+        membershipId: organization.membership_id,
+      },
+      mode,
+    );
     request.billingAuthorization = authorization;
     const permissions = permissionsForAuthorization(authorization);
 
