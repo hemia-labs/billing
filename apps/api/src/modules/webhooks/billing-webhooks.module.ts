@@ -21,6 +21,7 @@ import { WebhookPayloadDownloadService } from './webhook-payload-download.servic
 import { BillingWebhooksService } from './billing-webhooks.service';
 import { BillingPaypalRefundsService } from './paypal/billing-paypal-refunds.service';
 import { PaypalCancellationWorker } from './paypal/paypal-cancellation-worker';
+import { PaypalRefundRecoveryService } from './paypal/paypal-refund-recovery.service';
 import { PaypalWebhookWorker } from './paypal/paypal-webhook-worker';
 
 @Module({
@@ -48,6 +49,7 @@ import { PaypalWebhookWorker } from './paypal/paypal-webhook-worker';
     BillingPaypalRefundsService,
     PaypalCancellationWorker,
     PaypalWebhookWorker,
+    PaypalRefundRecoveryService,
   ],
 })
 export class BillingWebhooksModule {}
