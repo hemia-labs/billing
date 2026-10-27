@@ -48,8 +48,18 @@ export class PaypalRefundRecoveryService
     )
       return Promise.resolve();
     this.running = this.scan()
-      .catch(() => {
-        this.logger.error({ event: 'billing_paypal_refund_recovery_failed' });
+      .catch((error: unknown) => {
+        const reason =
+          error instanceof Error &&
+          /^(PayPal recovery HTTP \d{3}|Invalid PayPal (event list|next page|pagination URL|recovery response))$/.test(
+            error.message,
+          )
+            ? error.message
+            : 'PayPal recovery request failed';
+        this.logger.error({
+          event: 'billing_paypal_refund_recovery_failed',
+          reason,
+        });
       })
       .finally(() => {
         this.running = undefined;
@@ -64,9 +74,12 @@ export class PaypalRefundRecoveryService
       truncated = false;
     for (const [id, until] of this.retryAfter)
       if (until <= now) this.retryAfter.delete(id);
-    const end = new Date(now).toISOString();
+    // PayPal notification history rejects fractional seconds in its date filters.
+    const end = new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z');
     // shortcut: PayPal's 30-day history window; older gaps need an explicit operator reconciliation.
-    const start = new Date(now - 30 * 24 * HOUR_MS).toISOString();
+    const start = new Date(now - 30 * 24 * HOUR_MS)
+      .toISOString()
+      .replace(/\.\d{3}Z$/, 'Z');
     for (const type of REFUND_TYPES) {
       let next: string | undefined;
       for (let page = 0; page < MAX_PAGES && !this.stopping; page++) {
