@@ -56,7 +56,7 @@ const requestFixture = (
     },
   }) as AuthenticatedRequest;
 
-function serviceFixture() {
+function serviceFixture(mode: 'roles' | 'authenticated' = 'roles') {
   const accessClient = {
     exchangeUserToken: jest.fn().mockResolvedValue('access-token'),
     resolveSystemContext: jest.fn().mockResolvedValue({
@@ -88,7 +88,9 @@ function serviceFixture() {
     }),
   };
   const config = {
-    get: jest.fn().mockReturnValue('billing'),
+    get: jest.fn((key: string) =>
+      key === 'authorization.mode' ? mode : 'billing',
+    ),
     getOrThrow: jest.fn().mockReturnValue('issuer'),
   };
   const entries = new Map<string, unknown>([['sso:session:session-id', {}]]);
@@ -109,6 +111,7 @@ function serviceFixture() {
     ) => callback(),
   };
   return {
+    config,
     accessClient,
     service: new BillingConsoleSessionService(
       accessClient as never,
@@ -153,6 +156,71 @@ describe('Billing SSO integration', () => {
     await service.resolve(request);
     expect(accessClient.resolveSystemContext).toHaveBeenCalledTimes(2);
   });
+
+  it('uses the current mode for empty signed assignments and does not retain unrestricted authority after rollback', async () => {
+    const { service, accessClient, config } = serviceFixture('authenticated');
+    const claims = (await accessClient.resolveSystemContext()) as Record<
+      string,
+      unknown
+    >;
+    accessClient.resolveSystemContext.mockClear();
+    accessClient.resolveSystemContext.mockResolvedValue({
+      ...claims,
+      assignments: [],
+    });
+    const request = requestFixture(
+      accessOrganization({ roles: [], permissions: [] }),
+    );
+    const session = await service.resolve(request);
+    expect(session.permissions).toEqual(
+      expect.arrayContaining([
+        'billing.catalog.manage',
+        'billing.invoices.issue',
+      ]),
+    );
+    expect(request.billingAuthorization).toMatchObject({
+      mode: 'authenticated',
+      organizationId: accessOrganization().organization_id,
+      assignments: [],
+    });
+    config.get.mockImplementation((key: string) =>
+      key === 'authorization.mode' ? 'roles' : 'billing',
+    );
+    await expect(service.resolve(request)).rejects.toThrow(ForbiddenException);
+    expect(accessClient.resolveSystemContext).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['roles', 'authenticated'] as const)(
+    'fetches a separate context when changing from %s to the other mode',
+    async (initialMode) => {
+      const { service, accessClient, config } = serviceFixture(initialMode);
+      const roleClaims = (await accessClient.resolveSystemContext()) as Record<
+        string,
+        unknown
+      >;
+      const emptyClaims = { ...roleClaims, assignments: [] };
+      accessClient.resolveSystemContext.mockClear();
+      accessClient.resolveSystemContext.mockResolvedValue(
+        initialMode === 'roles' ? roleClaims : emptyClaims,
+      );
+      const request = requestFixture(
+        accessOrganization({ roles: [], permissions: [] }),
+      );
+      await service.resolve(request);
+      const mode = initialMode === 'roles' ? 'authenticated' : 'roles';
+      config.get.mockImplementation((key: string) =>
+        key === 'authorization.mode' ? mode : 'billing',
+      );
+      accessClient.resolveSystemContext.mockResolvedValue(
+        mode === 'roles' ? roleClaims : emptyClaims,
+      );
+      const session = await service.resolve(request);
+      expect(accessClient.resolveSystemContext).toHaveBeenCalledTimes(2);
+      expect(session.permissions.includes('billing.invoices.issue')).toBe(
+        mode === 'authenticated',
+      );
+    },
+  );
 
   it('builds SSO config with billing scope and Access config', () => {
     process.env = {

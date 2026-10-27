@@ -1,3 +1,4 @@
+import authorizationConfig from './config/authorization.config';
 import eventBusConfig from './config/event-bus.config';
 import { BillingEventBusModule } from './modules/event-bus/billing-event-bus.module';
 import { Module } from '@nestjs/common';
@@ -29,6 +30,7 @@ import { BillingModule } from './modules/billing.module';
       envFilePath: environmentFile(),
       load: [
         appConfig,
+        authorizationConfig,
         eventBusConfig,
         authConfig,
         billingFiscalConfig,

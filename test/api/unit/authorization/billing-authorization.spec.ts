@@ -2,6 +2,7 @@ import { ForbiddenException, ConflictException } from '@nestjs/common';
 import {
   permissionScope,
   validateBillingContext,
+  permissionsForAuthorization,
   type BillingAssignment,
   type BillingAuthorization,
 } from '../../../../apps/api/src/modules/auth/session/billing-console-permissions';
@@ -140,6 +141,82 @@ describe('Billing authorization contract and scope', () => {
         'billing.catalog.read',
       ),
     ).toThrow());
+
+  it('allows catalog actions without roles while binding customer data to the signed membership organization', () => {
+    const auth = validateBillingContext(
+      { ...claims(), assignments: [] },
+      expected,
+      'authenticated',
+    );
+    expect(auth.assignments).toEqual([]);
+    expect(permissionScope(auth, 'billing.catalog.manage')).toBeNull();
+    expect(permissionScope(auth, 'billing.invoices.issue')).toEqual([
+      expected.organizationId,
+    ]);
+    expect(permissionsForAuthorization(auth)).toEqual(
+      expect.arrayContaining([
+        'billing.catalog.manage',
+        'billing.invoices.issue',
+      ]),
+    );
+    expect(() => permissionScope(auth, 'billing.unknown.action')).toThrow();
+  });
+  it.each([
+    { sub: 'another-user' },
+    { identity_issuer: 'https://other.test' },
+    { identity_reference_id: uuid(8) },
+    { organization_id: uuid(8) },
+    { membership_id: uuid(8) },
+    { aud: 'legal-api' },
+    { exp: 1 },
+    { assignments: null },
+  ])(
+    'keeps signed context validation in authenticated mode: %j',
+    (overrides) => {
+      expect(() =>
+        validateBillingContext(
+          { ...claims(), assignments: [], ...overrides },
+          expected,
+          'authenticated',
+        ),
+      ).toThrow();
+    },
+  );
+  it('does not turn missing organizations or expired authenticated contexts into global authority', () => {
+    const auth = validateBillingContext(
+      { ...claims(), assignments: [] },
+      expected,
+      'authenticated',
+    );
+    expect(() =>
+      permissionScope(
+        { ...auth, organizationId: undefined },
+        'billing.catalog.manage',
+      ),
+    ).toThrow();
+    expect(() =>
+      permissionScope({ ...auth, expiresAt: 1 }, 'billing.invoices.issue'),
+    ).toThrow();
+  });
+  it('keeps resource ownership checks and machine policies in authenticated mode', async () => {
+    const f = guardFixture(uuid(8));
+    f.request.billingAuthorization = validateBillingContext(
+      { ...claims(), assignments: [] },
+      expected,
+      'authenticated',
+    );
+    await expect(f.guard.canActivate(f.context as never)).rejects.toThrow(
+      'Resource outside authorized scope',
+    );
+    f.database.query.mockResolvedValue([
+      { organization_id: expected.organizationId },
+    ]);
+    await expect(f.guard.canActivate(f.context as never)).resolves.toBe(true);
+    Object.assign(f.request.principal, { isMachine: true });
+    await expect(f.guard.canActivate(f.context as never)).rejects.toThrow(
+      'Missing required permission',
+    );
+  });
 
   function guardFixture(owner: string | null, resource = 'invoices') {
     const request = {

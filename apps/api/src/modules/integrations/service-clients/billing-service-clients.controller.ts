@@ -21,8 +21,8 @@ export class BillingServiceClientsController {
 
   @Get()
   @Permissions('billing.integrations.read')
-  list() {
-    return this.service.list();
+  list(@Req() request: AuthenticatedRequest) {
+    return this.service.list(request.billingAuthorization);
   }
 
   @Put(':clientId')
@@ -32,6 +32,12 @@ export class BillingServiceClientsController {
     @Body() dto: SaveServiceClientDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    return this.service.save(clientId, dto, request.principal!.sub);
+    return this.service.save(
+      clientId,
+      dto,
+      request.principal!.sub,
+      undefined,
+      request.billingAuthorization,
+    );
   }
 }
