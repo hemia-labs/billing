@@ -1,5 +1,11 @@
 # api
 
+## 1.0.4
+
+### Patch Changes
+
+- 8400a24: Use whole-second timestamps required by the PayPal notification history API and report safe recovery failure reasons.
+
 ## 1.0.3
 
 ### Patch Changes
