@@ -3,7 +3,7 @@ import { PaypalRefundRecoveryService } from '../../../../apps/api/src/modules/we
 
 const SALE = 'PAYMENT.SALE.REFUNDED';
 const CAPTURE = 'PAYMENT.CAPTURE.REFUNDED';
-const now = Date.parse('2026-10-27T20:00:00Z');
+const now = Date.parse('2026-10-27T20:00:00.789Z');
 const sale = (id = 'WH-REFUND', saleId = 'SALE1') => ({
   id,
   event_type: SALE,
@@ -112,8 +112,8 @@ it('requests signed redelivery only to the configured webhook for a missing refu
   expect(f.query.mock.calls[0][0]).toContain('NOT EXISTS');
   expect(f.query.mock.calls[0][0]).not.toContain('processing_status');
   const first = new URL(f.fetchMock.mock.calls[0][0]);
-  expect(first.searchParams.get('start_time')).toBe('2026-09-27T20:00:00.000Z');
-  expect(first.searchParams.get('end_time')).toBe('2026-10-27T20:00:00.000Z');
+  expect(first.searchParams.get('start_time')).toBe('2026-09-27T20:00:00Z');
+  expect(first.searchParams.get('end_time')).toBe('2026-10-27T20:00:00Z');
 });
 
 it('does not replay already received events (including ignored) or payments from another environment', async () => {
@@ -150,9 +150,7 @@ it('follows PayPal next-page links and preserves the bounded type and time filte
   expect(second.origin).toBe('https://api-m.sandbox.paypal.com');
   expect(second.searchParams.get('page')).toBe('2');
   expect(second.searchParams.get('event_type')).toBe(SALE);
-  expect(second.searchParams.get('start_time')).toBe(
-    '2026-09-27T20:00:00.000Z',
-  );
+  expect(second.searchParams.get('start_time')).toBe('2026-09-27T20:00:00Z');
 });
 
 it('does not follow pagination outside the PayPal event-list endpoint', async () => {
@@ -170,6 +168,7 @@ it('does not follow pagination outside the PayPal event-list endpoint', async ()
   expect(f.fetchMock).toHaveBeenCalledTimes(1);
   expect(logError).toHaveBeenCalledWith({
     event: 'billing_paypal_refund_recovery_failed',
+    reason: 'Invalid PayPal pagination URL',
   });
 });
 
@@ -282,4 +281,45 @@ it('can retry a failed listing on the next cycle', async () => {
   await f.service.recover();
   await f.service.recover();
   expect(f.fetchMock).toHaveBeenCalledTimes(3);
+});
+
+it('uses whole-second ISO8601 filters accepted by PayPal history even when the clock has milliseconds', async () => {
+  const f = fixture();
+  await f.service.recover();
+  for (const [input] of f.fetchMock.mock.calls) {
+    const url = new URL(input);
+    for (const key of ['start_time', 'end_time']) {
+      const value = url.searchParams.get(key)!;
+      expect(value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      expect(Number.isFinite(Date.parse(value))).toBe(true);
+    }
+    expect(
+      Date.parse(url.searchParams.get('end_time')!) -
+        Date.parse(url.searchParams.get('start_time')!),
+    ).toBe(30 * 24 * 60 * 60 * 1000);
+  }
+});
+
+it('logs a safe HTTP failure reason without the provider response body', async () => {
+  const f = fixture();
+  f.fetchMock.mockResolvedValueOnce(
+    new Response('sensitive-provider-response', { status: 400 }),
+  );
+  await f.service.recover();
+  expect(logError).toHaveBeenCalledWith({
+    event: 'billing_paypal_refund_recovery_failed',
+    reason: 'PayPal recovery HTTP 400',
+  });
+});
+
+it('does not log arbitrary upstream token or transport error messages', async () => {
+  const f = fixture();
+  f.paypal.getAccessToken.mockRejectedValueOnce(
+    new Error('sensitive-token-secret'),
+  );
+  await f.service.recover();
+  expect(logError).toHaveBeenCalledWith({
+    event: 'billing_paypal_refund_recovery_failed',
+    reason: 'PayPal recovery request failed',
+  });
 });
