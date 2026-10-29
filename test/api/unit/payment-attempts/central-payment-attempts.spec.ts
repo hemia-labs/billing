@@ -64,7 +64,10 @@ function fixture() {
       },
     ),
   };
-  const domainQuery=jest.fn((_sql?:string,_params?:unknown[])=>Promise.resolve([] as Array<{id:string}>));
+  const domainQuery = jest.fn<
+    Promise<Array<{ id: string }>>,
+    [sql?: string, params?: unknown[]]
+  >(() => Promise.resolve([]));
   const manager = {
     getRepository: (entity: unknown) =>
       entity === BillingSubscriptionEntity
@@ -184,54 +187,222 @@ function fixture() {
 }
 
 describe('central durable payment attempts', () => {
-  it.each(['absent','present','unavailable'])('projects a read-only preparation rejection only with verified absent artifacts (%s)',async evidence=>{
-    const f=fixture();
-    const row=Object.assign(new BillingPaymentAttemptEntity(),{id:f.input.idempotencyKey,organizationId:f.input.organizationId,userId:f.input.userId,productCode:f.input.productCode,createdByIssuer:actor.issuer,createdByClientId:actor.clientId,requestPayload:{...f.input,operation:'change_renewal_plan',expectedSubscriptionId:f.subscriptionId,expectedRenewalSubscriptionId:f.subscriptionId},status:'rejected',receipt:{statusFresh:false,errorCode:'BILLING_CHECKOUT_REJECTED'},leaseToken:null,leaseUntil:null});
-    f.rows.set(row.id,structuredClone(row));const before=structuredClone(f.rows.get(row.id));
-    if(evidence==='present')f.domainQuery.mockResolvedValueOnce([{id:'soft-deleted-domain-artifact'}]);
-    if(evidence==='unavailable')f.domainQuery.mockRejectedValueOnce(new Error('database read unavailable'));
-    const response=await f.service().get(row.id,f.input,actor);
-    expect(response).toMatchObject({status:'rejected',statusFresh:evidence==='absent',errorCode:evidence==='absent'?'BILLING_CHECKOUT_REJECTED_BEFORE_PREPARATION':'BILLING_CHECKOUT_REJECTED'});
-    expect(f.domainQuery).toHaveBeenCalledWith(expect.not.stringContaining('deleted_at'),[row.organizationId,row.productCode,row.id,actor.issuer,actor.clientId]);
-    expect(f.rows.get(row.id)).toEqual(before);expect(f.repository.save).not.toHaveBeenCalled();expect(f.checkout.createCheckoutSession).not.toHaveBeenCalled();
-  });
-  it('binds a future plan change to both contracts and reopens only a canonical restoration after cancellation',async()=>{
-    const f=fixture(),candidateId=randomUUID();
-    const input={...f.input,operation:'change_renewal_plan' as const,expectedSubscriptionId:f.subscriptionId,expectedRenewalSubscriptionId:candidateId};
-    const change={state:'awaiting_approval',sourceSubscriptionId:f.subscriptionId,renewalSubscriptionId:candidateId,targetPlanCode:input.planCode,targetPlanPriceCode:input.planPriceCode,effectiveAt:'2030-02-01T00:00:00Z',amountDueNow:'0.00',recurringAmount:'499.00',currency:'MXN',cancellationRequested:false,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/revise-future'};
-    const request=jest.fn(async()=>({checkoutId:f.checkoutId,renewalPlanChange:change}));
-    const cancel=jest.fn(async()=>({cancelled:true}));
-    Object.assign(f.subscriptions,{changeRenewalPlan:request,cancelRenewalPlanChange:cancel});
-    await expect(f.service().create(input,actor,['billing.integration.checkout.create'])).rejects.toMatchObject({status:403});
-    f.subscriptions.getCurrentSubscription.mockImplementation((...args:unknown[])=>Promise.resolve(args[2]===actor?{id:f.subscriptionId,pendingRenewal:{subscriptionId:candidateId}}:{id:f.subscriptionId}));
-    expect(await f.service().create(input,actor,scopes)).toMatchObject({operation:'change_renewal_plan',subscriptionId:candidateId,renewalPlanChange:{amountDueNow:'0.00'}});
-    expect(request).toHaveBeenCalledWith(f.subscriptionId,candidateId,expect.objectContaining({targetPlanCode:input.planCode}),actor);
-    expect(f.checkout.createCheckoutSession).not.toHaveBeenCalled();expect(f.subscriptions.changePlan).not.toHaveBeenCalled();
-    await f.service().cancel(input.idempotencyKey,input,actor);
-    expect(cancel).toHaveBeenCalledWith(f.checkoutId,input.userId,actor);
-    expect(f.rows.get(input.idempotencyKey)).toMatchObject({status:'rejected',receipt:{errorCode:'PAYMENT_ATTEMPT_CANCELLED',renewalPlanChange:{state:'failed'}}});
-    f.checkout.getCheckoutStatus.mockResolvedValueOnce({checkoutId:f.checkoutId,subscriptionId:candidateId,provider:BillingProvider.Paypal,checkoutStatus:'pending',subscriptionStatus:'pending',renewalPlanChange:{...change,cancellationRequested:true,checkoutUrl:'https://www.paypal.com/restore-future'}} as never);
-    const restored=await f.service().get(input.idempotencyKey,input,actor);
-    expect(restored).toMatchObject({status:'ready',renewalPlanChange:{cancellationRequested:true},checkoutUrl:'https://www.paypal.com/restore-future'});
+  it.each(['absent', 'present', 'unavailable'])(
+    'projects a read-only preparation rejection only with verified absent artifacts (%s)',
+    async (evidence) => {
+      const f = fixture();
+      const row = Object.assign(new BillingPaymentAttemptEntity(), {
+        id: f.input.idempotencyKey,
+        organizationId: f.input.organizationId,
+        userId: f.input.userId,
+        productCode: f.input.productCode,
+        createdByIssuer: actor.issuer,
+        createdByClientId: actor.clientId,
+        requestPayload: {
+          ...f.input,
+          operation: 'change_renewal_plan',
+          expectedSubscriptionId: f.subscriptionId,
+          expectedRenewalSubscriptionId: f.subscriptionId,
+        },
+        status: 'rejected',
+        receipt: { statusFresh: false, errorCode: 'BILLING_CHECKOUT_REJECTED' },
+        leaseToken: null,
+        leaseUntil: null,
+      });
+      f.rows.set(row.id, structuredClone(row));
+      const before = structuredClone(f.rows.get(row.id));
+      if (evidence === 'present')
+        f.domainQuery.mockResolvedValueOnce([
+          { id: 'soft-deleted-domain-artifact' },
+        ]);
+      if (evidence === 'unavailable')
+        f.domainQuery.mockRejectedValueOnce(
+          new Error('database read unavailable'),
+        );
+      const response = await f.service().get(row.id, f.input, actor);
+      expect(response).toMatchObject({
+        status: 'rejected',
+        statusFresh: evidence === 'absent',
+        errorCode:
+          evidence === 'absent'
+            ? 'BILLING_CHECKOUT_REJECTED_BEFORE_PREPARATION'
+            : 'BILLING_CHECKOUT_REJECTED',
+      });
+      expect(f.domainQuery).toHaveBeenCalledWith(
+        expect.not.stringContaining('deleted_at'),
+        [
+          row.organizationId,
+          row.productCode,
+          row.id,
+          actor.issuer,
+          actor.clientId,
+        ],
+      );
+      expect(f.rows.get(row.id)).toEqual(before);
+      expect(f.repository.save).not.toHaveBeenCalled();
+      expect(f.checkout.createCheckoutSession).not.toHaveBeenCalled();
+    },
+  );
+  it('binds a future plan change to both contracts and reopens only a canonical restoration after cancellation', async () => {
+    const f = fixture(),
+      candidateId = randomUUID();
+    const input = {
+      ...f.input,
+      operation: 'change_renewal_plan' as const,
+      expectedSubscriptionId: f.subscriptionId,
+      expectedRenewalSubscriptionId: candidateId,
+    };
+    const change = {
+      state: 'awaiting_approval',
+      sourceSubscriptionId: f.subscriptionId,
+      renewalSubscriptionId: candidateId,
+      targetPlanCode: input.planCode,
+      targetPlanPriceCode: input.planPriceCode,
+      effectiveAt: '2030-02-01T00:00:00Z',
+      amountDueNow: '0.00',
+      recurringAmount: '499.00',
+      currency: 'MXN',
+      cancellationRequested: false,
+      action: 'approve_subscription',
+      checkoutUrl: 'https://www.paypal.com/revise-future',
+    };
+    const request = jest.fn(() =>
+      Promise.resolve({
+        checkoutId: f.checkoutId,
+        renewalPlanChange: change,
+      }),
+    );
+    const cancel = jest.fn(() => Promise.resolve({ cancelled: true }));
+    Object.assign(f.subscriptions, {
+      changeRenewalPlan: request,
+      cancelRenewalPlanChange: cancel,
+    });
+    await expect(
+      f.service().create(input, actor, ['billing.integration.checkout.create']),
+    ).rejects.toMatchObject({ status: 403 });
+    f.subscriptions.getCurrentSubscription.mockImplementation(
+      (...args: unknown[]) =>
+        Promise.resolve(
+          args[2] === actor
+            ? {
+                id: f.subscriptionId,
+                pendingRenewal: { subscriptionId: candidateId },
+              }
+            : { id: f.subscriptionId },
+        ),
+    );
+    expect(await f.service().create(input, actor, scopes)).toMatchObject({
+      operation: 'change_renewal_plan',
+      subscriptionId: candidateId,
+      renewalPlanChange: { amountDueNow: '0.00' },
+    });
+    expect(request).toHaveBeenCalledWith(
+      f.subscriptionId,
+      candidateId,
+      expect.objectContaining({ targetPlanCode: input.planCode }),
+      actor,
+    );
+    expect(f.checkout.createCheckoutSession).not.toHaveBeenCalled();
+    expect(f.subscriptions.changePlan).not.toHaveBeenCalled();
+    await f.service().cancel(input.idempotencyKey, input, actor);
+    expect(cancel).toHaveBeenCalledWith(f.checkoutId, input.userId, actor);
+    expect(f.rows.get(input.idempotencyKey)).toMatchObject({
+      status: 'rejected',
+      receipt: {
+        errorCode: 'PAYMENT_ATTEMPT_CANCELLED',
+        renewalPlanChange: { state: 'failed' },
+      },
+    });
+    f.checkout.getCheckoutStatus.mockResolvedValueOnce({
+      checkoutId: f.checkoutId,
+      subscriptionId: candidateId,
+      provider: BillingProvider.Paypal,
+      checkoutStatus: 'pending',
+      subscriptionStatus: 'pending',
+      renewalPlanChange: {
+        ...change,
+        cancellationRequested: true,
+        checkoutUrl: 'https://www.paypal.com/restore-future',
+      },
+    } as never);
+    const restored = await f.service().get(input.idempotencyKey, input, actor);
+    expect(restored).toMatchObject({
+      status: 'ready',
+      renewalPlanChange: { cancellationRequested: true },
+      checkoutUrl: 'https://www.paypal.com/restore-future',
+    });
     expect(restored.errorCode).toBeUndefined();
   });
-  it('future renewal requires management scope and preserves the source plus durable new candidate receipt',async()=>{
-    const f=fixture();const nextId=randomUUID();
-    const input={...f.input,operation:'resume_renewal' as const,expectedSubscriptionId:f.subscriptionId};
-    await expect(f.service().create(input,actor,['billing.integration.checkout.create'])).rejects.toMatchObject({status:403});
+  it('future renewal requires management scope and preserves the source plus durable new candidate receipt', async () => {
+    const f = fixture();
+    const nextId = randomUUID();
+    const input = {
+      ...f.input,
+      operation: 'resume_renewal' as const,
+      expectedSubscriptionId: f.subscriptionId,
+    };
+    await expect(
+      f.service().create(input, actor, ['billing.integration.checkout.create']),
+    ).rejects.toMatchObject({ status: 403 });
     expect(f.checkout.createCheckoutSession).not.toHaveBeenCalled();
-    await expect(f.service().create({...input,expectedAmountDueNow:'1.00'},actor,scopes)).rejects.toMatchObject({status:400});
-    const renewalResume={state:'awaiting_approval',sourceSubscriptionId:f.subscriptionId,effectiveAt:'2030-02-01T00:00:00Z',amountDueNow:'0.00',recurringAmount:'999.00',currency:'MXN'};
-    f.checkout.createCheckoutSession.mockResolvedValueOnce({checkoutId:f.checkoutId,subscriptionId:nextId,checkoutUrl:'https://www.paypal.com/approve',status:BillingCheckoutSessionStatus.Created});
-    f.checkout.getCheckoutStatus.mockResolvedValueOnce({checkoutId:f.checkoutId,subscriptionId:nextId,checkoutStatus:BillingCheckoutSessionStatus.Created,subscriptionStatus:SubscriptionStatus.Pending,provider:BillingProvider.Paypal,renewalResume} as never);
-    const created=await f.service().create(input,actor,scopes);
-    expect(created).toMatchObject({operation:'resume_renewal',subscriptionId:nextId,renewalResume,checkoutUrl:'https://www.paypal.com/approve'});
-    expect(f.checkout.createCheckoutSession.mock.calls[0][0]).toMatchObject({resumeSourceSubscriptionId:f.subscriptionId});
+    await expect(
+      f
+        .service()
+        .create({ ...input, expectedAmountDueNow: '1.00' }, actor, scopes),
+    ).rejects.toMatchObject({ status: 400 });
+    const renewalResume = {
+      state: 'awaiting_approval',
+      sourceSubscriptionId: f.subscriptionId,
+      effectiveAt: '2030-02-01T00:00:00Z',
+      amountDueNow: '0.00',
+      recurringAmount: '999.00',
+      currency: 'MXN',
+    };
+    f.checkout.createCheckoutSession.mockResolvedValueOnce({
+      checkoutId: f.checkoutId,
+      subscriptionId: nextId,
+      checkoutUrl: 'https://www.paypal.com/approve',
+      status: BillingCheckoutSessionStatus.Created,
+    });
+    f.checkout.getCheckoutStatus.mockResolvedValueOnce({
+      checkoutId: f.checkoutId,
+      subscriptionId: nextId,
+      checkoutStatus: BillingCheckoutSessionStatus.Created,
+      subscriptionStatus: SubscriptionStatus.Pending,
+      provider: BillingProvider.Paypal,
+      renewalResume,
+    } as never);
+    const created = await f.service().create(input, actor, scopes);
+    expect(created).toMatchObject({
+      operation: 'resume_renewal',
+      subscriptionId: nextId,
+      renewalResume,
+      checkoutUrl: 'https://www.paypal.com/approve',
+    });
+    expect(f.checkout.createCheckoutSession.mock.calls[0][0]).toMatchObject({
+      resumeSourceSubscriptionId: f.subscriptionId,
+    });
     expect(f.subscriptions.changePlan).not.toHaveBeenCalled();
-    f.checkout.getCheckoutStatus.mockResolvedValueOnce({checkoutId:f.checkoutId,subscriptionId:nextId,checkoutStatus:BillingCheckoutSessionStatus.Approved,subscriptionStatus:SubscriptionStatus.Pending,provider:BillingProvider.Paypal,renewalResume:{...renewalResume,state:'scheduled'}} as never);
-    expect(await f.service().get(input.idempotencyKey,input,actor)).toMatchObject({renewalResume:{state:'scheduled'},checkoutUrl:undefined});
-    await f.service().cancel(input.idempotencyKey,input,actor);
-    expect(f.subscriptions.cancelPendingCheckout).toHaveBeenCalledWith(f.checkoutId,input,actor);
+    f.checkout.getCheckoutStatus.mockResolvedValueOnce({
+      checkoutId: f.checkoutId,
+      subscriptionId: nextId,
+      checkoutStatus: BillingCheckoutSessionStatus.Approved,
+      subscriptionStatus: SubscriptionStatus.Pending,
+      provider: BillingProvider.Paypal,
+      renewalResume: { ...renewalResume, state: 'scheduled' },
+    } as never);
+    expect(
+      await f.service().get(input.idempotencyKey, input, actor),
+    ).toMatchObject({
+      renewalResume: { state: 'scheduled' },
+      checkoutUrl: undefined,
+    });
+    await f.service().cancel(input.idempotencyKey, input, actor);
+    expect(f.subscriptions.cancelPendingCheckout).toHaveBeenCalledWith(
+      f.checkoutId,
+      input,
+      actor,
+    );
     expect(f.subscriptions.cancelPlanChange).not.toHaveBeenCalled();
   });
   it('reserves the caller-known ID and immutable payload centrally before calling the checkout engine', async () => {
@@ -591,9 +762,8 @@ describe('cancel payment attempts', () => {
   });
 });
 
-
-describe("discard initial checkout attempts", () => {
-  it("discards only the owned pending checkout and makes retries terminal", async () => {
+describe('discard initial checkout attempts', () => {
+  it('discards only the owned pending checkout and makes retries terminal', async () => {
     const f = fixture();
     await f.service().create(f.input, actor, scopes);
     expect(
@@ -610,34 +780,53 @@ describe("discard initial checkout attempts", () => {
     ).toEqual({ cancelled: true });
     expect(f.subscriptions.cancelPendingCheckout).toHaveBeenCalledTimes(1);
     expect(f.rows.get(f.input.idempotencyKey)).toMatchObject({
-      status: "rejected",
-      receipt: { errorCode: "PAYMENT_ATTEMPT_CANCELLED" },
+      status: 'rejected',
+      receipt: { errorCode: 'PAYMENT_ATTEMPT_CANCELLED' },
     });
   });
-  it("keeps an approved or ambiguous checkout recoverable when discard is refused", async () => {
+  it('keeps an approved or ambiguous checkout recoverable when discard is refused', async () => {
     const f = fixture();
     await f.service().create(f.input, actor, scopes);
     f.subscriptions.cancelPendingCheckout.mockRejectedValueOnce(
-      new ConflictException("refresh"),
+      new ConflictException('refresh'),
     );
     await expect(
       f.service().cancel(f.input.idempotencyKey, f.input, actor),
     ).rejects.toMatchObject({ status: 409 });
     expect(f.rows.get(f.input.idempotencyKey)).toMatchObject({
-      status: "ready",
+      status: 'ready',
       leaseToken: null,
     });
   });
 });
 
-it('projects restoration approval for a scheduled cancellation while terminal noncancellations keep links suppressed', async()=>{
-  const f=fixture();await f.service().create(f.change(),actor,scopes);
-  const response=f.rows.get(f.input.idempotencyKey)!;
-  response.receipt.planChange={state:'scheduled',effectiveAt:'2030-02-01T00:00:00Z',cancellationRequested:true,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/restore'};
-  f.rows.set(response.id,response);
-  f.checkout.getCheckoutStatus.mockRejectedValueOnce(new Error('status temporarily unavailable'));
-  expect(await f.service().get(response.id,f.input,actor)).toMatchObject({planChange:{cancellationRequested:true,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/restore'},checkoutUrl:'https://www.paypal.com/restore'});
-  response.receipt.planChange.cancellationRequested=false;f.rows.set(response.id,response);
+it('projects restoration approval for a scheduled cancellation while terminal noncancellations keep links suppressed', async () => {
+  const f = fixture();
+  await f.service().create(f.change(), actor, scopes);
+  const response = f.rows.get(f.input.idempotencyKey)!;
+  response.receipt.planChange = {
+    state: 'scheduled',
+    effectiveAt: '2030-02-01T00:00:00Z',
+    cancellationRequested: true,
+    action: 'approve_subscription',
+    checkoutUrl: 'https://www.paypal.com/restore',
+  };
+  f.rows.set(response.id, response);
+  f.checkout.getCheckoutStatus.mockRejectedValueOnce(
+    new Error('status temporarily unavailable'),
+  );
+  expect(await f.service().get(response.id, f.input, actor)).toMatchObject({
+    planChange: {
+      cancellationRequested: true,
+      action: 'approve_subscription',
+      checkoutUrl: 'https://www.paypal.com/restore',
+    },
+    checkoutUrl: 'https://www.paypal.com/restore',
+  });
+  response.receipt.planChange.cancellationRequested = false;
+  f.rows.set(response.id, response);
   f.checkout.getCheckoutStatus.mockRejectedValueOnce(new Error('offline'));
-  expect((await f.service().get(response.id,f.input,actor)).checkoutUrl).toBeUndefined();
+  expect(
+    (await f.service().get(response.id, f.input, actor)).checkoutUrl,
+  ).toBeUndefined();
 });

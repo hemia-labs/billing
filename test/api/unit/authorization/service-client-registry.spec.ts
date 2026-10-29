@@ -535,7 +535,7 @@ describe('authenticated-mode consumer policy isolation', () => {
     ).rejects.toThrow(ForbiddenException);
     expect(f.clients.find).not.toHaveBeenCalled();
   });
-  it('forwards the verified human authorization instead of only the subject', () => {
+  it('forwards the verified human authorization instead of only the subject', async () => {
     const f = fixture();
     const service = { list: jest.fn(), save: jest.fn() };
     const controller = new BillingServiceClientsController(service as never);
@@ -544,8 +544,8 @@ describe('authenticated-mode consumer policy isolation', () => {
       principal: { sub: 'member' },
       billingAuthorization: auth,
     };
-    controller.list(request as never);
-    controller.save(actor.clientId, f.dto, request as never);
+    await controller.list(request as never);
+    await controller.save(actor.clientId, f.dto, request as never);
     expect(service.list).toHaveBeenCalledWith(auth);
     expect(service.save).toHaveBeenCalledWith(
       actor.clientId,

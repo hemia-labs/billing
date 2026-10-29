@@ -190,57 +190,165 @@ function fixture(status = SubscriptionStatus.Active) {
 }
 
 describe('paid subscription renewal', () => {
-  it('reconciles the consented future target before validating its first payment so the old renewal price cannot block paid benefits',async()=>{
-    const f=fixture(SubscriptionStatus.Pending);
-    const boundary=new Date(f.now.getTime()-1000).toISOString();
-    const targetPrice=Object.assign(new BillingPlanPriceEntity(),{id:'target-price',code:'target-monthly',amount:'299.00',currency:'MXN'});
-    const targetPlan=Object.assign(new BillingPlanEntity(),{...f.subscription.plan,id:'target-plan',code:'professional',versions:f.subscription.plan.versions.map(version=>({...version,prices:[targetPrice]}))});
-    const checkout={id:'future-change',organizationId:f.subscription.organizationId,productCode:f.subscription.productCode,planId:targetPlan.id,plan:targetPlan,planPriceId:targetPrice.id,planPrice:targetPrice,planPriceCode:targetPrice.code,providerPriceId:'target-provider-price',providerPrice:{providerPriceId:'P-TARGET'},metadata:{subscriptionId:f.subscription.id}};
-    f.subscription.metadata.renewalResume={state:'scheduled',sourceSubscriptionId:'old-paid-source',effectiveAt:boundary,amountDueNow:'0.00',recurringAmount:'499.00',currency:'MXN',providerPlanId:'P-OLD'};
-    f.subscription.metadata.renewalPlanChange={state:'awaiting_approval',sourceSubscriptionId:'old-paid-source',renewalSubscriptionId:f.subscription.id,checkoutId:checkout.id,targetProviderPlanId:'P-TARGET',originalProviderPlanId:'P-OLD',effectiveAt:boundary};
-    f.snapshot.planId='P-TARGET';f.input.resource.amount.total='299.00';
-    const manager={getRepository:(entity:unknown)=>entity===BillingCheckoutSessionEntity?{findOne:async()=>checkout,update:jest.fn(async()=>undefined)}:f.manager.getRepository(entity)};
-    await f.processor.process(manager as never,f.input);
-    expect(f.subscription).toMatchObject({status:SubscriptionStatus.Active,planCode:'professional',metadata:{renewalResume:{state:'effective',recurringAmount:'299.00',providerPlanId:'P-TARGET'},renewalPlanChange:{state:'effective'}}});
-    expect(f.payments.save.mock.calls[0][0]).toMatchObject({status:PaymentStatus.Paid,amount:'299.00'});
-    expect(f.license).toMatchObject({status:LicenseStatus.Active,planCode:'professional'});
+  it('reconciles the consented future target before validating its first payment so the old renewal price cannot block paid benefits', async () => {
+    const f = fixture(SubscriptionStatus.Pending);
+    const boundary = new Date(f.now.getTime() - 1000).toISOString();
+    const targetPrice = Object.assign(new BillingPlanPriceEntity(), {
+      id: 'target-price',
+      code: 'target-monthly',
+      amount: '299.00',
+      currency: 'MXN',
+    });
+    const targetPlan = Object.assign(new BillingPlanEntity(), {
+      ...f.subscription.plan,
+      id: 'target-plan',
+      code: 'professional',
+      versions: f.subscription.plan.versions.map((version) => ({
+        ...version,
+        prices: [targetPrice],
+      })),
+    });
+    const checkout = {
+      id: 'future-change',
+      organizationId: f.subscription.organizationId,
+      productCode: f.subscription.productCode,
+      planId: targetPlan.id,
+      plan: targetPlan,
+      planPriceId: targetPrice.id,
+      planPrice: targetPrice,
+      planPriceCode: targetPrice.code,
+      providerPriceId: 'target-provider-price',
+      providerPrice: { providerPriceId: 'P-TARGET' },
+      metadata: { subscriptionId: f.subscription.id },
+    };
+    f.subscription.metadata.renewalResume = {
+      state: 'scheduled',
+      sourceSubscriptionId: 'old-paid-source',
+      effectiveAt: boundary,
+      amountDueNow: '0.00',
+      recurringAmount: '499.00',
+      currency: 'MXN',
+      providerPlanId: 'P-OLD',
+    };
+    f.subscription.metadata.renewalPlanChange = {
+      state: 'awaiting_approval',
+      sourceSubscriptionId: 'old-paid-source',
+      renewalSubscriptionId: f.subscription.id,
+      checkoutId: checkout.id,
+      targetProviderPlanId: 'P-TARGET',
+      originalProviderPlanId: 'P-OLD',
+      effectiveAt: boundary,
+    };
+    f.snapshot.planId = 'P-TARGET';
+    f.input.resource.amount.total = '299.00';
+    const manager = {
+      getRepository: (entity: unknown) =>
+        entity === BillingCheckoutSessionEntity
+          ? {
+              findOne: () => Promise.resolve(checkout),
+              update: jest.fn(() => Promise.resolve()),
+            }
+          : f.manager.getRepository(entity),
+    };
+    await f.processor.process(manager as never, f.input);
+    expect(f.subscription).toMatchObject({
+      status: SubscriptionStatus.Active,
+      planCode: 'professional',
+      metadata: {
+        renewalResume: {
+          state: 'effective',
+          recurringAmount: '299.00',
+          providerPlanId: 'P-TARGET',
+        },
+        renewalPlanChange: { state: 'effective' },
+      },
+    });
+    expect(f.payments.save.mock.calls[0][0]).toMatchObject({
+      status: PaymentStatus.Paid,
+      amount: '299.00',
+    });
+    expect(f.license).toMatchObject({
+      status: LicenseStatus.Active,
+      planCode: 'professional',
+    });
   });
-  it('future replacement approval preserves the separately paid source license until its new cycle is paid', async()=>{
-    const f=fixture(SubscriptionStatus.Pending);
-    const paidLicense=structuredClone(f.license);
-    f.subscription.metadata.renewalResume={state:'awaiting_approval',sourceSubscriptionId:'previous-paid-subscription',effectiveAt:f.nextBilling.toISOString(),amountDueNow:'0.00',recurringAmount:'499.00',currency:'MXN'};
+  it('future replacement approval preserves the separately paid source license until its new cycle is paid', async () => {
+    const f = fixture(SubscriptionStatus.Pending);
+    const paidLicense = structuredClone(f.license);
+    f.subscription.metadata.renewalResume = {
+      state: 'awaiting_approval',
+      sourceSubscriptionId: 'previous-paid-subscription',
+      effectiveAt: f.nextBilling.toISOString(),
+      amountDueNow: '0.00',
+      recurringAmount: '499.00',
+      currency: 'MXN',
+    };
     delete f.billingInfo.last_payment;
-    await f.processor.process(f.manager as never,{...f.input,eventType:'BILLING.SUBSCRIPTION.ACTIVATED',resource:{id:f.subscription.providerSubscriptionId}});
+    await f.processor.process(f.manager as never, {
+      ...f.input,
+      eventType: 'BILLING.SUBSCRIPTION.ACTIVATED',
+      resource: { id: f.subscription.providerSubscriptionId },
+    });
     expect(f.subscription.status).toBe(SubscriptionStatus.Pending);
-    expect(f.subscription.metadata.renewalResume).toMatchObject({state:'scheduled'});
+    expect(f.subscription.metadata.renewalResume).toMatchObject({
+      state: 'scheduled',
+    });
     expect(f.licenses.save).not.toHaveBeenCalled();
     expect(structuredClone(f.license)).toEqual(paidLicense);
     expect(f.payments.save).not.toHaveBeenCalled();
   });
-  it.each(['early','amount','currency','missing-time','invalid-time','valid'])('replacement payment %s records money and grants only the contracted future cycle',async mode=>{
-    const f=fixture(SubscriptionStatus.Pending);
-    const paidLicense=structuredClone(f.license);
-    const boundary=mode==='early'?f.nextBilling:new Date(f.now.getTime()-1000);
-    f.snapshot.planId='P-FUTURE';
-    f.subscription.metadata.renewalResume={state:'scheduled',sourceSubscriptionId:'previous-paid-subscription',effectiveAt:boundary.toISOString(),providerPlanId:'P-FUTURE',amountDueNow:'0.00',recurringAmount:'499.00',currency:'MXN'};
-    if(mode==='amount') f.input.resource.amount.total='498.00';
-    if(mode==='currency') f.input.resource.amount.currency='USD';
-    if(mode==='missing-time') delete (f.input.resource as {create_time?:string}).create_time;
-    if(mode==='invalid-time') f.input.resource.create_time='invalid';
-    await f.processor.process(f.manager as never,f.input);
-    expect(f.payments.save).toHaveBeenCalled();
-    if(mode==='valid') {
-      expect(f.subscription.status).toBe(SubscriptionStatus.Active);
-      expect(f.subscription.metadata.renewalResume).toMatchObject({state:'effective',paidCaptureId:'SALE-PAYMENT-ID'});
-      await f.processor.process(f.manager as never,f.input);
-      expect(f.subscription.metadata.renewalResume).toMatchObject({state:'effective',paidCaptureId:'SALE-PAYMENT-ID'});
-    } else {
-      expect(f.subscription.status).toBe(SubscriptionStatus.Pending);
-      expect(f.licenses.save).not.toHaveBeenCalled();
-      expect(structuredClone(f.license)).toEqual(paidLicense);
-      expect(f.payments.save.mock.calls[0][0].metadata).toMatchObject({renewalResumeReview:{state:'required'}});
-    }
-  });
+  it.each([
+    'early',
+    'amount',
+    'currency',
+    'missing-time',
+    'invalid-time',
+    'valid',
+  ])(
+    'replacement payment %s records money and grants only the contracted future cycle',
+    async (mode) => {
+      const f = fixture(SubscriptionStatus.Pending);
+      const paidLicense = structuredClone(f.license);
+      const boundary =
+        mode === 'early' ? f.nextBilling : new Date(f.now.getTime() - 1000);
+      f.snapshot.planId = 'P-FUTURE';
+      f.subscription.metadata.renewalResume = {
+        state: 'scheduled',
+        sourceSubscriptionId: 'previous-paid-subscription',
+        effectiveAt: boundary.toISOString(),
+        providerPlanId: 'P-FUTURE',
+        amountDueNow: '0.00',
+        recurringAmount: '499.00',
+        currency: 'MXN',
+      };
+      if (mode === 'amount') f.input.resource.amount.total = '498.00';
+      if (mode === 'currency') f.input.resource.amount.currency = 'USD';
+      if (mode === 'missing-time')
+        delete (f.input.resource as { create_time?: string }).create_time;
+      if (mode === 'invalid-time') f.input.resource.create_time = 'invalid';
+      await f.processor.process(f.manager as never, f.input);
+      expect(f.payments.save).toHaveBeenCalled();
+      if (mode === 'valid') {
+        expect(f.subscription.status).toBe(SubscriptionStatus.Active);
+        expect(f.subscription.metadata.renewalResume).toMatchObject({
+          state: 'effective',
+          paidCaptureId: 'SALE-PAYMENT-ID',
+        });
+        await f.processor.process(f.manager as never, f.input);
+        expect(f.subscription.metadata.renewalResume).toMatchObject({
+          state: 'effective',
+          paidCaptureId: 'SALE-PAYMENT-ID',
+        });
+      } else {
+        expect(f.subscription.status).toBe(SubscriptionStatus.Pending);
+        expect(f.licenses.save).not.toHaveBeenCalled();
+        expect(structuredClone(f.license)).toEqual(paidLicense);
+        expect(f.payments.save.mock.calls[0][0].metadata).toMatchObject({
+          renewalResumeReview: { state: 'required' },
+        });
+      }
+    },
+  );
   it.each([SubscriptionStatus.Active, SubscriptionStatus.PastDue])(
     'refreshes the period and restores access for a previously %s subscription',
     async (status) => {
@@ -744,7 +852,7 @@ it('records a late real payment with refund review while duplicates, reversals a
   });
   expect(f.subscriptions.findOne).toHaveBeenCalledWith(
     expect.objectContaining({
-      lock: expect.objectContaining({ mode: 'pessimistic_write' }),
+      lock: expect.objectContaining({ mode: 'pessimistic_write' }) as unknown,
     }),
   );
   await f.processor.process(f.manager as never, f.input);

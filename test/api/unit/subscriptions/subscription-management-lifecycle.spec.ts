@@ -213,7 +213,12 @@ function fixture() {
                 x.metadata.renewalPlanCorrection as
                   { state?: string } | undefined
               )?.state === 'awaiting_approval' ||
-              ['preparing','awaiting_approval','scheduled'].includes(String((x.metadata.renewalResume as {state?:string}|undefined)?.state)) ||
+              ['preparing', 'awaiting_approval', 'scheduled'].includes(
+                String(
+                  (x.metadata.renewalResume as { state?: string } | undefined)
+                    ?.state,
+                ),
+              ) ||
               (x.metadata.cancellation as { state?: string } | undefined)
                 ?.state === 'pending' ||
               ['preparing', 'awaiting_approval', 'scheduled'].includes(
@@ -1917,7 +1922,8 @@ it('abandonment recovery releases a failed provider lease and remains retryable'
 });
 
 it('recovers cancellation approval for a scheduled downgrade and preserves paid plan, period and charges', async () => {
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
   try {
     const f = fixture();
     const first = await f.service().changePlan('source', changeDto, actor);
@@ -1925,100 +1931,270 @@ it('recovers cancellation approval for a scheduled downgrade and preserves paid 
     await f.service().recoverManagement();
     expect(pendingPlanChange(f.rows.get('source')!)!.state).toBe('scheduled');
     const beforePayments = structuredClone(f.payments);
-    expect(await f.service().cancelPlanChange(first.checkoutId, 'buyer')).toEqual({cancelled:false,approvalUrl:'https://www.paypal.com/approve'});
-    expect((await f.service().getCurrentSubscription('org','balanz_cfdi')).pendingPlanChange).toMatchObject({state:'scheduled',cancellationRequested:true,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/approve'});
-    expect((await f.checkoutStatus().getCheckoutStatus(first.checkoutId,actor)).planChange).toMatchObject({state:'scheduled',cancellationRequested:true,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/approve'});
+    expect(
+      await f.service().cancelPlanChange(first.checkoutId, 'buyer'),
+    ).toEqual({
+      cancelled: false,
+      approvalUrl: 'https://www.paypal.com/approve',
+    });
+    expect(
+      (await f.service().getCurrentSubscription('org', 'balanz_cfdi'))
+        .pendingPlanChange,
+    ).toMatchObject({
+      state: 'scheduled',
+      cancellationRequested: true,
+      action: 'approve_subscription',
+      checkoutUrl: 'https://www.paypal.com/approve',
+    });
+    expect(
+      (await f.checkoutStatus().getCheckoutStatus(first.checkoutId, actor))
+        .planChange,
+    ).toMatchObject({
+      state: 'scheduled',
+      cancellationRequested: true,
+      action: 'approve_subscription',
+      checkoutUrl: 'https://www.paypal.com/approve',
+    });
     const calls = f.paypal.reviseSubscription.mock.calls.length;
-    expect(await f.service().cancelPlanChange(first.checkoutId, 'buyer')).toEqual({cancelled:false,approvalUrl:'https://www.paypal.com/approve'});
+    expect(
+      await f.service().cancelPlanChange(first.checkoutId, 'buyer'),
+    ).toEqual({
+      cancelled: false,
+      approvalUrl: 'https://www.paypal.com/approve',
+    });
     expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(calls);
     f.snapshot.planId = 'P-basic';
     await f.service().recoverManagement();
     expect(pendingPlanChange(f.rows.get('source')!)!.state).toBe('failed');
-    expect((await f.service().getCurrentSubscription('org','balanz_cfdi')).pendingPlanChange).toBeNull();
-    expect(await f.service().cancelPlanChange(first.checkoutId, 'buyer')).toEqual({cancelled:true});
-    expect(f.rows.get('source')).toMatchObject({status:SubscriptionStatus.Active,planCode:'basic',providerSubscriptionId:'I-ONE',currentPeriodEnd:new Date(boundary),nextBillingTime:new Date(boundary),cancelAtPeriodEnd:false});
-    expect(f.payments).toEqual(beforePayments);expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  } finally {jest.useRealTimers()}
-});
-
-it.each([false,true])('refuses reverting a scheduled downgrade at its billing boundary and releases stale cancellation intent (paid=%s)',async paid=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
-  try {
-    const f=fixture();const first=await f.service().changePlan('source',changeDto,actor);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    await f.service().cancelPlanChange(first.checkoutId,'buyer');
-    const marker=pendingPlanChange(f.rows.get('source')!)!;
-    expect(marker.cancelRequestedAt).toBeDefined();
-    const revisions=f.paypal.reviseSubscription.mock.calls.length;
-    jest.setSystemTime(new Date(boundary));
-    if(paid) {
-      f.snapshot.billingInfo.last_payment={time:boundary};
-      f.snapshot.billingInfo.next_billing_time='2030-03-01T00:00:00.000Z';
-    }
-    await expect(f.service().cancelPlanChange(first.checkoutId,'buyer')).rejects.toMatchObject({status:409});
-    expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(revisions);
-    const current=pendingPlanChange(f.rows.get('source')!)!;
-    expect(current.cancelRequestedAt).toBeUndefined();expect(current.cancelApprovalUrl).toBeUndefined();
-    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.payments).toHaveLength(0);
-    if(paid) {
-      await f.service().recoverManagement();
-      expect(f.rows.get('source')!.planCode).toBe('pro');
-      expect(pendingPlanChange(f.rows.get('source')!)!.state).toBe('effective');
-    } else expect(f.rows.get('source')!.planCode).toBe('basic');
-  } finally {jest.useRealTimers()}
-});
-it('keeps cancellation approval unavailable until a restoration URL exists, never falling back to the original checkout',()=>{
-  const change={state:'scheduled',effectiveAt:boundary,cancelRequestedAt:'2030-01-10T00:00:00Z'} as Parameters<typeof planChangeResponse>[0];
-  expect(planChangeResponse(change,'https://www.paypal.com/original-approval')).toMatchObject({state:'scheduled',cancellationRequested:true,action:'approve_subscription',checkoutUrl:null});
-});
-
-it.each(['provider-payment','local-period'])('refuses scheduled cancellation when %s arrives during provider revision',async evidence=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
-  try {
-    const f=fixture();const first=await f.service().changePlan('source',changeDto,actor);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    f.paypal.reviseSubscription.mockImplementationOnce(async()=>{
-      if(evidence==='provider-payment') f.snapshot.billingInfo.last_payment={time:boundary};
-      else f.rows.get('source')!.currentPeriodStart=new Date(boundary);
-      f.snapshot.planId='P-basic';
-      return {approvalUrl:'https://www.paypal.com/approve'};
+    expect(
+      (await f.service().getCurrentSubscription('org', 'balanz_cfdi'))
+        .pendingPlanChange,
+    ).toBeNull();
+    expect(
+      await f.service().cancelPlanChange(first.checkoutId, 'buyer'),
+    ).toEqual({ cancelled: true });
+    expect(f.rows.get('source')).toMatchObject({
+      status: SubscriptionStatus.Active,
+      planCode: 'basic',
+      providerSubscriptionId: 'I-ONE',
+      currentPeriodEnd: new Date(boundary),
+      nextBillingTime: new Date(boundary),
+      cancelAtPeriodEnd: false,
     });
-    await expect(f.service().cancelPlanChange(first.checkoutId,'buyer')).rejects.toMatchObject({status:409});
-    const current=pendingPlanChange(f.rows.get('source')!)!;
-    expect(current.state).toBe('scheduled');expect(current.cancelRequestedAt).toBeUndefined();expect(current.cancelApprovalUrl).toBeUndefined();
-    expect(f.rows.get('source')!.planCode).toBe('basic');expect(f.payments).toHaveLength(0);expect(f.paypal.captureOrder).not.toHaveBeenCalled();
-  } finally {jest.useRealTimers()}
+    expect(f.payments).toEqual(beforePayments);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
-function futureRenewalFixture(){
-  const f=pendingCheckoutFixture();
-  const prior=structuredClone(f.rows.get('source')!);Object.assign(prior,{id:'previous-paid',providerSubscriptionId:'I-PREVIOUS',status:SubscriptionStatus.Cancelled,cancelAtPeriodEnd:true,currentPeriodStart:new Date('2030-01-01'),currentPeriodEnd:new Date(boundary),metadata:{cancellation:{state:'scheduled'}}});f.rows.set(prior.id,prior);
-  f.licenses.set(prior.id,Object.assign(new BillingLicenseEntity(),{id:'paid-license',subscriptionId:prior.id,status:LicenseStatus.Active,planCode:prior.planCode,validUntil:new Date(boundary)}));
-  f.rows.get('source')!.metadata.renewalResume={state:'awaiting_approval',sourceSubscriptionId:prior.id,effectiveAt:boundary,amountDueNow:'0.00',recurringAmount:'499.00',currency:'MXN',providerPlanId:'P-basic',checkoutId:f.checkoutId,attemptId:'future-attempt'};
-  Object.assign(f.checkouts.get(f.checkoutId)!,{plan:prior.plan,planId:prior.planId,planPrice:prior.planPrice,planPriceId:prior.planPriceId,planPriceCode:prior.planPriceCode,providerPrice:prior.providerPrice,providerPriceId:prior.providerPriceId,successUrl:changeDto.successUrl,cancelUrl:changeDto.cancelUrl});
-  f.snapshot.status='ACTIVE';
-  return {...f,prior};
+it.each([false, true])(
+  'refuses reverting a scheduled downgrade at its billing boundary and releases stale cancellation intent (paid=%s)',
+  async (paid) => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
+    try {
+      const f = fixture();
+      const first = await f.service().changePlan('source', changeDto, actor);
+      f.snapshot.planId = 'P-pro';
+      await f.service().recoverManagement();
+      await f.service().cancelPlanChange(first.checkoutId, 'buyer');
+      const marker = pendingPlanChange(f.rows.get('source')!)!;
+      expect(marker.cancelRequestedAt).toBeDefined();
+      const revisions = f.paypal.reviseSubscription.mock.calls.length;
+      jest.setSystemTime(new Date(boundary));
+      if (paid) {
+        f.snapshot.billingInfo.last_payment = { time: boundary };
+        f.snapshot.billingInfo.next_billing_time = '2030-03-01T00:00:00.000Z';
+      }
+      await expect(
+        f.service().cancelPlanChange(first.checkoutId, 'buyer'),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(revisions);
+      const current = pendingPlanChange(f.rows.get('source')!)!;
+      expect(current.cancelRequestedAt).toBeUndefined();
+      expect(current.cancelApprovalUrl).toBeUndefined();
+      expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+      expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+      expect(f.payments).toHaveLength(0);
+      if (paid) {
+        await f.service().recoverManagement();
+        expect(f.rows.get('source')!.planCode).toBe('pro');
+        expect(pendingPlanChange(f.rows.get('source')!)!.state).toBe(
+          'effective',
+        );
+      } else expect(f.rows.get('source')!.planCode).toBe('basic');
+    } finally {
+      jest.useRealTimers();
+    }
+  },
+);
+it('keeps cancellation approval unavailable until a restoration URL exists, never falling back to the original checkout', () => {
+  const change = {
+    state: 'scheduled',
+    effectiveAt: boundary,
+    cancelRequestedAt: '2030-01-10T00:00:00Z',
+  } as Parameters<typeof planChangeResponse>[0];
+  expect(
+    planChangeResponse(change, 'https://www.paypal.com/original-approval'),
+  ).toMatchObject({
+    state: 'scheduled',
+    cancellationRequested: true,
+    action: 'approve_subscription',
+    checkoutUrl: null,
+  });
+});
+
+it.each(['provider-payment', 'local-period'])(
+  'refuses scheduled cancellation when %s arrives during provider revision',
+  async (evidence) => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
+    try {
+      const f = fixture();
+      const first = await f.service().changePlan('source', changeDto, actor);
+      f.snapshot.planId = 'P-pro';
+      await f.service().recoverManagement();
+      f.paypal.reviseSubscription.mockImplementationOnce(() => {
+        if (evidence === 'provider-payment')
+          f.snapshot.billingInfo.last_payment = { time: boundary };
+        else f.rows.get('source')!.currentPeriodStart = new Date(boundary);
+        f.snapshot.planId = 'P-basic';
+        return Promise.resolve({
+          approvalUrl: 'https://www.paypal.com/approve',
+        });
+      });
+      await expect(
+        f.service().cancelPlanChange(first.checkoutId, 'buyer'),
+      ).rejects.toMatchObject({ status: 409 });
+      const current = pendingPlanChange(f.rows.get('source')!)!;
+      expect(current.state).toBe('scheduled');
+      expect(current.cancelRequestedAt).toBeUndefined();
+      expect(current.cancelApprovalUrl).toBeUndefined();
+      expect(f.rows.get('source')!.planCode).toBe('basic');
+      expect(f.payments).toHaveLength(0);
+      expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  },
+);
+
+function futureRenewalFixture() {
+  const f = pendingCheckoutFixture();
+  const prior = structuredClone(f.rows.get('source')!);
+  Object.assign(prior, {
+    id: 'previous-paid',
+    providerSubscriptionId: 'I-PREVIOUS',
+    status: SubscriptionStatus.Cancelled,
+    cancelAtPeriodEnd: true,
+    currentPeriodStart: new Date('2030-01-01'),
+    currentPeriodEnd: new Date(boundary),
+    metadata: { cancellation: { state: 'scheduled' } },
+  });
+  f.rows.set(prior.id, prior);
+  f.licenses.set(
+    prior.id,
+    Object.assign(new BillingLicenseEntity(), {
+      id: 'paid-license',
+      subscriptionId: prior.id,
+      status: LicenseStatus.Active,
+      planCode: prior.planCode,
+      validUntil: new Date(boundary),
+    }),
+  );
+  f.rows.get('source')!.metadata.renewalResume = {
+    state: 'awaiting_approval',
+    sourceSubscriptionId: prior.id,
+    effectiveAt: boundary,
+    amountDueNow: '0.00',
+    recurringAmount: '499.00',
+    currency: 'MXN',
+    providerPlanId: 'P-basic',
+    checkoutId: f.checkoutId,
+    attemptId: 'future-attempt',
+  };
+  Object.assign(f.checkouts.get(f.checkoutId)!, {
+    plan: prior.plan,
+    planId: prior.planId,
+    planPrice: prior.planPrice,
+    planPriceId: prior.planPriceId,
+    planPriceCode: prior.planPriceCode,
+    providerPrice: prior.providerPrice,
+    providerPriceId: prior.providerPriceId,
+    successUrl: changeDto.successUrl,
+    cancelUrl: changeDto.cancelUrl,
+  });
+  f.snapshot.status = 'ACTIVE';
+  return { ...f, prior };
 }
-it('future renewal recovery keeps the paid source current and grants the replacement only after a verified future transaction',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
+it('future renewal recovery keeps the paid source current and grants the replacement only after a verified future transaction', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
   try {
-    const f=futureRenewalFixture();const before=structuredClone({prior:f.prior,license:f.licenses.get(f.prior.id)});
+    const f = futureRenewalFixture();
+    const before = structuredClone({
+      prior: f.prior,
+      license: f.licenses.get(f.prior.id),
+    });
     await f.service().recoverManagement();
     expect(f.rows.get('source')!.status).toBe(SubscriptionStatus.Pending);
-    expect(f.rows.get('source')!.metadata.renewalResume).toMatchObject({state:'scheduled'});
+    expect(f.rows.get('source')!.metadata.renewalResume).toMatchObject({
+      state: 'scheduled',
+    });
     expect(f.licenses.has('source')).toBe(false);
-    expect(await f.service().getCurrentSubscription('org','balanz_cfdi',actor)).toMatchObject({id:f.prior.id,pendingRenewal:{attemptId:'future-attempt',subscriptionId:'source',state:'scheduled',checkoutUrl:null}});
+    expect(
+      await f.service().getCurrentSubscription('org', 'balanz_cfdi', actor),
+    ).toMatchObject({
+      id: f.prior.id,
+      pendingRenewal: {
+        attemptId: 'future-attempt',
+        subscriptionId: 'source',
+        state: 'scheduled',
+        checkoutUrl: null,
+      },
+    });
     jest.setSystemTime(new Date(boundary));
-    f.snapshot.billingInfo={last_payment:{time:boundary},next_billing_time:'2030-03-01T00:00:00Z'};
-    Object.assign(f.paypal,{getSubscriptionTransactions:jest.fn(async()=>({transactions:[{id:'FUTURE-SALE',status:'COMPLETED',time:boundary,amount_with_breakdown:{gross_amount:{value:'499.00',currency_code:'MXN'}}}]}))});
-    await f.service().recoverManagement();await f.service().recoverManagement();
+    f.snapshot.billingInfo = {
+      last_payment: { time: boundary },
+      next_billing_time: '2030-03-01T00:00:00Z',
+    };
+    Object.assign(f.paypal, {
+      getSubscriptionTransactions: jest.fn(() =>
+        Promise.resolve({
+          transactions: [
+            {
+              id: 'FUTURE-SALE',
+              status: 'COMPLETED',
+              time: boundary,
+              amount_with_breakdown: {
+                gross_amount: { value: '499.00', currency_code: 'MXN' },
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    await f.service().recoverManagement();
+    await f.service().recoverManagement();
     expect(f.rows.get('source')!.status).toBe(SubscriptionStatus.Active);
-    expect(f.rows.get('source')!.metadata.renewalResume).toMatchObject({state:'effective',paidCaptureId:'FUTURE-SALE'});
+    expect(f.rows.get('source')!.metadata.renewalResume).toMatchObject({
+      state: 'effective',
+      paidCaptureId: 'FUTURE-SALE',
+    });
     expect(f.payments).toHaveLength(1);
-    expect(f.licenses.get('source')).toMatchObject({status:LicenseStatus.Active});
-    expect(f.rows.get(f.prior.id)).toEqual(before.prior);expect(f.licenses.get(f.prior.id)).toEqual(before.license);
-    expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
+    expect(f.licenses.get('source')).toMatchObject({
+      status: LicenseStatus.Active,
+    });
+    expect(f.rows.get(f.prior.id)).toEqual(before.prior);
+    expect(f.licenses.get(f.prior.id)).toEqual(before.license);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 it.each(['recovery-first', 'webhook-first'])(
   'records an early 499 MXN charge without granting renewal access when %s and remains idempotent after the boundary',
@@ -2134,147 +2310,599 @@ it.each(['recovery-first', 'webhook-first'])(
     }
   },
 );
-it('an approved future renewal can be discarded without cancelling the old paid contract or license',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
+it('an approved future renewal can be discarded without cancelling the old paid contract or license', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
   try {
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    const before=structuredClone({prior:f.prior,license:f.licenses.get(f.prior.id)});
-    expect(await f.service().cancelPendingCheckout(f.checkoutId,f.buyer,actor)).toEqual({cancelled:true,abandoned:true});
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    const before = structuredClone({
+      prior: f.prior,
+      license: f.licenses.get(f.prior.id),
+    });
+    expect(
+      await f.service().cancelPendingCheckout(f.checkoutId, f.buyer, actor),
+    ).toEqual({ cancelled: true, abandoned: true });
     await f.service().reconcileAbandonedCheckout('source');
-    expect(f.paypal.cancelSubscription).toHaveBeenCalledWith(expect.objectContaining({providerSubscriptionId:'I-ONE'}));
-    expect(f.rows.get(f.prior.id)).toEqual(before.prior);expect(f.licenses.get(f.prior.id)).toEqual(before.license);
+    expect(f.paypal.cancelSubscription).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSubscriptionId: 'I-ONE' }),
+    );
+    expect(f.rows.get(f.prior.id)).toEqual(before.prior);
+    expect(f.licenses.get(f.prior.id)).toEqual(before.license);
     expect(f.payments).toHaveLength(0);
-  }finally{jest.useRealTimers()}
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
-it('revises only the already authorized future agreement, preserves its old price until consent and restores it on cancellation',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(async()=>({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const before=structuredClone({source:f.prior,license:f.licenses.get(f.prior.id)});
-    const first=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
-    expect(first.renewalPlanChange).toMatchObject({state:'awaiting_approval',amountDueNow:'0.00',targetPlanCode:'pro',action:'approve_subscription'});
-    expect(f.rows.get('source')!.planCode).toBe('basic');expect((f.rows.get('source')!.metadata.renewalResume as {recurringAmount:string}).recurringAmount).toBe('499.00');
-    const reviseCalls=f.paypal.reviseSubscription.mock.calls.length;
-    await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
+it('revises only the already authorized future agreement, preserves its old price until consent and restores it on cancellation', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const before = structuredClone({
+      source: f.prior,
+      license: f.licenses.get(f.prior.id),
+    });
+    const first = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    expect(first.renewalPlanChange).toMatchObject({
+      state: 'awaiting_approval',
+      amountDueNow: '0.00',
+      targetPlanCode: 'pro',
+      action: 'approve_subscription',
+    });
+    expect(f.rows.get('source')!.planCode).toBe('basic');
+    expect(
+      (
+        f.rows.get('source')!.metadata.renewalResume as {
+          recurringAmount: string;
+        }
+      ).recurringAmount,
+    ).toBe('499.00');
+    const reviseCalls = f.paypal.reviseSubscription.mock.calls.length;
+    await f.service().changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
     expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(reviseCalls);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    expect(f.rows.get('source')).toMatchObject({status:SubscriptionStatus.Pending,planCode:'pro',metadata:{renewalResume:{state:'scheduled',recurringAmount:f.target.price.amount},renewalPlanChange:{state:'scheduled'}}});
-    expect(await f.service().getCurrentSubscription('org','balanz_cfdi',actor)).toMatchObject({id:f.prior.id,pendingRenewal:{planCode:'pro'},pendingRenewalPlanChange:{state:'scheduled'}});
-    expect(await f.service().cancelRenewalPlanChange(first.checkoutId,'buyer',actor)).toMatchObject({cancelled:false,approvalUrl:'https://www.paypal.com/approve'});
-    f.snapshot.planId='P-basic';await f.service().recoverManagement();
-    expect(f.rows.get('source')).toMatchObject({status:SubscriptionStatus.Pending,planCode:'basic',metadata:{renewalResume:{state:'scheduled',recurringAmount:'499.00'},renewalPlanChange:{state:'failed'}}});
-    expect(f.rows.get(f.prior.id)).toEqual(before.source);expect(f.licenses.get(f.prior.id)).toEqual(before.license);
-    expect(f.payments).toHaveLength(0);expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
-});
-
-it('recovers explicit restoration when an approval arrives after cancelling the future revision',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(async()=>({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const first=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
-    expect(await f.service().cancelRenewalPlanChange(first.checkoutId,'buyer',actor)).toEqual({cancelled:true});
-    expect((f.rows.get('source')!.metadata.renewalPlanChange as {state:string}).state).toBe('failed');
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();await f.service().recoverManagement();
-    expect(f.rows.get('source')).toMatchObject({planCode:'basic',metadata:{renewalPlanChange:{state:'awaiting_approval',cancelRequestedAt:expect.any(String),cancelApprovalUrl:'https://www.paypal.com/approve',cancellationGeneration:1}}});
-    const response=await f.service().getCurrentSubscription('org','balanz_cfdi',actor);
-    expect(response.pendingRenewalPlanChange).toMatchObject({cancellationRequested:true,action:'approve_subscription',checkoutUrl:'https://www.paypal.com/approve'});
-    f.snapshot.planId='P-basic';await f.service().recoverManagement();
-    expect((f.rows.get('source')!.metadata.renewalPlanChange as {state:string}).state).toBe('failed');
-    expect(f.rows.get(f.prior.id)).toEqual(f.prior);expect(f.payments).toHaveLength(0);expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
-});
-
-it('retains cancelled revision history when a replacement intent exists and recovers restoration under the historical attempt identity',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(async()=>({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const old=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
-    await f.service().cancelRenewalPlanChange(old.checkoutId,'buyer',actor);
-    f.target.plan.code='plus';f.target.price.code='plus-monthly';f.target.price.id='plus-price';f.target.provider.providerPriceId='P-plus';
-    const nextDto={...changeDto,idempotencyKey:'replacement-key',targetPlanCode:'plus',targetPlanPriceCode:'plus-monthly'};
-    const next=await f.service().changeRenewalPlan(f.prior.id,'source',nextDto,actor);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();await f.service().recoverManagement();
-    const current=await f.service().getCurrentSubscription('org','balanz_cfdi',actor);
-    expect(current.pendingRenewalPlanChange).toMatchObject({attemptId:changeDto.idempotencyKey,targetPlanCode:'pro',cancellationRequested:true,action:'approve_subscription'});
-    const replay=await f.service().changeRenewalPlan(f.prior.id,'source',nextDto,actor);
-    expect(replay).toMatchObject({checkoutId:next.checkoutId,renewalPlanChange:{state:'failed',targetPlanCode:'plus',action:'none'}});
-    expect(f.rows.get('source')!.planCode).toBe('basic');expect(f.rows.get(f.prior.id)).toEqual(f.prior);
-    expect(f.payments).toHaveLength(0);expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
-});
-it('an unconfirmed future restoration cannot freeze benefits when the actual target cycle is paid at the boundary',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(async()=>({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const first=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    await f.service().cancelRenewalPlanChange(first.checkoutId,'buyer',actor);
-    jest.setSystemTime(new Date(boundary));f.snapshot.billingInfo={last_payment:{time:boundary},next_billing_time:'2030-03-01T00:00:00Z'};
-    Object.assign(f.paypal,{getSubscriptionTransactions:jest.fn(async()=>({transactions:[{id:'PAID-TARGET',status:'COMPLETED',time:boundary,amount_with_breakdown:{gross_amount:{value:f.target.price.amount,currency_code:'MXN'}}}]}))});
-    const calls=f.paypal.reviseSubscription.mock.calls.length;
+    f.snapshot.planId = 'P-pro';
     await f.service().recoverManagement();
-    expect(f.rows.get('source')).toMatchObject({status:SubscriptionStatus.Active,planCode:'pro',metadata:{renewalResume:{state:'effective'},renewalPlanChange:{state:'effective'}}});
-    expect((f.rows.get('source')!.metadata.renewalPlanChange as {cancelRequestedAt?:string}).cancelRequestedAt).toBeUndefined();
-    expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(calls);expect(f.payments).toHaveLength(1);expect(f.rows.get(f.prior.id)).toEqual(f.prior);
-  }finally{jest.useRealTimers()}
+    expect(f.rows.get('source')).toMatchObject({
+      status: SubscriptionStatus.Pending,
+      planCode: 'pro',
+      metadata: {
+        renewalResume: {
+          state: 'scheduled',
+          recurringAmount: f.target.price.amount,
+        },
+        renewalPlanChange: { state: 'scheduled' },
+      },
+    });
+    expect(
+      await f.service().getCurrentSubscription('org', 'balanz_cfdi', actor),
+    ).toMatchObject({
+      id: f.prior.id,
+      pendingRenewal: { planCode: 'pro' },
+      pendingRenewalPlanChange: { state: 'scheduled' },
+    });
+    expect(
+      await f
+        .service()
+        .cancelRenewalPlanChange(first.checkoutId, 'buyer', actor),
+    ).toMatchObject({
+      cancelled: false,
+      approvalUrl: 'https://www.paypal.com/approve',
+    });
+    f.snapshot.planId = 'P-basic';
+    await f.service().recoverManagement();
+    expect(f.rows.get('source')).toMatchObject({
+      status: SubscriptionStatus.Pending,
+      planCode: 'basic',
+      metadata: {
+        renewalResume: { state: 'scheduled', recurringAmount: '499.00' },
+        renewalPlanChange: { state: 'failed' },
+      },
+    });
+    expect(f.rows.get(f.prior.id)).toEqual(before.source);
+    expect(f.licenses.get(f.prior.id)).toEqual(before.license);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
-it('allows replacing a confirmed scheduled future plan and discarding the new unapproved revision preserves the last authorized plan',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(()=>Promise.resolve({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const before=structuredClone({source:f.prior,license:f.licenses.get(f.prior.id)});
-    const previous=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    const authorizedAmount=f.target.price.amount;
-    f.checkouts.set(previous.checkoutId,structuredClone(f.checkouts.get(previous.checkoutId)!));
-    const target=catalog('basic');Object.assign(f.target.plan,target.plan);Object.assign(f.target.price,target.price);Object.assign(f.target.provider,target.provider);
-    const nextDto={...changeDto,idempotencyKey:'next-after-scheduled',targetPlanCode:'basic',targetPlanPriceCode:'basic-monthly'};
-    const prepared=await f.service().changeRenewalPlan(f.prior.id,'source',nextDto,actor);
+it('recovers explicit restoration when an approval arrives after cancelling the future revision', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const first = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    expect(
+      await f
+        .service()
+        .cancelRenewalPlanChange(first.checkoutId, 'buyer', actor),
+    ).toEqual({ cancelled: true });
+    expect(
+      (f.rows.get('source')!.metadata.renewalPlanChange as { state: string })
+        .state,
+    ).toBe('failed');
+    f.snapshot.planId = 'P-pro';
+    await f.service().recoverManagement();
+    await f.service().recoverManagement();
+    expect(f.rows.get('source')).toMatchObject({
+      planCode: 'basic',
+      metadata: {
+        renewalPlanChange: {
+          state: 'awaiting_approval',
+          cancelRequestedAt: expect.any(String) as unknown,
+          cancelApprovalUrl: 'https://www.paypal.com/approve',
+          cancellationGeneration: 1,
+        },
+      },
+    });
+    const response = await f
+      .service()
+      .getCurrentSubscription('org', 'balanz_cfdi', actor);
+    expect(response.pendingRenewalPlanChange).toMatchObject({
+      cancellationRequested: true,
+      action: 'approve_subscription',
+      checkoutUrl: 'https://www.paypal.com/approve',
+    });
+    f.snapshot.planId = 'P-basic';
+    await f.service().recoverManagement();
+    expect(
+      (f.rows.get('source')!.metadata.renewalPlanChange as { state: string })
+        .state,
+    ).toBe('failed');
+    expect(f.rows.get(f.prior.id)).toEqual(f.prior);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('retains cancelled revision history when a replacement intent exists and recovers restoration under the historical attempt identity', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const old = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    await f.service().cancelRenewalPlanChange(old.checkoutId, 'buyer', actor);
+    f.target.plan.code = 'plus';
+    f.target.price.code = 'plus-monthly';
+    f.target.price.id = 'plus-price';
+    f.target.provider.providerPriceId = 'P-plus';
+    const nextDto = {
+      ...changeDto,
+      idempotencyKey: 'replacement-key',
+      targetPlanCode: 'plus',
+      targetPlanPriceCode: 'plus-monthly',
+    };
+    const next = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', nextDto, actor);
+    f.snapshot.planId = 'P-pro';
+    await f.service().recoverManagement();
+    await f.service().recoverManagement();
+    const current = await f
+      .service()
+      .getCurrentSubscription('org', 'balanz_cfdi', actor);
+    expect(current.pendingRenewalPlanChange).toMatchObject({
+      attemptId: changeDto.idempotencyKey,
+      targetPlanCode: 'pro',
+      cancellationRequested: true,
+      action: 'approve_subscription',
+    });
+    const replay = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', nextDto, actor);
+    expect(replay).toMatchObject({
+      checkoutId: next.checkoutId,
+      renewalPlanChange: {
+        state: 'failed',
+        targetPlanCode: 'plus',
+        action: 'none',
+      },
+    });
+    expect(f.rows.get('source')!.planCode).toBe('basic');
+    expect(f.rows.get(f.prior.id)).toEqual(f.prior);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+it('an unconfirmed future restoration cannot freeze benefits when the actual target cycle is paid at the boundary', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const first = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    f.snapshot.planId = 'P-pro';
+    await f.service().recoverManagement();
+    await f.service().cancelRenewalPlanChange(first.checkoutId, 'buyer', actor);
+    jest.setSystemTime(new Date(boundary));
+    f.snapshot.billingInfo = {
+      last_payment: { time: boundary },
+      next_billing_time: '2030-03-01T00:00:00Z',
+    };
+    Object.assign(f.paypal, {
+      getSubscriptionTransactions: jest.fn(() =>
+        Promise.resolve({
+          transactions: [
+            {
+              id: 'PAID-TARGET',
+              status: 'COMPLETED',
+              time: boundary,
+              amount_with_breakdown: {
+                gross_amount: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const calls = f.paypal.reviseSubscription.mock.calls.length;
+    await f.service().recoverManagement();
+    expect(f.rows.get('source')).toMatchObject({
+      status: SubscriptionStatus.Active,
+      planCode: 'pro',
+      metadata: {
+        renewalResume: { state: 'effective' },
+        renewalPlanChange: { state: 'effective' },
+      },
+    });
+    expect(
+      (
+        f.rows.get('source')!.metadata.renewalPlanChange as {
+          cancelRequestedAt?: string;
+        }
+      ).cancelRequestedAt,
+    ).toBeUndefined();
+    expect(f.paypal.reviseSubscription).toHaveBeenCalledTimes(calls);
+    expect(f.payments).toHaveLength(1);
+    expect(f.rows.get(f.prior.id)).toEqual(f.prior);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('allows replacing a confirmed scheduled future plan and discarding the new unapproved revision preserves the last authorized plan', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    await f.service().recoverManagement();
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const before = structuredClone({
+      source: f.prior,
+      license: f.licenses.get(f.prior.id),
+    });
+    const previous = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    f.snapshot.planId = 'P-pro';
+    await f.service().recoverManagement();
+    const authorizedAmount = f.target.price.amount;
+    f.checkouts.set(
+      previous.checkoutId,
+      structuredClone(f.checkouts.get(previous.checkoutId)!),
+    );
+    const target = catalog('basic');
+    Object.assign(f.target.plan, target.plan);
+    Object.assign(f.target.price, target.price);
+    Object.assign(f.target.provider, target.provider);
+    const nextDto = {
+      ...changeDto,
+      idempotencyKey: 'next-after-scheduled',
+      targetPlanCode: 'basic',
+      targetPlanPriceCode: 'basic-monthly',
+    };
+    const prepared = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', nextDto, actor);
     expect(prepared.checkoutId).not.toBe(previous.checkoutId);
-    expect(prepared.renewalPlanChange).toMatchObject({state:'awaiting_approval',amountDueNow:'0.00',targetPlanCode:'basic'});
-    expect(f.rows.get('source')).toMatchObject({planCode:'pro',metadata:{renewalResume:{state:'scheduled',recurringAmount:authorizedAmount},renewalPlanChange:{originalProviderPlanId:'P-pro',originalCheckoutId:previous.checkoutId}}});
-    expect(await f.service().cancelRenewalPlanChange(prepared.checkoutId,'buyer',actor)).toEqual({cancelled:true});
-    expect(f.rows.get('source')).toMatchObject({planCode:'pro',metadata:{renewalResume:{state:'scheduled',recurringAmount:authorizedAmount},renewalPlanChange:{state:'failed'}}});
-    expect(await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor)).toMatchObject({checkoutId:previous.checkoutId,renewalPlanChange:{state:'scheduled',targetPlanCode:'pro'}});
-    expect(f.rows.get(f.prior.id)).toEqual(before.source);expect(f.licenses.get(f.prior.id)).toEqual(before.license);
-    expect(f.payments).toHaveLength(0);expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
+    expect(prepared.renewalPlanChange).toMatchObject({
+      state: 'awaiting_approval',
+      amountDueNow: '0.00',
+      targetPlanCode: 'basic',
+    });
+    expect(f.rows.get('source')).toMatchObject({
+      planCode: 'pro',
+      metadata: {
+        renewalResume: {
+          state: 'scheduled',
+          recurringAmount: authorizedAmount,
+        },
+        renewalPlanChange: {
+          originalProviderPlanId: 'P-pro',
+          originalCheckoutId: previous.checkoutId,
+        },
+      },
+    });
+    expect(
+      await f
+        .service()
+        .cancelRenewalPlanChange(prepared.checkoutId, 'buyer', actor),
+    ).toEqual({ cancelled: true });
+    expect(f.rows.get('source')).toMatchObject({
+      planCode: 'pro',
+      metadata: {
+        renewalResume: {
+          state: 'scheduled',
+          recurringAmount: authorizedAmount,
+        },
+        renewalPlanChange: { state: 'failed' },
+      },
+    });
+    expect(
+      await f
+        .service()
+        .changeRenewalPlan(f.prior.id, 'source', changeDto, actor),
+    ).toMatchObject({
+      checkoutId: previous.checkoutId,
+      renewalPlanChange: { state: 'scheduled', targetPlanCode: 'pro' },
+    });
+    expect(f.rows.get(f.prior.id)).toEqual(before.source);
+    expect(f.licenses.get(f.prior.id)).toEqual(before.license);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
-it('recovers the approved future change for cancellation after discarding a later unapproved draft, while both receipts stay bound to their own checkout',async()=>{
-  jest.useFakeTimers();jest.setSystemTime(new Date('2030-01-10'));
-  try{
-    const f=futureRenewalFixture();
-    f.rows.get('source')!.planPrice!.amount='999.00';
-    (f.rows.get('source')!.metadata.renewalResume as {recurringAmount:string}).recurringAmount='999.00';
-    f.prior.planPrice!.amount='999.00';f.target.price.amount='499.00';
+it('recovers the approved future change for cancellation after discarding a later unapproved draft, while both receipts stay bound to their own checkout', async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2030-01-10'));
+  try {
+    const f = futureRenewalFixture();
+    f.rows.get('source')!.planPrice!.amount = '999.00';
+    (
+      f.rows.get('source')!.metadata.renewalResume as {
+        recurringAmount: string;
+      }
+    ).recurringAmount = '999.00';
+    f.prior.planPrice!.amount = '999.00';
+    f.target.price.amount = '499.00';
     await f.service().recoverManagement();
-    Object.assign(f.paypal,{getPlan:jest.fn(()=>Promise.resolve({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:f.target.price.amount,currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
-    const before=structuredClone({source:f.prior,license:f.licenses.get(f.prior.id)});
-    const approved=await f.service().changeRenewalPlan(f.prior.id,'source',changeDto,actor);
-    f.snapshot.planId='P-pro';await f.service().recoverManagement();
-    f.checkouts.set(approved.checkoutId,structuredClone(f.checkouts.get(approved.checkoutId)!));
-    const target=catalog('basic');target.price.amount='999.00';Object.assign(f.target.plan,target.plan);Object.assign(f.target.price,target.price);Object.assign(f.target.provider,target.provider);
-    const draft=await f.service().changeRenewalPlan(f.prior.id,'source',{...changeDto,idempotencyKey:'discarded-later-draft',targetPlanCode:'basic',targetPlanPriceCode:'basic-monthly'},actor);
-    await f.service().cancelRenewalPlanChange(draft.checkoutId,'buyer',actor);
-    const current=await f.service().getCurrentSubscription('org','balanz_cfdi',actor);
-    expect(current).toMatchObject({id:f.prior.id,pendingRenewal:{planCode:'pro',recurringAmount:'499.00'},pendingRenewalPlanChange:{attemptId:changeDto.idempotencyKey,checkoutId:approved.checkoutId,state:'scheduled',targetPlanCode:'pro',recurringAmount:'499.00'}});
-    expect(f.rows.get('source')!.metadata.renewalPlanChange).toMatchObject({attemptId:'discarded-later-draft',state:'failed'});
-    expect((await f.checkoutStatus().getCheckoutStatus(draft.checkoutId,actor)).renewalPlanChange).toMatchObject({state:'failed',targetPlanCode:'basic',checkoutUrl:null});
-    expect((await f.checkoutStatus().getCheckoutStatus(approved.checkoutId,actor)).renewalPlanChange).toMatchObject({state:'scheduled',targetPlanCode:'pro',recurringAmount:'499.00'});
-    expect(await f.service().cancelRenewalPlanChange(approved.checkoutId,'buyer',actor)).toMatchObject({cancelled:false,approvalUrl:'https://www.paypal.com/approve'});
-    expect(f.rows.get('source')).toMatchObject({planCode:'pro',metadata:{renewalPlanChange:{attemptId:changeDto.idempotencyKey,originalProviderPlanId:'P-basic'}}});
-    f.snapshot.planId='P-basic';await f.service().recoverManagement();
-    expect(f.rows.get('source')).toMatchObject({planCode:'basic',metadata:{renewalResume:{recurringAmount:'999.00'}}});
-    expect((await f.checkoutStatus().getCheckoutStatus(draft.checkoutId,actor)).renewalPlanChange).toMatchObject({state:'failed',checkoutUrl:null});
-    expect(f.rows.get(f.prior.id)).toEqual(before.source);expect(f.licenses.get(f.prior.id)).toEqual(before.license);
-    expect(f.payments).toHaveLength(0);expect(f.paypal.createOrder).not.toHaveBeenCalled();expect(f.paypal.captureOrder).not.toHaveBeenCalled();expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
-  }finally{jest.useRealTimers()}
+    Object.assign(f.paypal, {
+      getPlan: jest.fn(() =>
+        Promise.resolve({
+          status: 'ACTIVE',
+          billing_cycles: [
+            {
+              tenure_type: 'REGULAR',
+              frequency: { interval_unit: 'MONTH', interval_count: 1 },
+              pricing_scheme: {
+                fixed_price: {
+                  value: f.target.price.amount,
+                  currency_code: 'MXN',
+                },
+              },
+            },
+          ],
+          payment_preferences: { setup_fee: { value: '0' } },
+        }),
+      ),
+    });
+    const before = structuredClone({
+      source: f.prior,
+      license: f.licenses.get(f.prior.id),
+    });
+    const approved = await f
+      .service()
+      .changeRenewalPlan(f.prior.id, 'source', changeDto, actor);
+    f.snapshot.planId = 'P-pro';
+    await f.service().recoverManagement();
+    f.checkouts.set(
+      approved.checkoutId,
+      structuredClone(f.checkouts.get(approved.checkoutId)!),
+    );
+    const target = catalog('basic');
+    target.price.amount = '999.00';
+    Object.assign(f.target.plan, target.plan);
+    Object.assign(f.target.price, target.price);
+    Object.assign(f.target.provider, target.provider);
+    const draft = await f.service().changeRenewalPlan(
+      f.prior.id,
+      'source',
+      {
+        ...changeDto,
+        idempotencyKey: 'discarded-later-draft',
+        targetPlanCode: 'basic',
+        targetPlanPriceCode: 'basic-monthly',
+      },
+      actor,
+    );
+    await f.service().cancelRenewalPlanChange(draft.checkoutId, 'buyer', actor);
+    const current = await f
+      .service()
+      .getCurrentSubscription('org', 'balanz_cfdi', actor);
+    expect(current).toMatchObject({
+      id: f.prior.id,
+      pendingRenewal: { planCode: 'pro', recurringAmount: '499.00' },
+      pendingRenewalPlanChange: {
+        attemptId: changeDto.idempotencyKey,
+        checkoutId: approved.checkoutId,
+        state: 'scheduled',
+        targetPlanCode: 'pro',
+        recurringAmount: '499.00',
+      },
+    });
+    expect(f.rows.get('source')!.metadata.renewalPlanChange).toMatchObject({
+      attemptId: 'discarded-later-draft',
+      state: 'failed',
+    });
+    expect(
+      (await f.checkoutStatus().getCheckoutStatus(draft.checkoutId, actor))
+        .renewalPlanChange,
+    ).toMatchObject({
+      state: 'failed',
+      targetPlanCode: 'basic',
+      checkoutUrl: null,
+    });
+    expect(
+      (await f.checkoutStatus().getCheckoutStatus(approved.checkoutId, actor))
+        .renewalPlanChange,
+    ).toMatchObject({
+      state: 'scheduled',
+      targetPlanCode: 'pro',
+      recurringAmount: '499.00',
+    });
+    expect(
+      await f
+        .service()
+        .cancelRenewalPlanChange(approved.checkoutId, 'buyer', actor),
+    ).toMatchObject({
+      cancelled: false,
+      approvalUrl: 'https://www.paypal.com/approve',
+    });
+    expect(f.rows.get('source')).toMatchObject({
+      planCode: 'pro',
+      metadata: {
+        renewalPlanChange: {
+          attemptId: changeDto.idempotencyKey,
+          originalProviderPlanId: 'P-basic',
+        },
+      },
+    });
+    f.snapshot.planId = 'P-basic';
+    await f.service().recoverManagement();
+    expect(f.rows.get('source')).toMatchObject({
+      planCode: 'basic',
+      metadata: { renewalResume: { recurringAmount: '999.00' } },
+    });
+    expect(
+      (await f.checkoutStatus().getCheckoutStatus(draft.checkoutId, actor))
+        .renewalPlanChange,
+    ).toMatchObject({ state: 'failed', checkoutUrl: null });
+    expect(f.rows.get(f.prior.id)).toEqual(before.source);
+    expect(f.licenses.get(f.prior.id)).toEqual(before.license);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paypal.createOrder).not.toHaveBeenCalled();
+    expect(f.paypal.captureOrder).not.toHaveBeenCalled();
+    expect(f.paypal.cancelSubscription).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });
