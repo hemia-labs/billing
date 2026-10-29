@@ -1,3 +1,4 @@
+import { checkoutAbandonment } from '../../subscriptions-management/subscription-management-state';
 import { BillingLicenseEntity } from '../../billing-shared';
 import {
   BillingAmountsSummary,
@@ -86,6 +87,8 @@ export class BillingLicenseMapper {
     license: BillingLicenseEntity,
     now: Date,
   ): boolean {
+    if (license.subscription && checkoutAbandonment(license.subscription))
+      return false;
     if (license.status === LicenseStatus.Active) {
       return !license.validUntil || license.validUntil > now;
     }

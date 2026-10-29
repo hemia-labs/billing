@@ -8,8 +8,10 @@ export interface ProviderSubscriptionInput {
   quantity?: number;
   requestId?: string;
   subscriberEmail?: string;
+  startTime?: string;
 }
 export interface ProviderSubscription {
+  approvalPending?: boolean;
   id: string;
   status?: string;
   subscriptionStatus: SubscriptionStatus;
@@ -46,6 +48,17 @@ export interface BillingProviderAdapter {
     input: ProviderSubscriptionInput,
   ): Promise<ProviderSubscription>;
   getSubscription(id: string): Promise<ProviderSubscription>;
+  validateFuturePlan?(
+    id: string,
+    expected: { amount: string; currency: string; interval: string },
+  ): Promise<void>;
+  getSubscriptionTransactions?(
+    id: string,
+    start: string,
+    end: string,
+  ): Promise<
+    Array<{ id: string; amount: string; currency: string; paidAt: string }>
+  >;
   reviseSubscription(input: {
     providerSubscriptionId: string;
     providerPlanId: string;

@@ -19,12 +19,16 @@ import {
   type PaymentsOperation,
   type CreateCheckoutAttemptInput,
   type CancelSubscriptionRequest,
+  type ResumeRenewalRequest,
+  type ChangeRenewalPlanRequest,
 } from "./types";
 import {
   context,
   uuid,
   attemptInput,
   cancellationInput,
+  resumeRenewalInput,
+  changeRenewalPlanInput,
   webhookInput,
 } from "./validation";
 @Injectable()
@@ -70,9 +74,97 @@ export class PaymentsService {
   }
   async getSubscription(c: PaymentsContext): Promise<Subscription | null> {
     context(c);
-    const current = await this.call(() =>
+    let current = await this.call(() =>
       this.client.subscriptions.current(c.organizationId),
     );
+    if (current?.pendingCheckoutAttemptId) {
+      const { pendingCheckoutAttemptId, ...unbound } = current;
+      current = unbound;
+      if (current.status === "pending" && uuid(pendingCheckoutAttemptId)) {
+        try {
+          const attempt = await this.client.attempts.get(
+            pendingCheckoutAttemptId,
+            this.buyer(c),
+          );
+          if (
+            attempt.operation === "checkout" &&
+            attempt.subscriptionId === current.id &&
+            attempt.planCode === current.planCode &&
+            attempt.planPriceCode === current.planPriceCode
+          )
+            current = { ...current, pendingCheckoutAttemptId };
+        } catch (error) {
+          if (!(error instanceof PaymentsError && error.status === 404))
+            return this.call(async () => {
+              throw error;
+            });
+        }
+      }
+    }
+    if (current?.pendingRenewal) {
+      const renewal = current.pendingRenewal;
+      const { attemptId, checkoutUrl: _renewalUrl, ...unbound } = renewal;
+      current = { ...current, pendingRenewal: { ...unbound, checkoutUrl: null } };
+      if (attemptId && uuid(attemptId)) {
+        try {
+          const attempt = await this.client.attempts.get(attemptId, this.buyer(c));
+          const checked = attempt.renewalResume;
+          if (attempt.operation === "resume_renewal" && checked &&
+              checked.sourceSubscriptionId === current.id &&
+              checked.sourceSubscriptionId === renewal.sourceSubscriptionId &&
+              attempt.subscriptionId === renewal.subscriptionId &&
+              attempt.planCode === current.planCode && attempt.planPriceCode === current.planPriceCode &&
+              checked.effectiveAt === renewal.effectiveAt && checked.currency === renewal.currency &&
+              checked.recurringAmount === renewal.recurringAmount) {
+            const terminal = ["effective", "failed"].includes(renewal.state);
+            const regression = renewal.state === "scheduled" && ["preparing", "awaiting_approval"].includes(checked.state);
+            const canonical = attempt.statusFresh && !terminal && !regression ? checked : renewal;
+            current = { ...current, pendingRenewal: { ...canonical,
+              ...(renewal.planCode ? { planCode: renewal.planCode } : {}),
+              ...(renewal.planPriceCode ? { planPriceCode: renewal.planPriceCode } : {}),
+              subscriptionId: renewal.subscriptionId, attemptId,
+              checkoutUrl: !terminal && !regression && attempt.statusFresh && ["preparing", "awaiting_approval"].includes(checked.state)
+                ? attempt.checkoutUrl ?? null : null } };
+          }
+        } catch (error) {
+          if (!(error instanceof PaymentsError && error.status === 404))
+            return this.call(async () => { throw error; });
+        }
+      }
+    }
+    if (current?.pendingRenewalPlanChange) {
+      const revision = current.pendingRenewalPlanChange;
+      const { attemptId, checkoutUrl: _revisionUrl, ...unbound } = revision;
+      current = { ...current, pendingRenewalPlanChange: { ...unbound, checkoutUrl: null } };
+      if (attemptId && uuid(attemptId)) {
+        try {
+          const attempt = await this.client.attempts.get(attemptId, this.buyer(c));
+          const checked = attempt.renewalPlanChange;
+          if (attempt.operation === "change_renewal_plan" && checked &&
+              checked.sourceSubscriptionId === current.id && checked.sourceSubscriptionId === revision.sourceSubscriptionId &&
+              checked.renewalSubscriptionId === revision.renewalSubscriptionId &&
+              current.pendingRenewal?.subscriptionId === checked.renewalSubscriptionId &&
+              attempt.subscriptionId === checked.renewalSubscriptionId && attempt.checkoutId === revision.checkoutId &&
+              attempt.planCode === revision.targetPlanCode && attempt.planPriceCode === revision.targetPlanPriceCode &&
+              checked.targetPlanCode === revision.targetPlanCode && checked.targetPlanPriceCode === revision.targetPlanPriceCode &&
+              checked.effectiveAt === revision.effectiveAt && checked.recurringAmount === revision.recurringAmount && checked.currency === revision.currency) {
+            const lateRestoration = revision.state === "failed" && revision.cancellationRequested &&
+              checked.cancellationRequested && checked.state === "awaiting_approval" && checked.action === "approve_subscription";
+            const terminal = revision.state === "effective" || revision.state === "failed" && !lateRestoration;
+            const regression = revision.cancellationRequested && !checked.cancellationRequested ||
+              revision.state === "scheduled" && !checked.cancellationRequested && ["preparing", "awaiting_approval"].includes(checked.state);
+            const canonical = attempt.statusFresh && !terminal && !regression ? checked : revision;
+            const noAction = terminal || ["effective", "failed"].includes(canonical.state) || !attempt.statusFresh || regression || canonical.action === "none" ||
+              canonical.state === "scheduled" && !canonical.cancellationRequested;
+            current = { ...current, pendingRenewalPlanChange: { ...canonical, attemptId, checkoutId: revision.checkoutId,
+              checkoutUrl: noAction ? null : attempt.checkoutUrl ?? null } };
+          }
+        } catch (error) {
+          if (!(error instanceof PaymentsError && error.status === 404))
+            return this.call(async () => { throw error; });
+        }
+      }
+    }
     const change = current?.pendingPlanChange;
     if (!current || !change) return current;
     const { attemptId, checkoutUrl: _oldUrl, ...unbound } = change;
@@ -100,14 +192,14 @@ export class PaymentsService {
       attempt.planPriceCode !== change.targetPlanPriceCode
     )
       return unavailable;
-    const terminal = ["scheduled", "effective", "failed"].includes(
-      change.state,
-    );
     const checked = attempt.planChange;
+    const terminal = ["effective", "failed"].includes(change.state) ||
+      (change.state === "scheduled" && !change.cancellationRequested && !checked?.cancellationRequested);
     const canonical =
       !terminal &&
       attempt.statusFresh &&
       checked &&
+      !(change.cancellationRequested && !checked.cancellationRequested) &&
       !(
         change.action === "approve_payment" &&
         checked.action === "approve_subscription" &&
@@ -116,7 +208,8 @@ export class PaymentsService {
         ? { ...change, ...checked }
         : change;
     const noAction =
-      ["scheduled", "effective", "failed"].includes(canonical.state) ||
+      ["effective", "failed"].includes(canonical.state) ||
+      (canonical.state === "scheduled" && !canonical.cancellationRequested) ||
       canonical.action === "none";
     const checkoutUrl = noAction
       ? null
@@ -124,7 +217,8 @@ export class PaymentsService {
         ? (canonical.checkoutUrl ?? null)
         : (canonical.checkoutUrl ??
           (checked?.action !== "approve_payment" &&
-          !["scheduled", "effective", "failed"].includes(checked?.state ?? "")
+          !["effective", "failed"].includes(checked?.state ?? "") &&
+          (checked?.state !== "scheduled" || checked.cancellationRequested)
             ? (attempt.checkoutUrl ?? null)
             : null));
     return {
@@ -150,6 +244,35 @@ export class PaymentsService {
         ...(dto.reason === undefined ? {} : { reason: dto.reason }),
       }),
     );
+  }
+  async resumeRenewal(c: PaymentsContext, input: ResumeRenewalRequest) {
+    context(c);
+    const dto = resumeRenewalInput(input);
+    const current = await this.getSubscription(c);
+    if (!current) throw new NotFoundException("Subscription not found");
+    if (current.id !== dto.expectedSubscriptionId)
+      throw new ConflictException("SUBSCRIPTION_CHANGED");
+    const planPriceCode = current.planPriceCode;
+    if (!planPriceCode) throw new ConflictException("Subscription price unavailable");
+    const urls = await this.options.returnUrls?.(c, dto.idempotencyKey);
+    return this.call(() => this.client.attempts.create({
+      ...dto, operation: "resume_renewal", organizationId: c.organizationId, userId: c.subjectId,
+      planCode: current.planCode, planPriceCode, ...urls,
+    }));
+  }
+  async changeRenewalPlan(c: PaymentsContext, input: ChangeRenewalPlanRequest) {
+    context(c);
+    const dto = changeRenewalPlanInput(input);
+    const current = await this.getSubscription(c);
+    if (!current) throw new NotFoundException("Subscription not found");
+    if (current.id !== dto.expectedSubscriptionId || current.pendingRenewal?.subscriptionId !== dto.expectedRenewalSubscriptionId)
+      throw new ConflictException("SUBSCRIPTION_CHANGED");
+    const urls = await this.options.returnUrls?.(c, dto.idempotencyKey);
+    return this.call(() => this.client.attempts.create({
+      idempotencyKey: dto.idempotencyKey, operation: "change_renewal_plan", organizationId: c.organizationId, userId: c.subjectId,
+      expectedSubscriptionId: current.id, expectedRenewalSubscriptionId: dto.expectedRenewalSubscriptionId,
+      planCode: dto.targetPlanCode, planPriceCode: dto.targetPlanPriceCode, ...urls,
+    }));
   }
   async createAttempt(
     c: PaymentsContext,
@@ -179,7 +302,7 @@ export class PaymentsService {
     const c = await this.authorize(request, "checkout.manage");
     if (!uuid(id)) throw new HttpException("Invalid attempt ID", 400);
     const attempt = await this.getAttempt(c, id);
-    if (attempt.operation === "change_plan" || attempt.planChange) {
+    if (attempt.operation === "change_plan" || attempt.operation === "resume_renewal" || attempt.operation === "change_renewal_plan" || attempt.planChange || attempt.renewalResume || attempt.renewalPlanChange) {
       const managed = await this.authorize(request, "subscription.manage");
       if (
         managed.organizationId !== c.organizationId ||

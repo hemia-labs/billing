@@ -3,6 +3,10 @@ import type {
   PaymentAttemptContext,
   CheckoutAttemptResponse,
   PaymentSnapshot,
+  RenewalResume,
+  PendingRenewal,
+  RenewalPlanChange,
+  PendingRenewalPlanChange,
 } from "./contracts";
 import { webhookInput } from "./validation";
 import { PaymentsError } from "./errors";
@@ -53,6 +57,9 @@ export type CheckoutInput = {
   cancelUrl?: string;
 };
 export type Subscription = {
+  pendingRenewalPlanChange?: PendingRenewalPlanChange | null;
+  pendingRenewal?: PendingRenewal | null;
+  pendingCheckoutAttemptId?: string;
   id: string;
   organizationId: string;
   productCode: string;
@@ -90,6 +97,7 @@ export type Subscription = {
 };
 export type CancelCheckoutAttemptResponse = {
   cancelled: boolean;
+  abandoned?: boolean;
   approvalUrl?: string;
 };
 export type CancelSubscriptionInput = {
@@ -348,10 +356,13 @@ export function createPaymentsClient(config: PaymentsConfig) {
         !uuid.test(input.userId) ||
         !identifier(input.planCode) ||
         !identifier(input.planPriceCode) ||
-        !["checkout", "change_plan"].includes(input.operation) ||
-        (input.operation === "change_plan"
+        !["checkout", "change_plan", "resume_renewal", "change_renewal_plan"].includes(input.operation) ||
+        (input.operation !== "checkout"
           ? !uuid.test(String(input.expectedSubscriptionId))
           : input.expectedSubscriptionId !== undefined) ||
+        (input.operation === "change_renewal_plan"
+          ? !uuid.test(String(input.expectedRenewalSubscriptionId)) || input.expectedRenewalSubscriptionId === input.expectedSubscriptionId
+          : input.expectedRenewalSubscriptionId !== undefined) ||
         (input.expectedAmountDueNow !== undefined &&
           !money(input.expectedAmountDueNow)) ||
         (input.legalAcceptanceId !== undefined &&
@@ -376,10 +387,10 @@ export function createPaymentsClient(config: PaymentsConfig) {
       )
         throw new PaymentsError("configuration");
       const scopes =
-        input.operation === "change_plan"
+        input.operation !== "checkout"
           ? [permissions.create, permissions.subscriptions]
           : [permissions.create];
-      return parseAttempt(
+      const result = parseAttempt(
         await request("payment-attempts", scopes, {
           planCode: input.planCode,
           planPriceCode: input.planPriceCode,
@@ -399,12 +410,28 @@ export function createPaymentsClient(config: PaymentsConfig) {
                   input.expectedSubscriptionId.toLowerCase(),
               }
             : {}),
+          ...(input.expectedRenewalSubscriptionId ? { expectedRenewalSubscriptionId: input.expectedRenewalSubscriptionId.toLowerCase() } : {}),
           productCode,
           successUrl: successUrl.href,
           cancelUrl: cancelUrl.href,
         }),
         input.idempotencyKey,
       );
+      if (input.operation === "resume_renewal" &&
+          (result.operation !== "resume_renewal" ||
+           (result.renewalResume && result.renewalResume.sourceSubscriptionId !== input.expectedSubscriptionId?.toLowerCase()) ||
+           (result.planCode && result.planCode !== input.planCode) ||
+           (result.planPriceCode && result.planPriceCode !== input.planPriceCode)))
+        throw new PaymentsError("contract");
+      if (input.operation === "change_renewal_plan" &&
+          (result.operation !== "change_renewal_plan" ||
+           (result.subscriptionId && result.subscriptionId !== input.expectedRenewalSubscriptionId?.toLowerCase()) ||
+           (result.renewalPlanChange && (result.renewalPlanChange.sourceSubscriptionId !== input.expectedSubscriptionId?.toLowerCase() ||
+             result.renewalPlanChange.renewalSubscriptionId !== input.expectedRenewalSubscriptionId?.toLowerCase() ||
+             result.renewalPlanChange.targetPlanCode !== input.planCode || result.renewalPlanChange.targetPlanPriceCode !== input.planPriceCode)) ||
+           (result.planCode && result.planCode !== input.planCode) || (result.planPriceCode && result.planPriceCode !== input.planPriceCode)))
+        throw new PaymentsError("contract");
+      return result;
     },
     async get(
       id: string,
@@ -424,7 +451,7 @@ export function createPaymentsClient(config: PaymentsConfig) {
     ): Promise<CheckoutAttemptResponse> {
       const current = await attempts.get(id, c);
       const scopes =
-        current.operation === "change_plan"
+        current.operation !== "checkout"
           ? [permissions.create, permissions.subscriptions]
           : [permissions.create];
       return parseAttempt(
@@ -461,6 +488,8 @@ export function createPaymentsClient(config: PaymentsConfig) {
       if (
         !record(value) ||
         typeof value.cancelled !== "boolean" ||
+        (value.abandoned !== undefined && typeof value.abandoned !== "boolean") ||
+        (value.abandoned === true && !value.cancelled) ||
         (value.approvalUrl !== undefined &&
           (typeof value.approvalUrl !== "string" ||
             !checkoutUrl(value.approvalUrl))) ||
@@ -469,6 +498,7 @@ export function createPaymentsClient(config: PaymentsConfig) {
         throw new PaymentsError("contract");
       return {
         cancelled: value.cancelled,
+        ...(value.abandoned === undefined ? {} : { abandoned: value.abandoned }),
         ...(value.approvalUrl === undefined
           ? {}
           : { approvalUrl: value.approvalUrl }),
@@ -951,6 +981,11 @@ function subscription(
     typeof value.cancelAtPeriodEnd !== "boolean"
   )
     throw new PaymentsError("contract");
+  if (
+    value.pendingCheckoutAttemptId !== undefined &&
+    !uuid.test(String(value.pendingCheckoutAttemptId))
+  )
+    throw new PaymentsError("contract");
   const cancellation = value.cancellation;
   if (
     cancellation !== null &&
@@ -986,8 +1021,46 @@ function subscription(
   )
     throw new PaymentsError("contract");
   const changeDetails = record(change) ? pendingChangeDetails(change) : {};
+  const renewal = value.pendingRenewal;
+  let pendingRenewal: PendingRenewal | null | undefined;
+  if (renewal === null) pendingRenewal = null;
+  else if (renewal !== undefined) {
+    const parsed = renewalResume(renewal);
+    if (!record(renewal) || parsed.sourceSubscriptionId !== value.id ||
+        !uuid.test(String(renewal.attemptId)) || !uuid.test(String(renewal.subscriptionId)) ||
+        renewal.subscriptionId === value.id ||
+        (renewal.planCode !== undefined && !identifier(renewal.planCode)) ||
+        (renewal.planPriceCode !== undefined && !identifier(renewal.planPriceCode)) ||
+        (renewal.checkoutUrl !== undefined && !checkoutUrl(renewal.checkoutUrl)))
+      throw new PaymentsError("contract");
+    pendingRenewal = { ...parsed,
+      ...(renewal.planCode === undefined ? {} : { planCode: String(renewal.planCode) }),
+      ...(renewal.planPriceCode === undefined ? {} : { planPriceCode: String(renewal.planPriceCode) }),
+      attemptId: String(renewal.attemptId), subscriptionId: String(renewal.subscriptionId),
+      checkoutUrl: ["preparing", "awaiting_approval"].includes(parsed.state) ? (renewal.checkoutUrl as string | null | undefined) : null };
+  }
+  const revision = value.pendingRenewalPlanChange;
+  let pendingRenewalPlanChange: PendingRenewalPlanChange | null | undefined;
+  if (revision === null) pendingRenewalPlanChange = null;
+  else if (revision !== undefined) {
+    const parsed = renewalPlanChange(revision);
+    if (!record(revision) || parsed.sourceSubscriptionId !== value.id ||
+        !uuid.test(String(revision.attemptId)) || !uuid.test(String(revision.checkoutId)) ||
+        (pendingRenewal && parsed.renewalSubscriptionId !== pendingRenewal.subscriptionId))
+      throw new PaymentsError("contract");
+    pendingRenewalPlanChange = { ...parsed, attemptId: String(revision.attemptId), checkoutId: String(revision.checkoutId) };
+  }
   return {
+    ...(pendingRenewalPlanChange === undefined ? {} : { pendingRenewalPlanChange }),
+    ...(pendingRenewal === undefined ? {} : { pendingRenewal }),
     id: value.id as string,
+    ...(value.pendingCheckoutAttemptId === undefined
+      ? {}
+      : {
+          pendingCheckoutAttemptId: String(
+            value.pendingCheckoutAttemptId,
+          ).toLowerCase(),
+        }),
     organizationId: value.organizationId as string,
     productCode,
     planCode: value.planCode,
@@ -1100,7 +1173,7 @@ function planChangeState(v: unknown): PlanChangeState {
       String(v.action),
     ) ||
     !checkoutUrl(v.checkoutUrl) ||
-    (v.action === "approve_subscription" && v.checkoutUrl === null)
+    (v.action === "approve_subscription" && v.checkoutUrl === null && v.cancellationRequested !== true)
   )
     throw new PaymentsError("contract");
   return {
@@ -1171,6 +1244,31 @@ function pendingChangeDetails(
   };
 }
 
+function renewalResume(v: unknown): RenewalResume {
+  if (!record(v) || !["preparing", "awaiting_approval", "scheduled", "effective", "failed"].includes(String(v.state)) ||
+      !uuid.test(String(v.sourceSubscriptionId)) || !date(v.effectiveAt) || v.effectiveAt === null ||
+      v.amountDueNow !== "0.00" || !money(v.recurringAmount) || Number(v.recurringAmount) <= 0 ||
+      typeof v.currency !== "string" || !/^[A-Z]{3}$/.test(v.currency) ||
+      (v.planCode !== undefined && !identifier(v.planCode)) || (v.planPriceCode !== undefined && !identifier(v.planPriceCode)))
+    throw new PaymentsError("contract");
+  return { ...(v.planCode === undefined ? {} : { planCode: v.planCode }),
+    ...(v.planPriceCode === undefined ? {} : { planPriceCode: v.planPriceCode }),
+    state: v.state, sourceSubscriptionId: v.sourceSubscriptionId, effectiveAt: v.effectiveAt,
+    amountDueNow: "0.00", recurringAmount: v.recurringAmount, currency: v.currency } as RenewalResume;
+}
+
+function renewalPlanChange(v: unknown): RenewalPlanChange {
+  const quote = renewalResume(v);
+  if (!record(v) || !uuid.test(String(v.renewalSubscriptionId)) ||
+      v.sourceSubscriptionId === v.renewalSubscriptionId || !identifier(v.targetPlanCode) || !identifier(v.targetPlanPriceCode) ||
+      typeof v.cancellationRequested !== "boolean" || !["approve_subscription", "none"].includes(String(v.action)) || !checkoutUrl(v.checkoutUrl))
+    throw new PaymentsError("contract");
+  const noAction = ["effective", "failed"].includes(quote.state) || (quote.state === "scheduled" && !v.cancellationRequested) || v.action === "none";
+  return { ...quote, renewalSubscriptionId: v.renewalSubscriptionId, targetPlanCode: v.targetPlanCode,
+    targetPlanPriceCode: v.targetPlanPriceCode, cancellationRequested: v.cancellationRequested,
+    action: noAction ? "none" : v.action, checkoutUrl: noAction ? null : v.checkoutUrl } as RenewalPlanChange;
+}
+
 function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
   id = id.toLowerCase();
   if (
@@ -1179,8 +1277,10 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
     !["pending", "processing", "ready", "rejected"].includes(
       String(v.status),
     ) ||
-    !["checkout", "change_plan"].includes(String(v.operation)) ||
+    !["checkout", "change_plan", "resume_renewal", "change_renewal_plan"].includes(String(v.operation)) ||
     typeof v.statusFresh !== "boolean" ||
+    (v.abandoned !== undefined && typeof v.abandoned !== "boolean") ||
+    (v.abandoned === true && (v.checkoutStatus !== "cancelled" || v.subscriptionStatus !== "cancelled")) ||
     (v.provider !== undefined && !identifier(v.provider)) ||
     (v.checkoutId !== undefined && !uuid.test(String(v.checkoutId))) ||
     (v.subscriptionId !== undefined && !uuid.test(String(v.subscriptionId))) ||
@@ -1205,9 +1305,19 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
     throw new PaymentsError("contract");
   const change =
     v.planChange === undefined ? undefined : planChangeState(v.planChange);
-  const canonicalUrl =
+  const renewal = v.renewalResume === undefined ? undefined : renewalResume(v.renewalResume);
+  if ((renewal && (v.operation !== "resume_renewal" || renewal.sourceSubscriptionId === v.subscriptionId || change)) ||
+      (v.operation === "resume_renewal" && v.status === "ready" && (!renewal || !uuid.test(String(v.subscriptionId)))))
+    throw new PaymentsError("contract");
+  const revision = v.renewalPlanChange === undefined ? undefined : renewalPlanChange(v.renewalPlanChange);
+  if ((revision && (v.operation !== "change_renewal_plan" || change || renewal ||
+       v.subscriptionId !== revision.renewalSubscriptionId || v.planCode !== revision.targetPlanCode || v.planPriceCode !== revision.targetPlanPriceCode)) ||
+      (v.operation === "change_renewal_plan" && v.status === "ready" && (!revision || !uuid.test(String(v.checkoutId)))))
+    throw new PaymentsError("contract");
+  const canonicalUrl = v.abandoned === true ? undefined : revision ? revision.checkoutUrl ?? undefined : (renewal && ["scheduled", "effective", "failed"].includes(renewal.state)) ? undefined :
     change &&
-    (["scheduled", "effective", "failed"].includes(change.state) ||
+    (["effective", "failed"].includes(change.state) ||
+      (change.state === "scheduled" && !change.cancellationRequested) ||
       change.action === "none" ||
       change.checkoutUrl === null ||
       (change.action === "approve_payment" && !change.checkoutUrl))
@@ -1216,9 +1326,10 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
   return {
     attemptId: id,
     ...(v.provider === undefined ? {} : { provider: v.provider as string }),
-    operation: v.operation as "checkout" | "change_plan",
+    operation: v.operation as CheckoutAttemptResponse["operation"],
     status: v.status as CheckoutAttemptResponse["status"],
     statusFresh: v.statusFresh,
+    ...(v.abandoned === undefined ? {} : { abandoned: v.abandoned }),
     ...(identifier(v.planCode) ? { planCode: v.planCode } : {}),
     ...(identifier(v.planPriceCode) ? { planPriceCode: v.planPriceCode } : {}),
     ...(v.checkoutId === undefined
@@ -1229,6 +1340,8 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
       : { subscriptionId: v.subscriptionId as string }),
     ...(typeof canonicalUrl === "string" ? { checkoutUrl: canonicalUrl } : {}),
     ...(change ? { planChange: change } : {}),
+    ...(renewal ? { renewalResume: renewal } : {}),
+    ...(revision ? { renewalPlanChange: revision } : {}),
     ...(v.checkoutStatus === undefined
       ? {}
       : { checkoutStatus: v.checkoutStatus as string | null }),

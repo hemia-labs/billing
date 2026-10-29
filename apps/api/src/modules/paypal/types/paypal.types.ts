@@ -8,6 +8,7 @@ export interface CreatePaypalSubscriptionInput {
   quantity?: number;
   requestId?: string;
   subscriberEmail?: string;
+  startTime?: string;
 }
 
 export interface PaypalSubscriptionResult {

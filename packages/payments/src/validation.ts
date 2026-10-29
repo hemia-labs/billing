@@ -5,6 +5,8 @@ import type {
   CreateCheckoutAttemptInput,
   LegalContextInput,
   PaymentsContext,
+  ResumeRenewalRequest,
+  ChangeRenewalPlanRequest,
 } from "./contracts";
 export const uuid = (v: unknown): v is string =>
   typeof v === "string" &&
@@ -258,4 +260,21 @@ export function planChangeQuoteInput(v: unknown) {
     targetPlanCode: v.targetPlanCode,
     targetPlanPriceCode: v.targetPlanPriceCode,
   };
+}
+
+export function resumeRenewalInput(v: unknown): ResumeRenewalRequest {
+  exact(v, ["idempotencyKey", "expectedSubscriptionId"]);
+  if (!uuid(v.idempotencyKey) || !uuid(v.expectedSubscriptionId))
+    throw new PaymentsError("configuration", 400);
+  return v as ResumeRenewalRequest;
+}
+
+export function changeRenewalPlanInput(v: unknown): ChangeRenewalPlanRequest {
+  exact(v, ["idempotencyKey", "expectedSubscriptionId", "expectedRenewalSubscriptionId", "targetPlanCode", "targetPlanPriceCode"]);
+  if (!uuid(v.idempotencyKey) || !uuid(v.expectedSubscriptionId) || !uuid(v.expectedRenewalSubscriptionId) ||
+      v.expectedSubscriptionId === v.expectedRenewalSubscriptionId ||
+      !text(v.targetPlanCode, 100) || /\s/.test(v.targetPlanCode) ||
+      !text(v.targetPlanPriceCode, 100) || /\s/.test(v.targetPlanPriceCode))
+    throw new PaymentsError("configuration", 400);
+  return v as ChangeRenewalPlanRequest;
 }

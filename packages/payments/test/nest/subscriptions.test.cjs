@@ -410,3 +410,59 @@ test("prorated attempts bind accepted money and only explicit confirmation advan
     (error) => error.getStatus() === 404,
   );
 });
+
+test("pending checkout recovery survives browser storage loss and binds the original buyer and contract", async () => {
+  const f = fixture();
+  const attemptId = randomUUID();
+  const summary = {
+    id: subscriptionId,
+    status: "pending",
+    planCode: "basic",
+    planPriceCode: "monthly",
+    pendingCheckoutAttemptId: attemptId,
+  };
+  f.service.client.subscriptions.current = async () => summary;
+  const receipt = {
+    attemptId,
+    operation: "checkout",
+    subscriptionId,
+    planCode: "basic",
+    planPriceCode: "monthly",
+  };
+  f.service.client.attempts.get = async (id, buyer) => {
+    assert.equal(id, attemptId);
+    assert.deepEqual(buyer, { organizationId: org, userId: subject });
+    return receipt;
+  };
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingCheckoutAttemptId,
+    attemptId,
+  );
+  for (const mismatch of [
+    { operation: "change_plan" },
+    { subscriptionId: randomUUID() },
+    { planCode: "other" },
+    { planPriceCode: "yearly" },
+  ]) {
+    f.service.client.attempts.get = async () => ({ ...receipt, ...mismatch });
+    assert.equal(
+      (await f.service.getSubscription(c)).pendingCheckoutAttemptId,
+      undefined,
+    );
+  }
+  const { PaymentsError } = require("../../dist");
+  f.service.client.attempts.get = async () => {
+    throw new PaymentsError("http", 404);
+  };
+  assert.equal(
+    (await f.service.getSubscription(c)).pendingCheckoutAttemptId,
+    undefined,
+  );
+  f.service.client.attempts.get = async () => {
+    throw new PaymentsError("transport");
+  };
+  await assert.rejects(
+    f.service.getSubscription(c),
+    (error) => error.getStatus() === 503,
+  );
+});

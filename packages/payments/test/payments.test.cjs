@@ -609,3 +609,224 @@ test("read-only status preserves a pending proration without creating or requiri
     code: "contract",
   });
 });
+
+
+test("pending subscriptions preserve a durable checkout attempt and reject malformed recovery identifiers", async () => {
+  const summary = { ...subscriptionSummary(), status: "pending", pendingCheckoutAttemptId: id };
+  mock(() => Response.json(summary));
+  const client = createPaymentsClient(config);
+  assert.equal((await client.subscriptions.current(id)).pendingCheckoutAttemptId, id);
+  summary.pendingCheckoutAttemptId = "not-an-attempt";
+  await assert.rejects(client.subscriptions.current(id), (error) => error instanceof PaymentsError && error.code === "contract");
+});
+
+test("local abandonment is preserved without pretending PayPal was cancelled", async () => {
+  const calls = mock(() => Response.json({ cancelled: true, abandoned: true }));
+  const result = await createPaymentsClient(config).attempts.cancel(id, { organizationId: id, userId: id });
+  assert.deepEqual(result, { cancelled: true, abandoned: true });
+  const transport = calls.find(c => c.url.includes("payment-attempts/"));
+  assert.equal(transport.init.method, "POST");
+  assert.match(transport.url, /\/cancel\?/);
+});
+for (const invalid of [
+  { cancelled: false, abandoned: true },
+  { cancelled: true, abandoned: "true" },
+  { cancelled: true, abandoned: true, approvalUrl: "https://www.paypal.com/approve" },
+]) {
+  test(`rejects inconsistent abandonment receipt ${JSON.stringify(invalid)}`, async () => {
+    mock(() => Response.json(invalid));
+    await assert.rejects(createPaymentsClient(config).attempts.cancel(id, { organizationId: id, userId: id }),
+      error => error instanceof PaymentsError && error.code === "contract");
+  });
+}
+
+test("an abandoned receipt never exposes an old approval URL or accepts an active contract", async () => {
+  const value = { attemptId: id, operation: "checkout", status: "ready", statusFresh: true,
+    checkoutStatus: "cancelled", subscriptionStatus: "cancelled", abandoned: true,
+    checkoutUrl: "https://www.sandbox.paypal.com/approve?token=old" };
+  mock(() => Response.json(value));
+  const client = createPaymentsClient(config);
+  const receipt = await client.attempts.get(id, { organizationId: id, userId: id });
+  assert.equal(receipt.abandoned, true);
+  assert.equal(receipt.checkoutUrl, undefined);
+  for (const changed of [{ abandoned: "true" }, { subscriptionStatus: "active" }, { checkoutStatus: "approved" }]) {
+    mock(() => Response.json({ ...value, ...changed }));
+    await assert.rejects(createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id }),
+      error => error instanceof PaymentsError && error.code === "contract");
+  }
+});
+
+for (const cancelling of [false, true]) {
+  test(`scheduled cancellation exposes only the restoration approval action (${cancelling})`, async () => {
+    const restoreUrl = "https://www.sandbox.paypal.com/restore/current-plan";
+    mock(() => Response.json({ attemptId: id, operation: "change_plan", status: "ready", statusFresh: true,
+      checkoutStatus: "pending", subscriptionStatus: "pending", checkoutUrl: "https://www.sandbox.paypal.com/approve/old",
+      planChange: { state: "scheduled", cancellationRequested: cancelling, kind: "downgrade", amountDueNow: "0.00",
+        currency: "MXN", recurringAmount: "499.00", effectiveAt: "2026-11-26T10:00:00Z", nextBillingAt: "2026-11-26T10:00:00Z",
+        action: cancelling ? "approve_subscription" : "none", checkoutUrl: cancelling ? restoreUrl : null },
+    }));
+    const receipt = await createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id });
+    assert.equal(receipt.checkoutUrl, cancelling ? restoreUrl : undefined);
+    assert.equal(receipt.planChange.cancellationRequested, cancelling);
+  });
+}
+
+for (const cancelling of [false, true]) {
+  test(`restoration awaiting its URL stays recoverable without exposing the original approval (${cancelling})`, async () => {
+    mock(() => Response.json({ attemptId: id, operation: "change_plan", status: "ready", statusFresh: true,
+      checkoutStatus: "pending", subscriptionStatus: "pending", checkoutUrl: "https://www.sandbox.paypal.com/approve/old",
+      planChange: { state: "scheduled", cancellationRequested: cancelling, kind: "downgrade", amountDueNow: "0.00",
+        currency: "MXN", recurringAmount: "499.00", effectiveAt: "2026-11-26T10:00:00Z", nextBillingAt: "2026-11-26T10:00:00Z",
+        action: "approve_subscription", checkoutUrl: null },
+    }));
+    const request = createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id });
+    if (!cancelling) return assert.rejects(request, error => error.code === "contract");
+    const receipt = await request;
+    assert.equal(receipt.checkoutUrl, undefined);
+    assert.equal(receipt.planChange.checkoutUrl, null);
+    assert.equal(receipt.planChange.cancellationRequested, true);
+  });
+}
+
+const renewalSourceId = "11111111-1111-4111-8111-111111111111";
+const renewal = { state: "awaiting_approval", sourceSubscriptionId: renewalSourceId,
+  effectiveAt: "2026-11-26T10:00:00.000Z", amountDueNow: "0.00", recurringAmount: "999.00", currency: "MXN" };
+const renewalReceipt = { attemptId: id, operation: "resume_renewal", status: "ready", statusFresh: true,
+  subscriptionId: id, planCode: "business", planPriceCode: "monthly", checkoutStatus: "pending", subscriptionStatus: "pending",
+  checkoutUrl: "https://www.sandbox.paypal.com/approve/renewal", renewalResume: renewal };
+test("renewal resumption keeps the known source, zero due today and future quote; retry reauthorizes management with the same key", async () => {
+  const calls = mock(() => Response.json(renewalReceipt));
+  const client = createPaymentsClient(config);
+  const request = { organizationId: id, userId: id, operation: "resume_renewal", idempotencyKey: id,
+    expectedSubscriptionId: renewalSourceId, planCode: "business", planPriceCode: "monthly" };
+  const receipt = await client.attempts.create(request);
+  assert.deepEqual(receipt.renewalResume, renewal);
+  await client.attempts.retry(id, { organizationId: id, userId: id });
+  const tokenCalls = calls.filter(c => c.url === config.tokenUrl);
+  assert.ok(tokenCalls.every(c => c.init.body.get("scope").includes("billing.subscriptions.manage") || c.init.body.get("scope").includes("billing.integration.checkout.read")));
+  const mutations = calls.filter(c => c.init.method === "POST" && c.url !== config.tokenUrl);
+  assert.equal(mutations.length, 2);
+  const payload = JSON.parse(mutations[0].init.body);
+  assert.equal(payload.idempotencyKey, id);
+  assert.equal(payload.expectedSubscriptionId, renewalSourceId);
+  assert.equal(Object.hasOwn(payload, "legalAcceptanceId"), false);
+  assert.match(mutations[1].url, new RegExp(`${id}/retry`));
+});
+for (const state of ["scheduled", "effective", "failed"]) {
+  test(`renewal ${state} never exposes an old provider approval URL`, async () => {
+    mock(() => Response.json({ ...renewalReceipt, renewalResume: { ...renewal, state } }));
+    const receipt = await createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id });
+    assert.equal(receipt.checkoutUrl, undefined);
+    assert.equal(receipt.renewalResume.state, state);
+  });
+}
+for (const invalid of [{ amountDueNow: "999.00" }, { amountDueNow: "0" }, { recurringAmount: "NaN" },
+  { recurringAmount: "0.00" }, { effectiveAt: null }, { currency: "mxn" }, { sourceSubscriptionId: id }]) {
+  test(`renewal refuses an unsafe quote ${JSON.stringify(invalid)}`, async () => {
+    mock(() => Response.json({ ...renewalReceipt, renewalResume: { ...renewal, ...invalid } }));
+    await assert.rejects(createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id }), { code: "contract" });
+  });
+}
+test("renewal creation refuses a receipt for another source or plan", async () => {
+  const request = { organizationId: id, userId: id, operation: "resume_renewal", idempotencyKey: id,
+    expectedSubscriptionId: renewalSourceId, planCode: "business", planPriceCode: "monthly" };
+  for (const altered of [ { renewalResume: { ...renewal, sourceSubscriptionId: "22222222-2222-4222-8222-222222222222" } }, { planCode: "other" }, { planPriceCode: "yearly" }, { renewalResume: undefined }, { operation: "checkout", renewalResume: undefined } ]) {
+    mock(() => Response.json({ ...renewalReceipt, ...altered }));
+    await assert.rejects(createPaymentsClient(config).attempts.create(request), { code: "contract" });
+  }
+});
+test("pending renewal summaries bind source and new subscription and hide terminal approval links", async () => {
+  const summary = { ...subscriptionSummary(), id: renewalSourceId, status: "cancelled", cancelAtPeriodEnd: true,
+    pendingRenewal: { ...renewal, state: "scheduled", attemptId: id, subscriptionId: id, checkoutUrl: renewalReceipt.checkoutUrl } };
+  mock(() => Response.json(summary));
+  const parsed = await createPaymentsClient(config).subscriptions.current(id);
+  assert.equal(parsed.pendingRenewal.checkoutUrl, null);
+  for (const invalid of [{ sourceSubscriptionId: id }, { subscriptionId: renewalSourceId }, { attemptId: "bad" }, { amountDueNow: "1.00" }]) {
+    mock(() => Response.json({ ...summary, pendingRenewal: { ...summary.pendingRenewal, ...invalid } }));
+    await assert.rejects(createPaymentsClient(config).subscriptions.current(id), { code: "contract" });
+  }
+});
+
+const renewalRevisionId = "22222222-2222-4222-8222-222222222222";
+const renewalRevisionCheckoutId = "33333333-3333-4333-8333-333333333333";
+const renewalRevision = { ...renewal, renewalSubscriptionId: id, targetPlanCode: "professional", targetPlanPriceCode: "monthly",
+  recurringAmount: "499.00", cancellationRequested: false, action: "approve_subscription", checkoutUrl: "https://www.sandbox.paypal.com/revise/future" };
+const renewalRevisionReceipt = { ...renewalReceipt, attemptId: renewalRevisionId, operation: "change_renewal_plan",
+  checkoutId: renewalRevisionCheckoutId, planCode: "professional", checkoutUrl: "https://www.sandbox.paypal.com/old",
+  renewalResume: undefined, renewalPlanChange: renewalRevision };
+const renewalRevisionRequest = { organizationId: id, userId: id, idempotencyKey: renewalRevisionId,
+  operation: "change_renewal_plan", expectedSubscriptionId: renewalSourceId, expectedRenewalSubscriptionId: id,
+  planCode: "professional", planPriceCode: "monthly" };
+test("changing a future renewal binds source and existing candidate without altering its first date or charging today", async () => {
+  const calls = mock(() => Response.json(renewalRevisionReceipt));
+  const receipt = await createPaymentsClient(config).attempts.create(renewalRevisionRequest);
+  assert.equal(receipt.checkoutUrl, renewalRevision.checkoutUrl);
+  assert.deepEqual(receipt.renewalPlanChange, renewalRevision);
+  const payload = JSON.parse(calls.find(c => c.url.includes("/payment-attempts") && c.init.method === "POST").init.body);
+  assert.equal(payload.operation, "change_renewal_plan");
+  assert.equal(payload.expectedSubscriptionId, renewalSourceId);
+  assert.equal(payload.expectedRenewalSubscriptionId, id);
+  assert.equal(Object.hasOwn(payload, "effectiveAt"), false);
+  assert.equal(Object.hasOwn(payload, "amountDueNow"), false);
+});
+for (const variant of [
+  { state: "scheduled", cancellationRequested: false }, { state: "scheduled", cancellationRequested: true },
+  { state: "failed", cancellationRequested: true }, { state: "awaiting_approval", checkoutUrl: null },
+]) {
+  test(`future renewal revision keeps only its current restoration or approval URL ${JSON.stringify(variant)}`, async () => {
+    mock(() => Response.json({ ...renewalRevisionReceipt, renewalPlanChange: { ...renewalRevision, ...variant } }));
+    const receipt = await createPaymentsClient(config).attempts.get(renewalRevisionId, { organizationId: id, userId: id });
+    const active = variant.state === "scheduled" && variant.cancellationRequested;
+    assert.equal(receipt.checkoutUrl, active ? renewalRevision.checkoutUrl : undefined);
+    assert.notEqual(receipt.checkoutUrl, renewalRevisionReceipt.checkoutUrl);
+  });
+}
+for (const invalid of [{ amountDueNow: "1.00" }, { renewalSubscriptionId: renewalSourceId }, { targetPlanCode: "other" },
+  { targetPlanPriceCode: "yearly" }, { cancellationRequested: "true" }, { action: "approve_payment" }, { checkoutUrl: "http://unsafe.test/approve" }]) {
+  test(`future renewal revision refuses unsafe binding ${JSON.stringify(invalid)}`, async () => {
+    mock(() => Response.json({ ...renewalRevisionReceipt, renewalPlanChange: { ...renewalRevision, ...invalid } }));
+    await assert.rejects(createPaymentsClient(config).attempts.get(renewalRevisionId, { organizationId: id, userId: id }), { code: "contract" });
+  });
+}
+test("future revision creation rejects wrong operations, source, candidate and missing revision receipts", async () => {
+  for (const changed of [{ operation: "checkout", renewalPlanChange: undefined }, { renewalPlanChange: undefined },
+    { subscriptionId: renewalSourceId }, { checkoutId: undefined }, { renewalPlanChange: { ...renewalRevision, sourceSubscriptionId: "44444444-4444-4444-8444-444444444444" } }]) {
+    mock(() => Response.json({ ...renewalRevisionReceipt, ...changed }));
+    await assert.rejects(createPaymentsClient(config).attempts.create(renewalRevisionRequest), { code: "contract" });
+  }
+  const calls = mock(() => { throw new Error("Invalid input must not reach transport"); });
+  await assert.rejects(createPaymentsClient(config).attempts.create({ ...renewalRevisionRequest, expectedRenewalSubscriptionId: undefined }), { code: "configuration" });
+  await assert.rejects(createPaymentsClient(config).attempts.create({ ...renewalRevisionRequest, operation: "resume_renewal" }), { code: "configuration" });
+  assert.equal(calls.length, 0);
+});
+test("future authorized plan names and revision recovery survive subscription parsing without replacing current paid plan", async () => {
+  const summary = { ...subscriptionSummary(), id: renewalSourceId, planCode: "business", status: "cancelled", cancelAtPeriodEnd: true,
+    pendingRenewal: { ...renewal, recurringAmount: "499.00", planCode: "professional", planPriceCode: "monthly", state: "scheduled", attemptId: id, subscriptionId: id },
+    pendingRenewalPlanChange: { ...renewalRevision, attemptId: renewalRevisionId, checkoutId: renewalRevisionCheckoutId } };
+  mock(() => Response.json(summary));
+  const receipt = await createPaymentsClient(config).subscriptions.current(id);
+  assert.equal(receipt.planCode, "business");
+  assert.equal(receipt.pendingRenewal.planCode, "professional");
+  assert.equal(receipt.pendingRenewal.recurringAmount, "499.00");
+  assert.equal(receipt.pendingRenewalPlanChange.checkoutUrl, renewalRevision.checkoutUrl);
+  mock(() => Response.json({ ...renewalReceipt, renewalResume: { ...renewal, planCode: "professional", planPriceCode: "monthly", recurringAmount: "499.00" } }));
+  const resumed = await createPaymentsClient(config).attempts.get(id, { organizationId: id, userId: id });
+  assert.equal(resumed.planCode, "business");
+  assert.equal(resumed.renewalResume.planCode, "professional");
+});
+
+test("a later canonical cancellation restoration replaces a terminal receipt without reviving its target approval", async () => {
+  let value = { ...renewalRevisionReceipt, status: "rejected", errorCode: "PAYMENT_ATTEMPT_CANCELLED",
+    checkoutUrl: undefined, renewalPlanChange: { ...renewalRevision, state: "failed", cancellationRequested: true, action: "none", checkoutUrl: null } };
+  mock(() => Response.json(value));
+  const client = createPaymentsClient(config), buyer = { organizationId: id, userId: id };
+  assert.equal((await client.attempts.get(renewalRevisionId, buyer)).checkoutUrl, undefined);
+  const restoreUrl = "https://www.sandbox.paypal.com/restore/original-after-late-approval";
+  value = { ...value, status: "ready", errorCode: undefined, checkoutUrl: "https://www.sandbox.paypal.com/old-target-approval",
+    renewalPlanChange: { ...renewalRevision, state: "awaiting_approval", cancellationRequested: true, checkoutUrl: restoreUrl } };
+  const latest = await client.attempts.get(renewalRevisionId, buyer);
+  assert.equal(latest.status, "ready");
+  assert.equal(latest.checkoutUrl, restoreUrl);
+  assert.equal(latest.renewalPlanChange.cancellationRequested, true);
+  assert.equal(latest.renewalPlanChange.amountDueNow, "0.00");
+});

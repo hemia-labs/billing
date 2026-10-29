@@ -19,6 +19,7 @@ import {
 import { BillingLicenseCalculatorService } from '../../licenses';
 import {
   cancellationIntent,
+  checkoutAbandonment,
   pendingPlanChange,
 } from '../../subscriptions-management/subscription-management-state';
 import type {
@@ -141,7 +142,14 @@ export class BillingPaypalRefundsService {
 
     const fullyRefunded = refundedCents === paymentCents;
     const previousStatus = payment.status;
-    if (fullyRefunded) payment.status = PaymentStatus.Refunded;
+    if (fullyRefunded) {
+      payment.status = PaymentStatus.Refunded;
+      if (payment.metadata?.refundReview)
+        payment.metadata = {
+          ...payment.metadata,
+          refundReview: { state: 'completed', refundId },
+        };
+    }
     await payments.save(payment);
 
     await this.audit.record({
@@ -169,6 +177,29 @@ export class BillingPaypalRefundsService {
       return { processingStatus: WebhookProcessingStatus.Processed };
     }
 
+    if (checkoutAbandonment(payment.subscription)) {
+      const abandoned = await manager
+        .getRepository(BillingSubscriptionEntity)
+        .findOne({
+          where: { id: payment.subscription.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+      const marker = abandoned && checkoutAbandonment(abandoned);
+      if (abandoned && marker) {
+        marker.refundReview = {
+          state: 'completed',
+          reason: 'abandoned_checkout',
+          detectedAt: refundedAt.toISOString(),
+          refundId,
+        };
+        abandoned.metadata = {
+          ...abandoned.metadata,
+          checkoutAbandonment: marker,
+        };
+        await manager.getRepository(BillingSubscriptionEntity).save(abandoned);
+      }
+      return { processingStatus: WebhookProcessingStatus.Processed };
+    }
     const periodStart = payment.periodStart;
     const periodEnd = payment.periodEnd;
     if (!periodStart || !periodEnd) {
@@ -204,6 +235,8 @@ export class BillingPaypalRefundsService {
     });
     if (!subscription) return this.failed('Subscription not found');
 
+    if (checkoutAbandonment(subscription))
+      return { processingStatus: WebhookProcessingStatus.Processed };
     const marker = subscription.metadata.refundRevocation;
     if (marker && typeof marker === 'object') {
       return { processingStatus: WebhookProcessingStatus.Processed };

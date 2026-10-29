@@ -54,8 +54,9 @@ export type CreateCheckoutAttemptInput = {
 };
 export type CheckoutAttemptResponse = {
   provider?: string;
+  abandoned?: boolean;
   attemptId: string;
-  operation?: "checkout" | "change_plan";
+  operation?: "checkout" | "change_plan" | "resume_renewal" | "change_renewal_plan";
   status: "pending" | "processing" | "ready" | "rejected";
   planCode?: string;
   planPriceCode?: string;
@@ -69,6 +70,8 @@ export type CheckoutAttemptResponse = {
   retryAfterSeconds?: number;
   errorCode?: string;
   planChange?: import("./index").PlanChangeState;
+  renewalResume?: RenewalResume;
+  renewalPlanChange?: RenewalPlanChange;
 };
 export type LicenseAccess = {
   active: boolean;
@@ -113,9 +116,10 @@ export type CancelSubscriptionRequest = {
 };
 
 export type PaymentAttemptInput = CreateCheckoutAttemptInput & {
+  expectedRenewalSubscriptionId?: string;
   organizationId: string;
   userId: string;
-  operation: "checkout" | "change_plan";
+  operation: "checkout" | "change_plan" | "resume_renewal" | "change_renewal_plan";
   successUrl?: string;
   cancelUrl?: string;
 };
@@ -135,3 +139,43 @@ export type PaymentSnapshot = {
 export type SnapshotSink = (
   snapshot: PaymentSnapshot,
 ) => Promise<{ applied: boolean }>;
+
+export type ResumeRenewalRequest = {
+  idempotencyKey: string;
+  expectedSubscriptionId: string;
+};
+export type RenewalResume = {
+  planCode?: string;
+  planPriceCode?: string;
+  state: "preparing" | "awaiting_approval" | "scheduled" | "effective" | "failed";
+  sourceSubscriptionId: string;
+  effectiveAt: string;
+  amountDueNow: "0.00";
+  recurringAmount: string;
+  currency: string;
+};
+export type PendingRenewal = RenewalResume & {
+  attemptId?: string;
+  subscriptionId: string;
+  checkoutUrl?: string | null;
+};
+
+export type ChangeRenewalPlanRequest = {
+  idempotencyKey: string;
+  expectedSubscriptionId: string;
+  expectedRenewalSubscriptionId: string;
+  targetPlanCode: string;
+  targetPlanPriceCode: string;
+};
+export type RenewalPlanChange = RenewalResume & {
+  renewalSubscriptionId: string;
+  targetPlanCode: string;
+  targetPlanPriceCode: string;
+  cancellationRequested: boolean;
+  action: "approve_subscription" | "none";
+  checkoutUrl: string | null;
+};
+export type PendingRenewalPlanChange = RenewalPlanChange & {
+  attemptId?: string;
+  checkoutId: string;
+};

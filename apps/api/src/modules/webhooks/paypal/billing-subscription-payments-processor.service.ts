@@ -1,4 +1,11 @@
-import { applyConfirmedPlanChange } from '../../subscriptions-management/subscription-management-state';
+import {
+  applyConfirmedPlanChange,
+  checkoutAbandonment,
+  acceptRenewalResumePayment,
+  renewalResumePending,
+  observeRenewalResume,
+} from '../../subscriptions-management/subscription-management-state';
+import { applyRenewalPlanChangeObservation } from '../../subscriptions-management/renewal-plan-change-state';
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { BillingAuditService } from '../../audit';
@@ -174,7 +181,7 @@ export class BillingSubscriptionPaymentsProcessorService {
     input: BillingWebhookProcessorInput,
     context: BillingWebhookProcessorContext,
   ): Promise<BillingWebhookProcessorResult> {
-    const subscription = await this.updateSubscriptionFromPaypal(
+    let subscription = await this.updateSubscriptionFromPaypal(
       manager,
       input,
       false,
@@ -183,7 +190,40 @@ export class BillingSubscriptionPaymentsProcessorService {
     if (!subscription)
       return this.retryableFailure('Payment subscription not found');
 
-    await this.upsertPayment(manager, input, PaymentStatus.Paid, subscription);
+    const payment = await this.upsertPayment(
+      manager,
+      input,
+      PaymentStatus.Paid,
+      subscription,
+    );
+    if (renewalResumePending(subscription)) {
+      if (
+        acceptRenewalResumePayment(subscription, {
+          ...payment,
+          paidAt: this.dateOrNull(input.resource.create_time),
+        })
+      ) {
+        await manager
+          .getRepository(BillingSubscriptionEntity)
+          .save(subscription);
+        subscription =
+          (await this.updateSubscriptionFromPaypal(
+            manager,
+            input,
+            false,
+            context,
+          )) ?? subscription;
+      } else if (!checkoutAbandonment(subscription)) {
+        payment.metadata = {
+          ...payment.metadata,
+          renewalResumeReview: {
+            state: 'required',
+            reason: 'unexpected_payment',
+          },
+        };
+        await manager.getRepository(BillingPaymentEntity).save(payment);
+      }
+    }
 
     await this.upsertLicense(manager, input, subscription);
     return { processingStatus: WebhookProcessingStatus.Processed };
@@ -193,6 +233,24 @@ export class BillingSubscriptionPaymentsProcessorService {
     manager: EntityManager,
     input: BillingWebhookProcessorInput,
   ): Promise<BillingWebhookProcessorResult> {
+    const candidate = await this.findSubscriptionForPayment(
+      manager,
+      input.resource,
+    );
+    const subscription = candidate
+      ? await manager.getRepository(BillingSubscriptionEntity).findOne({
+          where: { id: candidate.id },
+          lock: { mode: 'pessimistic_write', tables: ['subscriptions'] },
+          relations: {
+            plan: {
+              versions: {
+                prices: { providerPrices: true },
+                entitlements: { feature: true },
+              },
+            },
+          },
+        })
+      : null;
     const result = await this.processPaymentStatus(
       manager,
       input,
@@ -200,12 +258,12 @@ export class BillingSubscriptionPaymentsProcessorService {
     );
     if (result.processingStatus !== WebhookProcessingStatus.Processed)
       return result;
-    const subscription = await this.findSubscriptionForPayment(
-      manager,
-      input.resource,
-    );
 
-    if (subscription) {
+    if (
+      subscription &&
+      !checkoutAbandonment(subscription) &&
+      !renewalResumePending(subscription)
+    ) {
       const previousStatus = subscription.status;
       subscription.status = SubscriptionStatus.PastDue;
       subscription.graceUntil = this.addDays(new Date(), GRACE_DAYS);
@@ -300,6 +358,57 @@ export class BillingSubscriptionPaymentsProcessorService {
     const paypalSubscription =
       context.paypalSubscription ??
       (await this.paypal.getSubscription(providerSubscriptionId));
+    const abandoned = checkoutAbandonment(subscription);
+    if (abandoned) {
+      // Provider observations never resurrect a locally abandoned checkout, even out of order.
+      const normalized = normalizePaypalSubscription(paypalSubscription);
+      if (
+        ![SubscriptionStatus.Cancelled, SubscriptionStatus.Expired].includes(
+          normalized.subscriptionStatus,
+        )
+      ) {
+        abandoned.providerCancellation.state = 'pending';
+        abandoned.providerCancellation.nextAttemptAt = new Date().toISOString();
+      }
+      if (normalized.lastPaymentAt && !abandoned.refundReview) {
+        abandoned.refundReview = {
+          state: 'required',
+          reason: 'abandoned_checkout',
+          detectedAt: new Date().toISOString(),
+        };
+        await this.audit.record({
+          manager,
+          organizationId: subscription.organizationId,
+          action: 'billing.checkout.abandoned_payment_review_required',
+          resourceType: 'billing_subscription',
+          resourceId: subscription.id,
+          metadata: this.toAuditMetadata(input, {
+            checkoutId: abandoned.checkoutId,
+          }),
+        });
+      }
+      subscription.metadata = {
+        ...subscription.metadata,
+        checkoutAbandonment: abandoned,
+      };
+      subscription.status = SubscriptionStatus.Cancelled;
+      subscription.cancelAtPeriodEnd = false;
+      subscription.nextBillingTime = null;
+      subscription.graceUntil = null;
+      return subscriptions.save(subscription);
+    }
+    if (renewalResumePending(subscription)) {
+      await applyRenewalPlanChangeObservation(
+        manager,
+        subscription,
+        normalizePaypalSubscription(paypalSubscription),
+      );
+      const held = observeRenewalResume(
+        subscription,
+        normalizePaypalSubscription(paypalSubscription),
+      );
+      if (held) return subscriptions.save(subscription);
+    }
     const paypalRaw = paypalSubscription.raw;
     const billingInfo = this.asRecord(paypalRaw.billing_info);
     const previousStatus = subscription.status;
@@ -383,6 +492,8 @@ export class BillingSubscriptionPaymentsProcessorService {
     input: BillingWebhookProcessorInput,
     subscription: BillingSubscriptionEntity,
   ): Promise<void> {
+    if (checkoutAbandonment(subscription) || renewalResumePending(subscription))
+      return;
     const status = subscription.metadata.refundRevocation
       ? LicenseStatus.Revoked
       : subscription.status === SubscriptionStatus.Active
@@ -469,7 +580,11 @@ export class BillingSubscriptionPaymentsProcessorService {
         metadata: {},
       });
 
-    if (existing?.status === PaymentStatus.Refunded) return existing;
+    if (
+      existing?.status === PaymentStatus.Refunded ||
+      existing?.status === PaymentStatus.Reversed
+    )
+      return existing;
 
     payment.providerPaymentId = this.extractProviderPaymentId(input.resource);
     payment.providerCaptureId = this.extractPaymentCaptureId(input.resource);
@@ -484,6 +599,9 @@ export class BillingSubscriptionPaymentsProcessorService {
     payment.metadata = {
       ...payment.metadata,
       paypalResource: input.resource,
+      ...(checkoutAbandonment(subscription)
+        ? { refundReview: { state: 'required', reason: 'abandoned_checkout' } }
+        : {}),
     };
 
     const saved = await payments.save(payment);

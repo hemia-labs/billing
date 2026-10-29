@@ -224,6 +224,7 @@ function fixture() {
               (row) =>
                 row.organizationId === args[0] &&
                 row.productCode === args[1] &&
+                (!args[2] || row.subscriptionId!==args[2]) &&
                 !row.deletedAt &&
                 ['active', 'grace'].includes(String(row.status)) &&
                 (!row.validUntil ||
@@ -399,6 +400,29 @@ function fixture() {
 }
 
 describe('checkout idempotency', () => {
+  it('resumes the cancelled paid agreement as one future contract without changing the original license or evidence', async()=>{
+    const f=fixture();delete f.input.legalAcceptanceId;
+    const sourceId=randomUUID(), paidThrough=new Date(Date.now()+30*86400000);
+    const plan=[...f.table(BillingPlanEntity).values()][0];
+    const source={id:sourceId,organizationId:f.input.organizationId,productCode:f.input.productCode,planCode:f.input.planCode,planPriceCode:f.input.planPriceCode,provider:BillingProvider.Paypal,providerSubscriptionId:'I-CANCELLED',status:'cancelled',cancelAtPeriodEnd:true,currentPeriodEnd:paidThrough,plan,planId:plan.id,planPriceId:'price',planPrice:{id:'price',code:f.input.planPriceCode,amount:'999.00',currency:'MXN',billingInterval:'monthly'},providerPriceId:f.providerPrice.id,providerPrice:f.providerPrice,metadata:{cancellation:{state:'scheduled'}}};
+    f.table(BillingSubscriptionEntity).set(sourceId,source);
+    const license={id:randomUUID(),organizationId:f.input.organizationId,productCode:f.input.productCode,subscriptionId:sourceId,status:'active',validUntil:paidThrough};
+    f.table(BillingLicenseEntity).set(license.id,license);
+    const before=structuredClone({source,license});
+    Object.assign(f.paypal,{getPlan:jest.fn(async()=>({status:'ACTIVE',billing_cycles:[{tenure_type:'REGULAR',frequency:{interval_unit:'MONTH',interval_count:1},pricing_scheme:{fixed_price:{value:'999.00',currency_code:'MXN'}}}],payment_preferences:{setup_fee:{value:'0'}}}))});
+    f.paypal.getSubscription.mockResolvedValueOnce({id:'I-CANCELLED',status:'CANCELLED',raw:{status:'CANCELLED'}} as never);
+    const request={...f.input,resumeSourceSubscriptionId:sourceId};
+    const first=await f.service().createCheckoutSession(request,f.actor);
+    expect(first.subscriptionId).not.toBe(sourceId);
+    expect(await f.service().createCheckoutSession(request,f.actor)).toEqual(first);
+    expect(f.paypal.createSubscription).toHaveBeenCalledTimes(1);
+    expect(f.paypal.createSubscription.mock.calls[0][0]).toMatchObject({startTime:paidThrough.toISOString(),providerPlanId:'P-ORIGINAL'});
+    expect(f.table(BillingSubscriptionEntity).get(sourceId)).toEqual(before.source);
+    expect(f.table(BillingLicenseEntity).get(license.id)).toEqual(before.license);
+    expect(f.table(BillingSubscriptionEntity).get(first.subscriptionId)?.metadata).toMatchObject({renewalResume:{sourceSubscriptionId:sourceId,recurringAmount:'999.00',amountDueNow:'0.00'}});
+    await expect(f.service().createCheckoutSession({...request,idempotencyKey:randomUUID()},f.actor)).rejects.toBeDefined();
+    expect(f.paypal.createSubscription).toHaveBeenCalledTimes(1);
+  });
   it('creates and replays a payments-only checkout without Legal or fabricated evidence', async () => {
     const f = fixture();
     delete f.input.legalAcceptanceId;

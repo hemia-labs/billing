@@ -21,3 +21,7 @@ export const acceptInput = adapt(shared.acceptInput);
 export const legalContextInput = adapt(shared.legalContextInput);
 export const webhookInput = adapt(shared.webhookInput);
 export const planChangeQuoteInput = adapt(shared.planChangeQuoteInput);
+
+export const resumeRenewalInput = adapt(shared.resumeRenewalInput);
+
+export const changeRenewalPlanInput = adapt(shared.changeRenewalPlanInput);

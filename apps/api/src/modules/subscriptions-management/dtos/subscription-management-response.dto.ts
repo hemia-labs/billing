@@ -14,6 +14,21 @@ export interface BillingSubscriptionPlanSummaryDto {
 }
 
 export interface BillingSubscriptionManagementResponseDto {
+  pendingRenewalPlanChange?: NonNullable<
+    ReturnType<
+      typeof import('../renewal-plan-change-state').renewalPlanChangeResponse
+    >
+  > & { attemptId: string; checkoutId: string };
+  pendingRenewal?: NonNullable<
+    ReturnType<
+      typeof import('../subscription-management-state').renewalResumeResponse
+    >
+  > & {
+    attemptId: string;
+    subscriptionId: string;
+    checkoutUrl?: string | null;
+  };
+  pendingCheckoutAttemptId?: string;
   planPriceCode: string | null;
   cancellation: {
     state: 'pending' | 'scheduled';
@@ -73,6 +88,12 @@ export interface ChangePlanResponseDto {
 }
 
 export interface VerifyCheckoutSessionResponseDto {
+  renewalPlanChange?: ReturnType<
+    typeof import('../renewal-plan-change-state').renewalPlanChangeResponse
+  >;
+  renewalResume?: ReturnType<
+    typeof import('../subscription-management-state').renewalResumeResponse
+  >;
   checkoutUrl?: string | null;
   planChange?: ReturnType<
     typeof import('../subscription-management-state').planChangeResponse

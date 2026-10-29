@@ -82,6 +82,7 @@ export async function applyConfirmedPlanChange(
 ): Promise<void> {
   const change = pendingPlanChange(subscription);
   if (
+    checkoutAbandonment(subscription) ||
     !change ||
     change.state === 'failed' ||
     !!change.cancelRequestedAt ||
@@ -228,7 +229,9 @@ export function planChangeResponse(
   change: PendingPlanChange,
   revisionUrl?: string | null,
 ) {
-  const terminal = ['scheduled', 'effective', 'failed'].includes(change.state);
+  const terminal =
+    ['effective', 'failed'].includes(change.state) ||
+    (change.state === 'scheduled' && !change.cancelRequestedAt);
   const payment =
     !change.cancelRequestedAt &&
     !!change.approvedAt &&
@@ -255,4 +258,167 @@ export function planChangeResponse(
           ? (change.paymentApprovalUrl ?? null)
           : (revisionUrl ?? null),
   };
+}
+
+export type CheckoutAbandonment = {
+  checkoutId: string;
+  attemptId: string;
+  abandonedAt: string;
+  actorUserId: string;
+  providerSubscriptionId: string;
+  providerCancellation: {
+    state: 'pending' | 'completed';
+    attempts: number;
+    nextAttemptAt: string;
+    leaseToken?: string;
+    leaseUntil?: string;
+  };
+  refundReview?: {
+    state: 'required' | 'completed';
+    reason: 'abandoned_checkout';
+    detectedAt: string;
+    refundId?: string;
+  };
+};
+export function checkoutAbandonment(
+  subscription: Pick<BillingSubscriptionEntity, 'metadata'>,
+): CheckoutAbandonment | undefined {
+  const value = subscription.metadata?.checkoutAbandonment;
+  return value && typeof value === 'object'
+    ? (value as CheckoutAbandonment)
+    : undefined;
+}
+
+export type RenewalResume = {
+  state:
+    'preparing' | 'awaiting_approval' | 'scheduled' | 'effective' | 'failed';
+  sourceSubscriptionId: string;
+  effectiveAt: string;
+  amountDueNow: '0.00';
+  recurringAmount: string;
+  currency: string;
+  checkoutId: string;
+  attemptId: string;
+  providerPlanId: string;
+  paidCaptureId?: string;
+  authorizedCheckoutId?: string;
+};
+export function renewalResume(
+  subscription: BillingSubscriptionEntity,
+): RenewalResume | undefined {
+  return subscription.metadata?.renewalResume as RenewalResume | undefined;
+}
+export function renewalResumePending(
+  subscription: BillingSubscriptionEntity,
+): boolean {
+  const resume = renewalResume(subscription);
+  // Only the distinct, unpaid replacement is gated. The paid source never carries this marker.
+  return (
+    !!resume &&
+    resume.sourceSubscriptionId !== subscription.id &&
+    resume.state !== 'effective'
+  );
+}
+export function renewalResumeResponse(subscription: BillingSubscriptionEntity) {
+  const value = renewalResume(subscription);
+  if (!value) return undefined;
+  return {
+    state: checkoutAbandonment(subscription)
+      ? ('failed' as const)
+      : value.state,
+    sourceSubscriptionId: value.sourceSubscriptionId,
+    effectiveAt: value.effectiveAt,
+    amountDueNow: value.amountDueNow,
+    recurringAmount: value.recurringAmount,
+    currency: value.currency,
+    planCode: subscription.planCode,
+    planPriceCode: subscription.planPriceCode,
+  };
+}
+export function acceptRenewalResumePayment(
+  subscription: BillingSubscriptionEntity,
+  payment: {
+    status: string;
+    paidAt: Date | null;
+    amount: string;
+    currency: string;
+    providerCaptureId: string | null;
+  },
+  now = new Date(),
+): boolean {
+  const resume = renewalResume(subscription);
+  if (
+    !Number.isFinite(Date.parse(resume?.effectiveAt ?? '')) ||
+    !Number.isFinite(payment.paidAt?.getTime()) ||
+    !Number.isFinite(now.getTime())
+  )
+    return false;
+  if (
+    !resume ||
+    resume.sourceSubscriptionId === subscription.id ||
+    checkoutAbandonment(subscription) ||
+    resume.state === 'failed' ||
+    payment.status !== 'paid' ||
+    !payment.providerCaptureId ||
+    !payment.paidAt ||
+    payment.paidAt.getTime() < Date.parse(resume.effectiveAt) ||
+    now.getTime() < Date.parse(resume.effectiveAt) ||
+    !sameRenewalAmount(payment.amount, resume.recurringAmount) ||
+    payment.currency !== resume.currency
+  )
+    return false;
+  resume.paidCaptureId ??= payment.providerCaptureId;
+  return true;
+}
+export function sameRenewalAmount(left: string, right: string): boolean {
+  const cents = (value: string): bigint | null => {
+    if (!/^\d{1,12}(?:\.\d{1,2})?$/.test(value)) return null;
+    const [whole, fraction = ''] = value.split('.');
+    return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  };
+  const expected = cents(right);
+  return expected !== null && cents(left) === expected;
+}
+export function observeRenewalResume(
+  subscription: BillingSubscriptionEntity,
+  provider: ProviderSubscription,
+): boolean {
+  const resume = renewalResume(subscription);
+  if (!resume || checkoutAbandonment(subscription)) return false;
+  if (resume.state === 'failed') return true;
+  if (resume.state === 'effective') return false;
+  const paid =
+    resume.paidCaptureId &&
+    resume.providerPlanId &&
+    provider.planId === resume.providerPlanId &&
+    provider.nextBillingAt &&
+    Date.parse(provider.nextBillingAt) > Date.parse(resume.effectiveAt) &&
+    Date.now() >= Date.parse(resume.effectiveAt) &&
+    provider.lastPaymentAt &&
+    Date.parse(provider.lastPaymentAt) >= Date.parse(resume.effectiveAt);
+  if (paid && provider.subscriptionStatus === SubscriptionStatus.Active) {
+    resume.state = 'effective';
+    const change = subscription.metadata.renewalPlanChange as
+      { state?: string } | undefined;
+    if (change?.state === 'scheduled') change.state = 'effective';
+    return false;
+  }
+  resume.state = [
+    SubscriptionStatus.Cancelled,
+    SubscriptionStatus.Expired,
+  ].includes(provider.subscriptionStatus)
+    ? 'failed'
+    : provider.subscriptionStatus === SubscriptionStatus.Active
+      ? 'scheduled'
+      : 'awaiting_approval';
+  subscription.status =
+    resume.state === 'failed'
+      ? SubscriptionStatus.Cancelled
+      : SubscriptionStatus.Pending;
+  subscription.currentPeriodStart = null;
+  subscription.currentPeriodEnd = null;
+  subscription.nextBillingTime = null;
+  subscription.graceUntil = null;
+  subscription.metadata = { ...subscription.metadata, renewalResume: resume };
+  return true;
 }

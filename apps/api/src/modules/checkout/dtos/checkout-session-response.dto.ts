@@ -12,6 +12,13 @@ export class CheckoutSessionResponseDto {
 }
 
 export class CheckoutSessionStatusResponseDto {
+  renewalPlanChange?: ReturnType<
+    typeof import('../../subscriptions-management/renewal-plan-change-state').renewalPlanChangeResponse
+  >;
+  renewalResume?: ReturnType<
+    typeof import('../../subscriptions-management/subscription-management-state').renewalResumeResponse
+  >;
+  abandoned?: boolean;
   planChange?: Partial<
     ReturnType<
       typeof import('../../subscriptions-management/subscription-management-state').planChangeResponse

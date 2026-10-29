@@ -14,6 +14,7 @@ import {
   PaymentStatus,
   SubscriptionAddonStatus,
   SubscriptionStatus,
+  WebhookProcessingStatus,
 } from '../../../../apps/api/src/modules/billing-shared';
 import { BillingLicenseCalculatorService } from '../../../../apps/api/src/modules/licenses';
 import { BillingPaypalRefundsService } from '../../../../apps/api/src/modules/webhooks/paypal/billing-paypal-refunds.service';
@@ -448,4 +449,41 @@ it('does not revive an upgrade renewal when its proration is refunded after canc
     state: 'failed',
   });
   expect(f.subscription.cancelAtPeriodEnd).toBe(true);
+});
+
+it('records actual late refunds against abandoned checkout without mutating any active plan/license or inventing refund jobs', async () => {
+  const f = fixture();
+  f.payment.metadata = {
+    refundReview: { state: 'required', reason: 'abandoned_checkout' },
+  };
+  f.subscription.status = SubscriptionStatus.Cancelled;
+  f.subscription.metadata = {
+    checkoutAbandonment: {
+      checkoutId: 'old',
+      attemptId: 'old',
+      abandonedAt: new Date().toISOString(),
+      actorUserId: 'buyer',
+      providerSubscriptionId: 'I-SUBSCRIPTION',
+      providerCancellation: {
+        state: 'pending',
+        attempts: 0,
+        nextAttemptAt: new Date().toISOString(),
+      },
+    },
+  };
+  const license = structuredClone(f.license);
+  expect(
+    await f.service.process(
+      f.manager,
+      f.input('LATE-REFUND', f.payment.amount),
+    ),
+  ).toMatchObject({ processingStatus: WebhookProcessingStatus.Processed });
+  expect(f.payment.status).toBe(PaymentStatus.Refunded);
+  expect(f.payment.metadata.refundReview).toMatchObject({ state: 'completed' });
+  expect(f.subscription.status).toBe(SubscriptionStatus.Cancelled);
+  expect(f.license).toEqual(license);
+  expect(f.jobs).toHaveLength(0);
+  expect(f.subscription.metadata.checkoutAbandonment).toMatchObject({
+    refundReview: { state: 'completed' },
+  });
 });

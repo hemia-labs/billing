@@ -35,6 +35,8 @@ import {
 import {
   acceptInput,
   cancellationInput,
+  resumeRenewalInput,
+  changeRenewalPlanInput,
   attemptInput,
   legalContextInput,
   prepareInput,
@@ -141,6 +143,22 @@ export class PaymentsController {
       await this.payments.authorize(request, "subscription.manage"),
       cancellationInput(input),
     );
+  }
+  @Post("subscription/resume-renewal")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async resumeRenewal(@Req() request: unknown, @Body() input: unknown,
+    @Res({ passthrough: true }) response: ResponseStatus) {
+    return receipt(await this.payments.resumeRenewal(
+      await this.payments.authorize(request, "subscription.manage"), resumeRenewalInput(input)), response);
+  }
+  @Post("subscription/change-renewal-plan")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  async changeRenewalPlan(@Req() request: unknown, @Body() input: unknown,
+    @Res({ passthrough: true }) response: ResponseStatus) {
+    return receipt(await this.payments.changeRenewalPlan(
+      await this.payments.authorize(request, "subscription.manage"), changeRenewalPlanInput(input)), response);
   }
   @Post("subscription/change-plan")
   @HttpCode(200)

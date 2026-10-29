@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { PaypalApiException } from '../paypal/types/paypal.types';
 import {
   BadGatewayException,
@@ -20,6 +21,12 @@ const record = (value: unknown): Record<string, unknown> =>
     : {};
 const text = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
+function moneyCents(value: unknown): bigint | null {
+  if (typeof value !== 'string' || !/^\d{1,12}(?:\.\d{1,2})?$/.test(value))
+    return null;
+  const [whole, fraction = ''] = value.split('.');
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+}
 export function paypalApprovalUrl(
   value: string | undefined,
 ): string | undefined {
@@ -54,6 +61,7 @@ export function paypalSubscription(
   };
   return {
     id: value.id,
+    approvalPending: value.status === 'APPROVAL_PENDING',
     status: value.status,
     subscriptionStatus:
       statuses[value.status ?? ''] ?? SubscriptionStatus.Pending,
@@ -125,6 +133,76 @@ export class PaypalBillingAdapter implements BillingProviderAdapter {
   constructor(private readonly client: PaypalClientService) {}
   validateApprovalUrl(value: string) {
     return paypalApprovalUrl(value)!;
+  }
+  async validateFuturePlan(
+    id: string,
+    expected: { amount: string; currency: string; interval: string },
+  ): Promise<void> {
+    const plan = await this.client.getPlan(id);
+    const cycles = plan.billing_cycles as
+      | Array<{
+          tenure_type?: string;
+          frequency?: { interval_unit?: string; interval_count?: number };
+          pricing_scheme?: {
+            fixed_price?: { value?: string; currency_code?: string };
+          };
+        }>
+      | undefined;
+    const preferences = plan.payment_preferences as
+      { setup_fee?: { value?: string } } | undefined;
+    const cycle = cycles?.[0];
+    const expectedInterval = expected.interval.toUpperCase().replace(/LY$/, '');
+    const base = moneyCents(cycle?.pricing_scheme?.fixed_price?.value);
+    const taxes = plan.taxes as
+      { percentage?: string; inclusive?: boolean } | undefined;
+    const percent = moneyCents(taxes?.percentage ?? '0');
+    const gross =
+      base !== null && percent !== null
+        ? taxes?.inclusive === true
+          ? base
+          : (base * (10000n + percent) + 5000n) / 10000n
+        : null;
+    if (
+      plan.status !== 'ACTIVE' ||
+      !cycles ||
+      cycles.length !== 1 ||
+      cycle?.tenure_type !== 'REGULAR' ||
+      cycle.frequency?.interval_count !== 1 ||
+      cycle.frequency.interval_unit !== expectedInterval ||
+      gross === null ||
+      gross !== moneyCents(expected.amount) ||
+      cycle.pricing_scheme?.fixed_price?.currency_code !== expected.currency ||
+      moneyCents(preferences?.setup_fee?.value ?? '0') !== 0n ||
+      plan.quantity_supported === true
+    )
+      throw new ConflictException(
+        'Provider plan is not an exact future renewal without signup charges',
+      );
+  }
+  async getSubscriptionTransactions(id: string, start: string, end: string) {
+    const response = await this.client.getSubscriptionTransactions(
+      id,
+      start,
+      end,
+    );
+    const rows = response.transactions as
+      | Array<{
+          id: string;
+          status: string;
+          time: string;
+          amount_with_breakdown?: {
+            gross_amount?: { value?: string; currency_code?: string };
+          };
+        }>
+      | undefined;
+    return (rows ?? [])
+      .filter((row) => row.status === 'COMPLETED')
+      .map((row) => ({
+        id: row.id,
+        paidAt: row.time,
+        amount: row.amount_with_breakdown?.gross_amount?.value ?? '',
+        currency: row.amount_with_breakdown?.gross_amount?.currency_code ?? '',
+      }));
   }
   async createSubscription(input: ProviderSubscriptionInput) {
     return paypalSubscription(await this.client.createSubscription(input));

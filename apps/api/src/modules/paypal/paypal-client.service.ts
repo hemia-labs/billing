@@ -64,6 +64,12 @@ export class PaypalClientService {
       },
     };
 
+    if (input.startTime) {
+      payload.start_time = input.startTime;
+      (
+        payload.application_context as Record<string, unknown>
+      ).shipping_preference = 'NO_SHIPPING';
+    }
     if (input.quantity) payload.quantity = String(input.quantity);
 
     if (input.subscriberEmail) {
@@ -92,6 +98,21 @@ export class PaypalClientService {
     };
   }
 
+  async getPlan(id: string): Promise<Record<string, unknown>> {
+    return this.request(`/v1/billing/plans/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+  }
+  async getSubscriptionTransactions(
+    id: string,
+    start: string,
+    end: string,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/v1/billing/subscriptions/${encodeURIComponent(id)}/transactions?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+      { method: 'GET' },
+    );
+  }
   async getSubscription(
     providerSubscriptionId: string,
   ): Promise<PaypalSubscriptionDetails> {

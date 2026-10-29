@@ -39,10 +39,14 @@ export class BillingSubscriptionsManagementController {
     organization: 'organization_id',
     source: 'query',
   })
-  getCurrent(@Query() query: CurrentSubscriptionQueryDto) {
+  getCurrent(
+    @Query() query: CurrentSubscriptionQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
     return this.service.getCurrentSubscription(
       query.organization_id,
       query.product_code,
+      billingServiceActor(request),
     );
   }
 

@@ -1,3 +1,7 @@
+import {
+  checkoutAbandonment,
+  renewalResumePending,
+} from '../subscriptions-management/subscription-management-state';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -48,6 +52,8 @@ export class BillingEntitlementsService {
     manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
     const subscription = await this.findSubscription(subscriptionId, manager);
+    if (checkoutAbandonment(subscription) || renewalResumePending(subscription))
+      return this.emptyResolution();
     const activeAddons = await this.findActiveAddons(subscriptionId, manager);
     const resolution = this.calculate(subscription, activeAddons);
 
@@ -77,6 +83,8 @@ export class BillingEntitlementsService {
     manager?: EntityManager,
   ): Promise<BillingEntitlementsResolution> {
     const subscription = await this.findSubscription(subscriptionId, manager);
+    if (checkoutAbandonment(subscription) || renewalResumePending(subscription))
+      return this.emptyResolution();
     const activeAddons = await this.findActiveAddons(subscriptionId, manager);
     const version = this.planResolver.contractVersion(subscription);
     const persisted = await (

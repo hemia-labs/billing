@@ -1,4 +1,9 @@
 import {
+  renewalResume,
+  renewalResumeResponse,
+  checkoutAbandonment,
+} from '../subscriptions-management/subscription-management-state';
+import {
   pendingPlanChange,
   type PendingPlanChange,
   planChangeResponse,
@@ -41,6 +46,10 @@ import { BillingServicePolicyService } from '../../common/services/billing-servi
 import type { BillingServiceActor } from '../../common/types/billing-service-authorization.type';
 import type { ProviderSubscription } from '../providers/billing-provider.types';
 import { CheckoutInProgressException } from './errors/checkout-in-progress.exception';
+import {
+  renewalPlanChange,
+  renewalPlanChangeResponse,
+} from '../subscriptions-management/renewal-plan-change-state';
 
 // Covers provider request timeouts with margin.
 const CHECKOUT_ATTEMPT_LEASE_MS = 60_000;
@@ -111,7 +120,7 @@ export class BillingCheckoutService {
   }
 
   async createCheckoutSession(
-    dto: CreateCheckoutSessionDto,
+    dto: CreateCheckoutSessionDto & { resumeSourceSubscriptionId?: string },
     actor: BillingServiceActor,
   ): Promise<CheckoutSessionResponseDto> {
     await this.servicePolicy.assertContext(
@@ -146,9 +155,53 @@ export class BillingCheckoutService {
     const requestHash = this.checkoutRequestHash(dto, actor);
     if (previous) this.assertSameRequest(previous, requestHash, actor);
     this.providers.get(provider);
+    let resumeSource: BillingSubscriptionEntity | null = null;
+    if (dto.resumeSourceSubscriptionId && !previous) {
+      resumeSource = await this.subscriptions.findOne({
+        where: {
+          id: dto.resumeSourceSubscriptionId,
+          organizationId: dto.organizationId,
+          productCode: dto.productCode,
+        },
+        relations: {
+          plan: {
+            versions: {
+              prices: { providerPrices: true },
+              entitlements: { feature: true },
+            },
+          },
+          planPrice: true,
+          providerPrice: true,
+        },
+      });
+      this.assertResumeSource(resumeSource, dto);
+      const remote = await this.providers
+        .get(provider)
+        .getSubscription(resumeSource!.providerSubscriptionId!);
+      if (
+        remote.id !== resumeSource!.providerSubscriptionId ||
+        remote.subscriptionStatus !== SubscriptionStatus.Cancelled
+      )
+        throw new ConflictException(
+          'Original renewal is not confirmed cancelled',
+        );
+      const adapter = this.providers.get(provider);
+      if (!adapter.validateFuturePlan)
+        throw new ConflictException(
+          'Provider cannot safely resume future renewal',
+        );
+      await adapter.validateFuturePlan(
+        resumeSource!.providerPrice!.providerPriceId!,
+        {
+          amount: resumeSource!.planPrice!.amount,
+          currency: resumeSource!.planPrice!.currency,
+          interval: resumeSource!.planPrice!.billingInterval,
+        },
+      );
+    }
     // No database connection or transaction is held while validating Legal.
-    const legal =
-      previous || dto.legalAcceptanceId === undefined
+    let legal =
+      previous || resumeSource || dto.legalAcceptanceId === undefined
         ? null
         : await this.hemiaLegal.validateAcceptance({
             organizationId: dto.organizationId,
@@ -156,6 +209,17 @@ export class BillingCheckoutService {
             legalAcceptanceId: dto.legalAcceptanceId,
             productCode: dto.productCode,
           });
+    if (resumeSource?.legalAcceptanceId)
+      legal = {
+        valid: true,
+        raw: {},
+        legalAcceptanceId: resumeSource.legalAcceptanceId,
+        acceptedAt: resumeSource.acceptedAt!.toISOString(),
+        legalSnapshotHash: resumeSource.legalSnapshotHash!,
+        evidence: resumeSource.metadata.legalEvidence as NonNullable<
+          typeof legal
+        >['evidence'],
+      };
     const creator = {
       createdByIssuer: actor.issuer,
       createdByClientId: actor.clientId,
@@ -208,6 +272,21 @@ export class BillingCheckoutService {
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         [`billing.subscription:${dto.organizationId}:${dto.productCode}`],
       );
+      if (resumeSource) {
+        const locked = await manager
+          .getRepository(BillingSubscriptionEntity)
+          .findOne({
+            where: { id: resumeSource.id },
+            lock: { mode: 'pessimistic_write' },
+          });
+        this.assertResumeSource(locked, dto);
+        if (
+          locked!.currentPeriodEnd?.getTime() !==
+            resumeSource.currentPeriodEnd?.getTime() ||
+          locked!.providerPriceId !== resumeSource.providerPriceId
+        )
+          throw new ConflictException('Paid renewal source changed');
+      }
       const renewingContracts = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM subscriptions WHERE organization_id=$1 AND product_code=$2 AND status IN ('pending','active','past_due','suspended') AND deleted_at IS NULL LIMIT 1 FOR SHARE`,
         [dto.organizationId, dto.productCode],
@@ -217,20 +296,23 @@ export class BillingCheckoutService {
           'An existing provider contract must be managed or reconciled before another checkout',
         );
       const activeLicenses = await manager.query<Array<{ id: string }>>(
-        `SELECT id FROM licenses WHERE organization_id=$1 AND product_code=$2 AND status IN ('active','grace') AND deleted_at IS NULL AND (valid_until IS NULL OR valid_until>clock_timestamp()) LIMIT 1 FOR SHARE`,
-        [dto.organizationId, dto.productCode],
+        `SELECT id FROM licenses WHERE organization_id=$1 AND product_code=$2 AND status IN ('active','grace') AND deleted_at IS NULL AND (valid_until IS NULL OR valid_until>clock_timestamp()) AND ($3::uuid IS NULL OR subscription_id<>$3) LIMIT 1 FOR SHARE`,
+        [dto.organizationId, dto.productCode, resumeSource?.id ?? null],
       );
       if (activeLicenses.length)
         throw new ConflictException(
           'An active paid subscription exists; use change-plan',
         );
       const product = await this.findActiveProduct(dto.productCode, manager);
-      const plan = await this.findActivePlan(product.id, dto.planCode, manager);
-      const resolved = this.planResolver.resolve(
-        plan,
-        dto.provider!,
-        dto.planPriceCode,
-      );
+      const plan =
+        resumeSource?.plan ??
+        (await this.findActivePlan(product.id, dto.planCode, manager));
+      const resolved = resumeSource
+        ? {
+            price: resumeSource.planPrice!,
+            providerPrice: resumeSource.providerPrice!,
+          }
+        : this.planResolver.resolve(plan, dto.provider!, dto.planPriceCode);
       if (!resolved.providerPrice.providerPriceId) {
         throw new BadRequestException(
           'Provider plan id is required for checkout',
@@ -340,6 +422,29 @@ export class BillingCheckoutService {
         }),
       );
 
+      if (resumeSource) {
+        const marker = {
+          state: 'preparing' as const,
+          sourceSubscriptionId: resumeSource.id,
+          effectiveAt: resumeSource.currentPeriodEnd!.toISOString(),
+          amountDueNow: '0.00' as const,
+          recurringAmount: resolved.price.amount,
+          currency: resolved.price.currency,
+          providerPlanId: resolved.providerPrice.providerPriceId,
+          checkoutId: checkoutSession.id,
+          attemptId: dto.idempotencyKey,
+        };
+        subscription.metadata = {
+          ...subscription.metadata,
+          renewalResume: marker,
+        };
+        checkoutSession.metadata = {
+          ...checkoutSession.metadata,
+          renewalResume: marker,
+        };
+        await subscriptions.save(subscription);
+        await checkoutSessions.save(checkoutSession);
+      }
       const legalReference = legal
         ? {
             legalAcceptanceId: legal.legalAcceptanceId,
@@ -387,7 +492,11 @@ export class BillingCheckoutService {
     // Legal's external validation rechecks the buyer's current membership and
     // contracting permission with the consumer. Pending retries must do this
     // again; persisted results and active leases return before reaching here.
-    if (previous && preparation.checkout.legalAcceptanceId) {
+    if (
+      previous &&
+      preparation.checkout.legalAcceptanceId &&
+      !renewalResume(preparation.subscription)
+    ) {
       try {
         await this.hemiaLegal.validateAcceptance({
           organizationId: preparation.checkout.organizationId,
@@ -406,6 +515,15 @@ export class BillingCheckoutService {
     let error: unknown;
     const { checkout, subscription } = preparation;
     try {
+      if (
+        renewalResume(subscription) &&
+        !subscription.providerSubscriptionId &&
+        Date.parse(renewalResume(subscription)!.effectiveAt) <=
+          Date.now() + 60_000
+      )
+        throw new ConflictException(
+          'Renewal start is no longer safely in the future',
+        );
       result = subscription.providerSubscriptionId
         ? await this.providers
             .get(checkout.provider)
@@ -415,6 +533,9 @@ export class BillingCheckoutService {
               checkout.metadata.providerPlanId ??
                 checkout.metadata.paypalPlanId,
             ),
+            ...(renewalResume(subscription)
+              ? { startTime: renewalResume(subscription)!.effectiveAt }
+              : {}),
             customId: checkout.id,
             requestId: checkout.id,
             returnUrl: checkout.successUrl,
@@ -595,6 +716,29 @@ export class BillingCheckoutService {
       );
   }
 
+  private assertResumeSource(
+    source: BillingSubscriptionEntity | null,
+    dto: CreateCheckoutSessionDto,
+  ) {
+    if (
+      !source ||
+      source.status !== SubscriptionStatus.Cancelled ||
+      !source.cancelAtPeriodEnd ||
+      !source.currentPeriodEnd ||
+      source.currentPeriodEnd.getTime() <= Date.now() + 60_000 ||
+      !source.providerSubscriptionId ||
+      source.planCode !== dto.planCode ||
+      source.planPriceCode !== dto.planPriceCode ||
+      source.provider !== dto.provider ||
+      checkoutAbandonment(source) ||
+      source.metadata.refundRevocation ||
+      (dto.legalAcceptanceId &&
+        dto.legalAcceptanceId !== source.legalAcceptanceId)
+    )
+      throw new ConflictException(
+        'An unchanged paid cancelled subscription is required for future renewal',
+      );
+  }
   private async databaseNow(manager: EntityManager): Promise<Date> {
     const [clock] = await manager.query<Array<{ now: Date }>>(
       'SELECT clock_timestamp() AS now',
@@ -641,6 +785,8 @@ export class BillingCheckoutService {
       : null;
     if (!subscription)
       throw new NotFoundException('Billing subscription not found');
+    if (checkoutAbandonment(subscription))
+      throw new ConflictException('Checkout was abandoned');
     if (checkout.providerCheckoutUrl && subscription.providerSubscriptionId)
       return { response: this.toCheckoutResponse(checkout, subscription.id) };
 
@@ -713,6 +859,8 @@ export class BillingCheckoutService {
         checkout.cancelUrl,
         manager,
       );
+      if (checkoutAbandonment(subscription))
+        throw new ConflictException('Checkout was abandoned');
       // A completed newer attempt wins, including over an older network error.
       if (checkout.providerCheckoutUrl && subscription.providerSubscriptionId)
         return { response: this.toCheckoutResponse(checkout, subscription.id) };
@@ -736,6 +884,15 @@ export class BillingCheckoutService {
           subscription.providerSubscriptionId = result.id;
         }
         checkout.providerCheckoutUrl = result.approvalUrl ?? null;
+        const resume = renewalResume(subscription);
+        if (resume) {
+          resume.state = 'awaiting_approval';
+          subscription.metadata = {
+            ...subscription.metadata,
+            renewalResume: resume,
+          };
+          await subscriptions.save(subscription);
+        }
       }
       const complete = Boolean(
         checkout.providerCheckoutUrl && subscription.providerSubscriptionId,
@@ -832,6 +989,19 @@ export class BillingCheckoutService {
           dto.successUrl,
           dto.cancelUrl,
           dto.billingEmail ?? null,
+          ...((
+            dto as CreateCheckoutSessionDto & {
+              resumeSourceSubscriptionId?: string;
+            }
+          ).resumeSourceSubscriptionId
+            ? [
+                (
+                  dto as CreateCheckoutSessionDto & {
+                    resumeSourceSubscriptionId?: string;
+                  }
+                ).resumeSourceSubscriptionId,
+              ]
+            : []),
         ]),
       )
       .digest('hex');
@@ -877,6 +1047,36 @@ export class BillingCheckoutService {
       throw new NotFoundException('Billing subscription not found');
     }
 
+    if (checkoutAbandonment(subscription))
+      return {
+        checkoutId: checkoutSession.id,
+        subscriptionId: subscription.id,
+        provider: checkoutSession.provider,
+        checkoutStatus: BillingCheckoutSessionStatus.Cancelled,
+        subscriptionStatus: SubscriptionStatus.Cancelled,
+        abandoned: true,
+      };
+    if (checkoutSession.metadata.renewalPlanChange) {
+      const change =
+        renewalPlanChange(subscription)?.checkoutId === checkoutId
+          ? renewalPlanChangeResponse(subscription)
+          : (checkoutSession.metadata.renewalPlanChange as ReturnType<
+              typeof renewalPlanChangeResponse
+            >);
+      return {
+        checkoutId,
+        subscriptionId: subscription.id,
+        provider: subscription.provider,
+        subscriptionStatus: subscription.status,
+        checkoutStatus:
+          change?.state === 'failed'
+            ? BillingCheckoutSessionStatus.Cancelled
+            : ['scheduled', 'effective'].includes(change?.state ?? '')
+              ? BillingCheckoutSessionStatus.Approved
+              : BillingCheckoutSessionStatus.Pending,
+        renewalPlanChange: change,
+      };
+    }
     const change = subscription.metadata?.pendingPlanChange as
       { checkoutId?: string; state?: string; effectiveAt?: string } | undefined;
     const planChange =
@@ -905,6 +1105,9 @@ export class BillingCheckoutService {
             }
           : undefined;
     return {
+      ...(renewalResume(subscription)
+        ? { renewalResume: renewalResumeResponse(subscription) }
+        : {}),
       checkoutId: checkoutSession.id,
       subscriptionId: subscription.id,
       checkoutStatus:

@@ -1,3 +1,7 @@
+import {
+  checkoutAbandonment,
+  renewalResumePending,
+} from '../subscriptions-management/subscription-management-state';
 import { Injectable } from '@nestjs/common';
 import { BillingPlanCatalogResolver } from '../catalog';
 import {
@@ -40,10 +44,16 @@ export class BillingLicenseCalculatorService {
     const scheduledCancellation =
       input.subscription.status === SubscriptionStatus.Cancelled &&
       input.subscription.cancelAtPeriodEnd;
+    // The separate future replacement has no paid license; its source remains unchanged.
     const status =
-      scheduledCancellation && paidThrough && paidThrough.getTime() > Date.now()
-        ? LicenseStatus.Active
-        : input.status;
+      checkoutAbandonment(input.subscription) ||
+      renewalResumePending(input.subscription)
+        ? LicenseStatus.Revoked
+        : scheduledCancellation &&
+            paidThrough &&
+            paidThrough.getTime() > Date.now()
+          ? LicenseStatus.Active
+          : input.status;
     const version = input.subscription.plan
       ? this.planResolver.contractVersion(input.subscription)
       : null;

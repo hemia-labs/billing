@@ -21,8 +21,13 @@ export class CreatePaymentAttemptDto extends PaymentAttemptContextDto {
   @IsUUID() idempotencyKey: string;
   @IsString() @Matches(/^\S+$/) @MaxLength(100) planCode: string;
   @IsString() @Matches(/^\S+$/) @MaxLength(100) planPriceCode: string;
-  @IsOptional() @IsIn(['checkout', 'change_plan']) operation?:
-    'checkout' | 'change_plan';
+  @IsOptional()
+  @IsIn(['checkout', 'change_plan', 'resume_renewal', 'change_renewal_plan'])
+  operation?:
+    'checkout' | 'change_plan' | 'resume_renewal' | 'change_renewal_plan';
+  @ValidateIf((_, value) => value !== undefined)
+  @IsUUID()
+  expectedRenewalSubscriptionId?: string;
   @ValidateIf((_, value) => value !== undefined)
   @IsUUID()
   expectedSubscriptionId?: string;
@@ -37,10 +42,18 @@ export class CreatePaymentAttemptDto extends PaymentAttemptContextDto {
   @IsUrl(checkoutReturnUrlOptions) cancelUrl: string;
 }
 export interface PaymentAttemptResponse {
+  renewalResume?: ReturnType<
+    typeof import('../subscriptions-management/subscription-management-state').renewalResumeResponse
+  >;
+  abandoned?: boolean;
   provider?: BillingProvider;
   attemptId: string;
   status: 'pending' | 'processing' | 'ready' | 'rejected';
-  operation: 'checkout' | 'change_plan';
+  operation:
+    'checkout' | 'change_plan' | 'resume_renewal' | 'change_renewal_plan';
+  renewalPlanChange?: ReturnType<
+    typeof import('../subscriptions-management/renewal-plan-change-state').renewalPlanChangeResponse
+  >;
   planCode: string;
   planPriceCode: string;
   checkoutId?: string;

@@ -51,7 +51,9 @@ export class BillingPaymentAttemptsService {
     permissions: string[],
   ) {
     if (
-      row.requestPayload.operation === 'change_plan' &&
+      ['change_plan', 'resume_renewal', 'change_renewal_plan'].includes(
+        row.requestPayload.operation ?? '',
+      ) &&
       !hasAllPermissions(permissions, ['billing.subscriptions.manage'])
     )
       throw new ForbiddenException('Subscription management scope required');
@@ -83,16 +85,24 @@ export class BillingPaymentAttemptsService {
   ): PaymentAttemptResponse {
     const receipt = row.receipt;
     const change = receipt.planChange;
+    const renewal = receipt.renewalResume;
+    const renewalChange = receipt.renewalPlanChange;
     let checkoutUrl =
       receipt.errorCode ||
+      renewalChange?.action === 'none' ||
+      (renewal &&
+        !['preparing', 'awaiting_approval'].includes(renewal.state)) ||
       change?.action === 'none' ||
-      ['scheduled', 'effective', 'failed'].includes(change?.state ?? '')
+      ['effective', 'failed'].includes(change?.state ?? '') ||
+      (change?.state === 'scheduled' && !change.cancellationRequested)
         ? undefined
-        : change && 'checkoutUrl' in change
-          ? (change.checkoutUrl ?? undefined)
-          : change?.action === 'approve_payment'
-            ? undefined
-            : receipt.checkoutUrl;
+        : renewalChange
+          ? (renewalChange.checkoutUrl ?? undefined)
+          : change && 'checkoutUrl' in change
+            ? (change.checkoutUrl ?? undefined)
+            : change?.action === 'approve_payment'
+              ? undefined
+              : receipt.checkoutUrl;
     const provider = row.requestPayload.provider ?? receipt.provider;
     if (checkoutUrl)
       checkoutUrl = provider
@@ -137,6 +147,12 @@ export class BillingPaymentAttemptsService {
       ...(dto.expectedSubscriptionId === undefined
         ? {}
         : { expectedSubscriptionId: dto.expectedSubscriptionId.toLowerCase() }),
+      ...(dto.expectedRenewalSubscriptionId === undefined
+        ? {}
+        : {
+            expectedRenewalSubscriptionId:
+              dto.expectedRenewalSubscriptionId.toLowerCase(),
+          }),
       ...(dto.expectedAmountDueNow === undefined
         ? {}
         : { expectedAmountDueNow: dto.expectedAmountDueNow }),
@@ -145,13 +161,28 @@ export class BillingPaymentAttemptsService {
         : { legalAcceptanceId: dto.legalAcceptanceId.toLowerCase() }),
     };
     if (
-      (payload.operation === 'change_plan') !==
+      (payload.operation !== 'checkout') !==
       Boolean(payload.expectedSubscriptionId)
     )
       throw new BadRequestException(
         'Expected subscription is required only for plan changes',
       );
     this.assertOperation({ requestPayload: payload }, permissions);
+    if (
+      (payload.operation === 'change_renewal_plan') !==
+      Boolean(payload.expectedRenewalSubscriptionId)
+    )
+      throw new BadRequestException(
+        'Future plan change requires its expected renewal contract',
+      );
+    if (
+      ['resume_renewal', 'change_renewal_plan'].includes(
+        payload.operation ?? '',
+      ) &&
+      payload.expectedAmountDueNow !== undefined &&
+      Number(payload.expectedAmountDueNow) !== 0
+    )
+      throw new BadRequestException('Future renewal has no payment due now');
     await this.policy.assertContext(
       actor,
       payload.productCode,
@@ -169,15 +200,22 @@ export class BillingPaymentAttemptsService {
       this.dataSource.manager,
       payload.idempotencyKey,
     );
-    if (!previous && payload.operation === 'change_plan') {
+    if (!previous && payload.operation !== 'checkout') {
       try {
         // Domain reads use their own manager; keep them outside the attempt reservation transaction.
         const source = await this.subscriptions.getCurrentSubscription(
           payload.organizationId,
           payload.productCode,
+          actor,
         );
         if (source.id !== payload.expectedSubscriptionId)
           throw new ConflictException('SUBSCRIPTION_CHANGED');
+        if (
+          payload.operation === 'change_renewal_plan' &&
+          source.pendingRenewal?.subscriptionId !==
+            payload.expectedRenewalSubscriptionId
+        )
+          throw new ConflictException('RENEWAL_SUBSCRIPTION_CHANGED');
       } catch (error) {
         // Another request may already have reserved the original intent while its source changed.
         previous = await this.find(
@@ -233,7 +271,45 @@ export class BillingPaymentAttemptsService {
     actor: BillingServiceActor,
   ): Promise<PaymentAttemptResponse> {
     const row = await this.owned(id, context, actor);
-    if (row.status !== 'ready' || !row.receipt.checkoutId)
+    if (
+      row.requestPayload.operation === 'change_renewal_plan' &&
+      row.status === 'rejected' &&
+      row.receipt.errorCode === 'BILLING_CHECKOUT_REJECTED' &&
+      !row.receipt.checkoutId &&
+      !row.receipt.subscriptionId
+    ) {
+      try {
+        // Revision requests persist their checkout before any provider mutation, including deleted artifacts.
+        const artifacts = await this.dataSource.manager.query<
+          Array<{ id: string }>
+        >(
+          `SELECT c.id FROM checkout_sessions c WHERE c.organization_id=$1 AND c.product_code=$2 AND c.metadata->>'idempotencyKey'=$3 AND c.metadata->>'createdByIssuer'=$4 AND c.metadata->>'createdByClientId'=$5 LIMIT 1`,
+          [
+            row.organizationId,
+            row.productCode,
+            row.id,
+            actor.issuer,
+            actor.clientId,
+          ],
+        );
+        if (!artifacts.length)
+          return {
+            ...this.response(row),
+            statusFresh: true,
+            errorCode: 'BILLING_CHECKOUT_REJECTED_BEFORE_PREPARATION',
+          };
+      } catch {
+        /* Missing evidence keeps the original conservative rejection. */
+      }
+    }
+    if (
+      (row.status !== 'ready' &&
+        !(
+          row.requestPayload.operation === 'change_renewal_plan' &&
+          row.receipt.errorCode === 'PAYMENT_ATTEMPT_CANCELLED'
+        )) ||
+      !row.receipt.checkoutId
+    )
       return this.response(
         row,
         !!row.leaseUntil && row.leaseUntil.getTime() > Date.now(),
@@ -268,11 +344,28 @@ export class BillingPaymentAttemptsService {
       if (JSON.stringify(current.receipt) !== JSON.stringify(row.receipt))
         return this.response(current);
       // GET only projects authoritative stored state; it never verifies or captures a payment.
+      if (
+        current.requestPayload.operation === 'change_renewal_plan' &&
+        status.renewalPlanChange?.cancellationRequested &&
+        !['failed', 'effective'].includes(status.renewalPlanChange.state)
+      ) {
+        current.status = 'ready';
+        delete current.receipt.errorCode;
+      }
       current.receipt = {
         ...current.receipt,
         provider: status.provider,
         checkoutStatus: status.checkoutStatus,
+        ...(status.abandoned
+          ? { abandoned: true, checkoutUrl: undefined }
+          : {}),
         subscriptionStatus: status.subscriptionStatus,
+        ...(status.renewalResume
+          ? { renewalResume: status.renewalResume }
+          : {}),
+        ...(status.renewalPlanChange
+          ? { renewalPlanChange: status.renewalPlanChange }
+          : {}),
         ...(status.planChange ? { planChange: status.planChange } : {}),
         statusCheckedAt: new Date().toISOString(),
         statusFresh: true,
@@ -320,10 +413,12 @@ export class BillingPaymentAttemptsService {
     id: string,
     context: PaymentAttemptContextDto,
     actor: BillingServiceActor,
-  ): Promise<{ cancelled: boolean; approvalUrl?: string }> {
+  ): Promise<{
+    cancelled: boolean;
+    approvalUrl?: string;
+    abandoned?: boolean;
+  }> {
     const initial = await this.owned(id, context, actor);
-    if (initial.requestPayload.operation !== 'change_plan')
-      throw new ConflictException('Only plan changes can be cancelled here');
     await this.policy.assertReturnUrls(
       actor,
       initial.requestPayload.successUrl,
@@ -342,18 +437,33 @@ export class BillingPaymentAttemptsService {
       await manager.getRepository(BillingPaymentAttemptEntity).save(row);
       return row;
     });
-    if (!claimed) return { cancelled: true };
+    if (!claimed)
+      return {
+        cancelled: true,
+        ...(initial.receipt.abandoned ? { abandoned: true } : {}),
+      };
     try {
       if (!claimed.receipt.checkoutId)
         throw new ConflictException(
           'Payment attempt requires reconciliation before cancellation',
         );
-      const result = claimed.receipt.checkoutId
-        ? await this.subscriptions.cancelPlanChange(
-            claimed.receipt.checkoutId,
-            context.userId,
-          )
-        : { cancelled: true };
+      const result =
+        claimed.requestPayload.operation === 'change_renewal_plan'
+          ? await this.subscriptions.cancelRenewalPlanChange(
+              claimed.receipt.checkoutId,
+              context.userId,
+              actor,
+            )
+          : claimed.requestPayload.operation === 'change_plan'
+            ? await this.subscriptions.cancelPlanChange(
+                claimed.receipt.checkoutId,
+                context.userId,
+              )
+            : await this.subscriptions.cancelPendingCheckout(
+                claimed.receipt.checkoutId,
+                context,
+                actor,
+              );
       await this.dataSource.transaction(async (manager) => {
         const row = await this.find(manager, id, true);
         if (!row || row.leaseToken !== token)
@@ -368,6 +478,20 @@ export class BillingPaymentAttemptsService {
             checkoutStatus: 'cancelled',
             statusFresh: true,
             errorCode: 'PAYMENT_ATTEMPT_CANCELLED',
+            ...(row.receipt.renewalPlanChange
+              ? {
+                  renewalPlanChange: {
+                    ...row.receipt.renewalPlanChange,
+                    state: 'failed',
+                    action: 'none',
+                    checkoutUrl: null,
+                    cancellationRequested: true,
+                  },
+                }
+              : {}),
+            ...('abandoned' in result && result.abandoned
+              ? { abandoned: true, subscriptionStatus: 'cancelled' }
+              : {}),
             ...(row.receipt.planChange
               ? {
                   planChange: {
@@ -436,13 +560,20 @@ export class BillingPaymentAttemptsService {
     actor: BillingServiceActor,
     manager: EntityManager,
   ) {
-    if (dto.operation !== 'change_plan')
+    if (
+      dto.operation !== 'change_plan' &&
+      dto.operation !== 'resume_renewal' &&
+      dto.operation !== 'change_renewal_plan'
+    )
       return this.checkout.resolveCheckoutProvider(dto, actor, manager);
     const subscription = await manager
       .getRepository(BillingSubscriptionEntity)
       .findOne({
         where: {
-          id: dto.expectedSubscriptionId!,
+          id:
+            dto.operation === 'change_renewal_plan'
+              ? dto.expectedRenewalSubscriptionId!
+              : dto.expectedSubscriptionId!,
           organizationId: dto.organizationId,
           productCode: dto.productCode,
         },
@@ -495,10 +626,44 @@ export class BillingPaymentAttemptsService {
         receipt = {
           checkoutStatus: checked.checkoutStatus,
           subscriptionStatus: checked.subscriptionStatus,
+          ...(checked.renewalPlanChange
+            ? { renewalPlanChange: checked.renewalPlanChange }
+            : {}),
+          ...(checked.renewalResume
+            ? { renewalResume: checked.renewalResume }
+            : {}),
           ...(checked.planChange ? { planChange: checked.planChange } : {}),
           ...(checked.checkoutUrl ? { checkoutUrl: checked.checkoutUrl } : {}),
           statusFresh: true,
           statusCheckedAt: new Date().toISOString(),
+        };
+      } else if (dto.operation === 'change_renewal_plan') {
+        const changed = await this.subscriptions.changeRenewalPlan(
+          dto.expectedSubscriptionId!,
+          dto.expectedRenewalSubscriptionId!,
+          {
+            idempotencyKey: dto.idempotencyKey,
+            actorUserId: dto.userId,
+            targetPlanCode: dto.planCode,
+            targetPlanPriceCode: dto.planPriceCode,
+            successUrl: dto.successUrl,
+            cancelUrl: dto.cancelUrl,
+          },
+          actor,
+        );
+        receipt = {
+          checkoutId: changed.checkoutId,
+          subscriptionId: dto.expectedRenewalSubscriptionId,
+          checkoutUrl: changed.renewalPlanChange?.checkoutUrl ?? undefined,
+          renewalPlanChange: changed.renewalPlanChange,
+          subscriptionStatus: 'pending',
+          checkoutStatus:
+            changed.renewalPlanChange?.state === 'failed'
+              ? 'cancelled'
+              : changed.renewalPlanChange?.state === 'scheduled'
+                ? 'approved'
+                : 'pending',
+          statusFresh: true,
         };
       } else if (dto.operation === 'change_plan') {
         const changed = await this.subscriptions.changePlan(
@@ -527,6 +692,9 @@ export class BillingPaymentAttemptsService {
       } else {
         const result = await this.checkout.createCheckoutSession(
           {
+            ...(dto.operation === 'resume_renewal'
+              ? { resumeSourceSubscriptionId: dto.expectedSubscriptionId }
+              : {}),
             idempotencyKey: dto.idempotencyKey,
             organizationId: dto.organizationId,
             userId: dto.userId,
@@ -540,7 +708,17 @@ export class BillingPaymentAttemptsService {
           },
           actor,
         );
+        const resumed =
+          dto.operation === 'resume_renewal'
+            ? await this.checkout.getCheckoutStatus(result.checkoutId, actor)
+            : null;
         receipt = {
+          ...(resumed?.renewalResume
+            ? {
+                renewalResume: resumed.renewalResume,
+                subscriptionStatus: resumed.subscriptionStatus,
+              }
+            : {}),
           checkoutId: result.checkoutId,
           subscriptionId: result.subscriptionId,
           checkoutUrl: result.checkoutUrl,
