@@ -19,8 +19,8 @@ export type PaymentsReceiverOptions = {
   audience: string;
   jwksUrl?: string;
   introspectionUrl?: string;
-  billingClientId: string;
-  consoleClientId: string;
+  billingClientId?: string;
+  consoleClientId?: string;
 };
 export type LegalContextInput = {
   organizationId: string;

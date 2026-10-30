@@ -15,6 +15,7 @@ export { MINIMUM_BILLING_VERSION, BILLING_API_CONTRACT } from "./compatibility";
 export * from "./contracts";
 export { createPaymentsReceiver } from "./receiver";
 export { createPaymentsLegalClient } from "./legal";
+export { resolvePaymentsConnection, type PaymentsConnectionOptions } from "./connection";
 import { MachineClient, MachineClientError } from "@hemia/auth";
 import { isIP } from "node:net";
 
@@ -33,8 +34,8 @@ export type PaymentsConnection = {
   requestTimeoutMs?: number;
   receiver?: {
     audience: string;
-    billingClientId: string;
-    consoleClientId: string;
+    billingClientId?: string;
+    consoleClientId?: string;
   };
   legal?: {
     baseUrl: string;
