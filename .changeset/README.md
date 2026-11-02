@@ -1,6 +1,6 @@
 # Changesets de Billing
 
-`@hemia/payments` es el paquete público. Las apps son privadas. Cada cambio de API o comportamiento del SDK incluye un changeset para `@hemia/payments` con impacto SemVer. El changeset inicial `payments-nest-integration.md` solicita una versión minor: desde 0.2.0 prepara 0.3.0.
+`@hemia/payments` es el paquete público. Las apps son privadas. Cada cambio de API o comportamiento del SDK incluye un changeset para `@hemia/payments` con impacto SemVer. Los cambios del servidor llevan una nota separada para `api`; las versiones de API y web avanzan juntas mediante el flujo de Billing.
 
 ```sh
 bun run changeset

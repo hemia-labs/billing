@@ -19,6 +19,7 @@ import { BillingProductEntity } from '../../billing-shared/entities/billing-prod
 import { BillingAuditService } from '../../audit/billing-audit.service';
 import { BillingIdentityOAuthClientsService } from '../oauth-clients/billing-identity-oauth-clients.service';
 import { SaveServiceClientDto } from '../dtos/save-service-client.dto';
+import { assertBillingConnectionTarget } from '../billing-connections.service';
 
 @Injectable()
 export class BillingServiceClientsService {
@@ -122,6 +123,17 @@ export class BillingServiceClientsService {
         'Selecciona códigos de productos existentes; no se permiten comodines.',
       );
     policy.products = codes;
+    for (const published of Object.values(policy.connections ?? {})) {
+      const connection = assertBillingConnectionTarget(
+        this.config,
+        clientId,
+        published.configuration,
+      );
+      if (!policy.products.includes(connection.productCode))
+        throw new BadRequestException(
+          'Connection product is outside the client policy',
+        );
+    }
     policy.allowedReturnOrigins = [...new Set(policy.allowedReturnOrigins)];
     if (policy.organizationScope === 'organizations')
       policy.organizationIds = [
@@ -152,6 +164,12 @@ export class BillingServiceClientsService {
       if (dto.allowSharedCheckouts === undefined)
         policy.allowSharedCheckouts =
           previous?.policy.allowSharedCheckouts ?? false;
+      if (previous?.policy.connections || policy.connections)
+        policy.connections = {
+          ...previous?.policy.connections,
+          ...policy.connections,
+        };
+      policy = parseBillingServicePolicy(policy);
       await repository.upsert({ clientId, policy }, ['clientId']);
       const row = await repository.findOneByOrFail({ clientId });
       await this.audit.record({

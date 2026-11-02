@@ -29,6 +29,58 @@ The check requests `GET /billing/integrations/v1/compatibility` with the existin
 
 Nest's authenticated `/payments/integration-status` performs this check before reporting `ready: true`. `/payments/ready` only reports local module initialization and does not prove remote Billing compatibility. Normal payment calls retain their existing behavior and do not add a preflight request per transaction.
 
+## Resolve a Console connection (0.11.0)
+
+Connection resolution is introduced in the planned SDK 0.11.0 release through Changesets; publishing and running the services are separate steps. It requires Billing's `hemia.payments.connections.v1` discovery/resolution endpoints under `/api/v1` and a connection published by Console. The first version uses the existing `billing.integration.catalog.read` permission, so the connection must include catalog access. Follow the [release and local adoption order](../../docs/payments-release.md) before switching a consumer.
+
+Console provides four backend variables:
+
+```env
+HEMIA_BASE_URL=https://billing.example
+HEMIA_CONNECTION=portal
+HEMIA_CLIENT_ID=portal-service
+HEMIA_CLIENT_SECRET=
+```
+
+```ts
+import { resolvePaymentsConnection, createPaymentsClient } from '@hemia/payments';
+
+const connection = await resolvePaymentsConnection({
+  baseUrl: process.env.HEMIA_BASE_URL!,
+  connectionCode: process.env.HEMIA_CONNECTION!,
+  clientId: process.env.HEMIA_CLIENT_ID!,
+  clientSecret: process.env.HEMIA_CLIENT_SECRET!,
+  allowHttpLoopback: process.env.NODE_ENV !== 'production',
+});
+const payments = createPaymentsClient({
+  ...connection,
+  clientSecret: process.env.HEMIA_CLIENT_SECRET!,
+});
+```
+
+Resolve once during application startup and reuse the returned connection and client. Discovery is public metadata; loading the connection uses the application's OAuth credentials and only returns its authorized snapshot. No administrative Console session is needed. The resolver does not persist credentials, make purchases or register webhooks, and ordinary payment operations do not reload configuration.
+
+NestJS can resolve the same connection in its existing asynchronous factory:
+
+```ts
+PaymentsModule.forRootAsync({
+  inject: [ApplicationAuthorization],
+  useFactory: async (authorization) => ({
+    connection: await resolvePaymentsConnection({
+      baseUrl: process.env.HEMIA_BASE_URL!,
+      connectionCode: process.env.HEMIA_CONNECTION!,
+      clientId: process.env.HEMIA_CLIENT_ID!,
+      clientSecret: process.env.HEMIA_CLIENT_SECRET!,
+      allowHttpLoopback: process.env.NODE_ENV !== 'production',
+    }),
+    clientSecret: process.env.HEMIA_CLIENT_SECRET!,
+    authorize: (request, operation) => authorization.paymentsContext(request, operation),
+  }),
+});
+```
+
+Keep the existing `PAYMENTS_CONNECTION` object/JSON initialization for explicit configuration or SDK versions without this resolver. For Legal callbacks, the host still supplies its `legal.resolveContext` callback; configuration resolution does not replace application authorization or explicit user acceptance.
+
 ## Node.js
 
 ```ts

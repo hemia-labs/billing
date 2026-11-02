@@ -68,6 +68,7 @@ const { NestFactory } = require('@nestjs/core');
 const core = require('@hemia/payments');
 const { PaymentsModule, PaymentsService, PaymentsSchema1792886400000 } = require('@hemia/payments/nestjs');
 assert.equal(typeof core.createPaymentsClient, 'function');
+assert.equal(typeof core.resolvePaymentsConnection, 'function');
 assert.equal(typeof PaymentsModule.forRootAsync, 'function');
 assert.equal(typeof PaymentsSchema1792886400000.prototype.up, 'function');
 const connection = {
@@ -97,9 +98,10 @@ const resolveContext = async () => { throw new Error('Startup must not resolve L
 `);
   writeFileSync(join(consumer, 'check.mjs'), `
 import assert from 'node:assert/strict';
-import { createPaymentsClient, PaymentsError } from '@hemia/payments';
+import { createPaymentsClient, resolvePaymentsConnection, PaymentsError } from '@hemia/payments';
 import { PaymentsModule, PaymentsService, PaymentsSchema1792886400000 } from '@hemia/payments/nestjs';
 assert.equal(typeof createPaymentsClient, 'function');
+assert.equal(typeof resolvePaymentsConnection, 'function');
 assert.equal(typeof PaymentsError, 'function');
 assert.equal(typeof PaymentsModule.forRootAsync, 'function');
 assert.equal(typeof PaymentsService, 'function');
@@ -108,7 +110,7 @@ assert.equal(typeof PaymentsSchema1792886400000.prototype.up, 'function');
   run(process.execPath, ['check.cjs'], consumer);
   run(process.execPath, ['check.mjs'], consumer);
   writeFileSync(join(consumer, 'check.ts'), `
-import { createPaymentsClient, createPaymentsReceiver, snapshotAccess, type PaymentSnapshot } from '@hemia/payments';
+import { createPaymentsClient, createPaymentsReceiver, resolvePaymentsConnection, snapshotAccess, type PaymentSnapshot, type PaymentsConnection, type PaymentsConnectionOptions } from '@hemia/payments';
 import { PaymentsModule, type PaymentsModuleOptions } from '@hemia/payments/nestjs';
 const options: PaymentsModuleOptions = {
   connection: { issuer: 'https://identity.test', tokenUrl: 'https://identity.test/oauth/token', clientId: 'consumer', baseUrl: 'https://billing.test/api/v1', audience: 'billing-api', productCode: 'product' },
@@ -119,6 +121,12 @@ const options: PaymentsModuleOptions = {
 PaymentsModule.forRootAsync({ useFactory: () => options });
 void createPaymentsClient;
 void createPaymentsReceiver;
+const bootstrap: PaymentsConnectionOptions = {
+  baseUrl: 'https://billing.test', connectionCode: 'product', clientId: 'consumer', clientSecret: 'fixture-only',
+};
+const resolve: (options: PaymentsConnectionOptions) => Promise<PaymentsConnection> = resolvePaymentsConnection;
+void bootstrap;
+void resolve;
 `);
   run(process.execPath, [join(root, 'apps/api/node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck', 'false', '--target', 'ES2023', '--module', 'Node16', '--moduleResolution', 'Node16', '--esModuleInterop', '--types', 'node', 'check.ts'], consumer);
 

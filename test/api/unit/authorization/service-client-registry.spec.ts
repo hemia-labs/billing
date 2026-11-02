@@ -99,6 +99,47 @@ function fixture() {
 }
 
 describe('consumer registry and live authorization', () => {
+  it('merges published connections and preserves them when a policy editor omits the map', async () => {
+    const f = fixture();
+    f.config.set('auth.audience', 'billing-api');
+    f.config.set('sso', {
+      tokenUrl: 'https://identity.test/oauth/token',
+      redirectUri: 'https://billing.test/auth/callback',
+    });
+    const configuration = {
+      issuer: actor.issuer,
+      tokenUrl: 'https://identity.test/oauth/token',
+      clientId: actor.clientId,
+      baseUrl: 'https://billing.test/api/v1',
+      resource: 'https://billing.test',
+      audience: 'billing-api',
+      productCode: 'balanz_cfdi',
+    };
+    f.dto.connections = { balanz: { version: 1, configuration } };
+    await f.service.save(actor.clientId, f.dto, 'operator');
+    delete f.dto.connections;
+    expect(
+      (await f.service.save(actor.clientId, f.dto, 'operator')).connections,
+    ).toEqual({
+      balanz: { version: 1, configuration },
+    });
+    f.dto.connections = { preview: { version: 1, configuration } };
+    expect(
+      Object.keys(
+        (await f.service.save(actor.clientId, f.dto, 'operator')).connections!,
+      ),
+    ).toEqual(['balanz', 'preview']);
+    f.dto.connections = {
+      foreign: {
+        version: 1,
+        configuration: { ...configuration, clientId: 'someone-else' },
+      },
+    };
+    await expect(
+      f.service.save(actor.clientId, f.dto, 'operator'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
   it('lists only stored clients without writing and updates their policies', async () => {
     const f = fixture();
     expect(await f.service.list()).toEqual([

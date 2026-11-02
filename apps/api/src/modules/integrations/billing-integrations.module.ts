@@ -14,6 +14,9 @@ import { BillingCatalogModule } from '../catalog';
 import { BillingCheckoutModule } from '../checkout';
 import { BillingLicensesModule } from '../licenses';
 import { BillingIntegrationsController } from './billing-integrations.controller';
+import { BillingConnectionsService } from './billing-connections.service';
+import { BillingConnectionsController } from './billing-connections.controller';
+import { ConnectionDiscoveryController } from './connection-discovery.controller';
 
 @Module({
   imports: [
@@ -27,12 +30,15 @@ import { BillingIntegrationsController } from './billing-integrations.controller
     ]),
   ],
   controllers: [
+    ConnectionDiscoveryController,
+    BillingConnectionsController,
     BillingIntegrationsController,
     BillingIntegrationAdminController,
     BillingServiceClientsController,
     BillingIdentityOAuthClientsController,
   ],
   providers: [
+    BillingConnectionsService,
     BillingServiceClientsService,
     BillingIdentityOAuthClientsService,
     BillingIntegrationAdminService,

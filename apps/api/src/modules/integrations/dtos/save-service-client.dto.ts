@@ -5,10 +5,12 @@ import {
   IsBoolean,
   IsIn,
   IsOptional,
+  IsObject,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import type { BillingPublishedConnections } from '../../../common/types/billing-service-policy';
 
 export class SaveServiceClientDto {
   @IsBoolean()
@@ -39,4 +41,8 @@ export class SaveServiceClientDto {
   @IsOptional()
   @IsBoolean()
   allowSharedCheckouts?: boolean;
+
+  @IsOptional()
+  @IsObject()
+  connections?: BillingPublishedConnections;
 }
