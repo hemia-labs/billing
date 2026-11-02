@@ -65,10 +65,12 @@ function fixture() {
     },
   } as AuthenticatedRequest;
   const authorization = {
-    assertProduct: jest.fn((actor, product: string) => {
-      if (!actor.policy.products.includes(product))
-        throw new ForbiddenException();
-    }),
+    assertProduct: jest.fn(
+      (actor: { policy: typeof policy }, product: string) => {
+        if (!actor.policy.products.includes(product))
+          throw new ForbiddenException();
+      },
+    ),
   };
   const products = {
     findOne: jest.fn().mockResolvedValue({ id: 'product-id' }),
@@ -165,7 +167,10 @@ describe('published OAuth connections', () => {
     expect(
       Reflect.getMetadata(
         PERMISSIONS_KEY,
-        BillingConnectionsController.prototype.resolve,
+        Reflect.get(
+          BillingConnectionsController.prototype,
+          'resolve',
+        ) as object,
       ),
     ).toEqual(['billing.integration.catalog.read']);
     expect(
