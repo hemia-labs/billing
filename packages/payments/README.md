@@ -29,9 +29,9 @@ The check requests `GET /billing/integrations/v1/compatibility` with the existin
 
 Nest's authenticated `/payments/integration-status` performs this check before reporting `ready: true`. `/payments/ready` only reports local module initialization and does not prove remote Billing compatibility. Normal payment calls retain their existing behavior and do not add a preflight request per transaction.
 
-## Resolve a Console connection (0.11.0)
+## Resolve a Console connection (0.12.0)
 
-Connection resolution is introduced in the planned SDK 0.11.0 release through Changesets; publishing and running the services are separate steps. It requires Billing's `hemia.payments.connections.v1` discovery/resolution endpoints under `/api/v1` and a connection published by Console. The first version uses the existing `billing.integration.catalog.read` permission, so the connection must include catalog access. Follow the [release and local adoption order](../../docs/payments-release.md) before switching a consumer.
+The 0.12.0 resolver uses Billing's `hemia.payments.connections.v2` discovery and resolution endpoints under `/api/v1/billing/integrations/v2/connections`. A connection published by Console grants `billing.integration.connections.read` to its own OAuth client, independently of catalog, checkout or license permissions. The published 0.11.0 resolver continues using the v1 contract. Follow the [release and local adoption order](../../docs/payments-release.md) before switching a consumer.
 
 Console provides four backend variables:
 

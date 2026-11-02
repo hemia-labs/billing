@@ -16,14 +16,14 @@ const options = {
   clientSecret: "fixture-secret",
 };
 const metadata = {
-  contract: "hemia.payments.connections.v1",
+  contract: "hemia.payments.connections.v2",
   issuer: "https://identity.test",
   tokenUrl: "https://identity.test/oauth/token",
   audience: "billing-api",
   resource: "https://billing.test",
-  scope: "billing.integration.catalog.read",
+  scope: "billing.integration.connections.read",
   configurationPath:
-    "/api/v1/billing/integrations/v1/connections/{connectionCode}",
+    "/api/v1/billing/integrations/v2/connections/{connectionCode}",
 };
 const configuration = {
   issuer: metadata.issuer,
@@ -42,7 +42,7 @@ const configuration = {
   },
 };
 const envelope = () => ({
-  contract: "hemia.payments.connection.v1",
+  contract: "hemia.payments.connection.v2",
   connectionCode: "portal",
   version: 1,
   configuration: structuredClone(configuration),
@@ -52,6 +52,7 @@ function server({
   response = envelope(),
   status = 200,
   tokenStatus = 200,
+  catalogAllowed = true,
 } = {}) {
   const requests = [];
   global.fetch = async (input, init = {}) => {
@@ -67,15 +68,20 @@ function server({
     if (url === metadata.tokenUrl) {
       assert.equal(init.body.get("client_id"), options.clientId);
       assert.equal(init.body.get("client_secret"), options.clientSecret);
-      assert.equal(init.body.get("scope"), metadata.scope);
+      const requested = init.body.get("scope");
+      assert(
+        [metadata.scope, "billing.integration.catalog.read"].includes(requested),
+      );
       assert.equal(init.body.get("resource"), metadata.resource);
+      if (requested !== metadata.scope && !catalogAllowed)
+        return Response.json({ error: "invalid_scope" }, { status: 403 });
       return Response.json(
         tokenStatus === 200
           ? {
               access_token: "fixture-token",
               token_type: "Bearer",
               expires_in: 300,
-              scope: metadata.scope,
+              scope: requested,
             }
           : { error: "invalid_client", detail: options.clientSecret },
         { status: tokenStatus },
@@ -142,6 +148,19 @@ test("connection resolver rejects token failures and denied or unpublished conne
   }
 });
 
+test("a connection-only client can initialize but cannot read the catalog", async () => {
+  const requests = server({ catalogAllowed: false });
+  const resolved = await resolvePaymentsConnection(options);
+  assert.equal(resolved.productCode, configuration.productCode);
+  assert.equal(requests[1].init.body.get("scope"), metadata.scope);
+  const payments = createPaymentsClient({
+    ...resolved,
+    clientSecret: options.clientSecret,
+  });
+  await assert.rejects(payments.catalog.listPlans(), { code: "authentication" });
+  assert(!requests.some(({ url }) => url.includes("/catalog/")));
+});
+
 test("connection resolver rejects untrusted metadata before submitting credentials", async () => {
   for (const change of [
     { resource: "https://other.test" },
@@ -149,6 +168,7 @@ test("connection resolver rejects untrusted metadata before submitting credentia
     { tokenUrl: "https://other.test/token" },
     { issuer: "http://identity.test", tokenUrl: "http://identity.test/token" },
     { scope: "billing.integration.checkout.create" },
+    { scope: "billing.integration.catalog.read" },
   ]) {
     const requests = server({ discovery: { ...metadata, ...change } });
     await assert.rejects(resolvePaymentsConnection(options), {

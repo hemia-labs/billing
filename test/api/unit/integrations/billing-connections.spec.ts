@@ -4,14 +4,23 @@ import {
   ForbiddenException,
   NotFoundException,
   UnauthorizedException,
+  type ExecutionContext,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { Reflector } from '@nestjs/core';
 import { BillingConnectionsService } from '../../../../apps/api/src/modules/integrations/billing-connections.service';
-import { BillingConnectionsController } from '../../../../apps/api/src/modules/integrations/billing-connections.controller';
-import { ConnectionDiscoveryController } from '../../../../apps/api/src/modules/integrations/connection-discovery.controller';
+import {
+  BillingConnectionsController,
+  BillingConnectionsV2Controller,
+} from '../../../../apps/api/src/modules/integrations/billing-connections.controller';
+import {
+  ConnectionDiscoveryController,
+  ConnectionDiscoveryV2Controller,
+} from '../../../../apps/api/src/modules/integrations/connection-discovery.controller';
 import { BillingInternalAuthGuard } from '../../../../apps/api/src/common/guards/billing-internal-auth.guard';
 import { PermissionsGuard } from '../../../../apps/api/src/common/guards/permissions.guard';
+import { BillingServicePolicyGuard } from '../../../../apps/api/src/common/guards/billing-service-policy.guard';
 import { PERMISSIONS_KEY } from '../../../../apps/api/src/common/decorators/permissions.decorator';
 import {
   billingConnectionConfiguration,
@@ -176,6 +185,63 @@ describe('published OAuth connections', () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, ConnectionDiscoveryController),
     ).toBeUndefined();
+  });
+
+  it('uses a separate connection-only permission in v2 and preserves the v1 catalog contract', async () => {
+    const f = fixture();
+    const v2 = new BillingConnectionsV2Controller(f.service);
+    expect(
+      new ConnectionDiscoveryV2Controller(f.service).discovery(),
+    ).toMatchObject({
+      contract: 'hemia.payments.connections.v2',
+      scope: 'billing.integration.connections.read',
+      configurationPath:
+        '/api/v1/billing/integrations/v2/connections/{connectionCode}',
+    });
+    expect(
+      Reflect.getMetadata(GUARDS_METADATA, BillingConnectionsV2Controller),
+    ).toEqual([BillingInternalAuthGuard, PermissionsGuard]);
+    const reflector = new Reflector();
+    const guard = new PermissionsGuard(
+      reflector,
+      {} as never,
+      new BillingServicePolicyGuard(
+        reflector,
+        {} as never,
+        f.authorization as never,
+      ),
+    );
+    const context = (
+      controller:
+        | typeof BillingConnectionsController
+        | typeof BillingConnectionsV2Controller,
+    ) =>
+      ({
+        getClass: () => controller,
+        getHandler: () =>
+          Reflect.get(controller.prototype, 'resolve') as ReturnType<
+            ExecutionContext['getHandler']
+          >,
+        switchToHttp: () => ({ getRequest: () => f.request }),
+      }) as ExecutionContext;
+    f.request.principal!.scopes = ['billing.integration.connections.read'];
+    await expect(
+      guard.canActivate(context(BillingConnectionsV2Controller)),
+    ).resolves.toBe(true);
+    await expect(v2.resolve(f.request, 'application')).resolves.toMatchObject({
+      contract: 'hemia.payments.connection.v2',
+      configuration: f.configuration,
+    });
+    await expect(
+      guard.canActivate(context(BillingConnectionsController)),
+    ).rejects.toThrow(ForbiddenException);
+    f.request.principal!.scopes = ['billing.integration.catalog.read'];
+    await expect(
+      guard.canActivate(context(BillingConnectionsController)),
+    ).resolves.toBe(true);
+    await expect(
+      guard.canActivate(context(BillingConnectionsV2Controller)),
+    ).rejects.toThrow(ForbiddenException);
   });
 
   it('rejects secrets and unsupported fields in a published snapshot', () => {

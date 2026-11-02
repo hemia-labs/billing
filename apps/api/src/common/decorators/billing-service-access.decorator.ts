@@ -4,6 +4,7 @@ import type { BillingServiceResource } from '../repositories/billing-resource-co
 export type { BillingServiceResource } from '../repositories/billing-resource-context.repository';
 export type BillingServiceAccessRule =
   | 'catalog'
+  | 'connection'
   | 'catalog-target'
   | 'invoice-list'
   | {

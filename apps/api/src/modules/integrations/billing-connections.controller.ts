@@ -22,3 +22,20 @@ export class BillingConnectionsController {
     return this.connections.resolve(request, code);
   }
 }
+
+@Controller('billing/integrations/v2/connections')
+@UseGuards(BillingInternalAuthGuard, PermissionsGuard)
+export class BillingConnectionsV2Controller {
+  constructor(private readonly connections: BillingConnectionsService) {}
+
+  @Get(':connectionCode')
+  @Header('Cache-Control', 'private, no-store')
+  @Permissions('billing.integration.connections.read')
+  @BillingServiceAccess('connection')
+  resolve(
+    @Req() request: AuthenticatedRequest,
+    @Param('connectionCode') code: string,
+  ) {
+    return this.connections.resolve(request, code, 'v2');
+  }
+}
