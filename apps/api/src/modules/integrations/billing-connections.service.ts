@@ -36,7 +36,13 @@ function configuredEndpoint(config: ConfigService, value: string) {
   return url;
 }
 
-export function billingConnectionDiscovery(config: ConfigService) {
+const connectionReadScope = 'billing.integration.connections.read';
+type ConnectionContract = 'v1' | 'v2';
+
+export function billingConnectionDiscovery(
+  config: ConfigService,
+  version: ConnectionContract = 'v1',
+) {
   try {
     const issuer =
       config.get<string>('auth.requiredIssuer') ||
@@ -59,13 +65,16 @@ export function billingConnectionDiscovery(config: ConfigService) {
       '',
     );
     return {
-      contract: 'hemia.payments.connections.v1' as const,
+      contract: `hemia.payments.connections.${version}` as const,
       issuer,
       tokenUrl: token.href,
       audience: config.getOrThrow<string>('auth.audience'),
       resource,
-      scope: 'billing.integration.catalog.read' as const,
-      configurationPath: `${prefix ? '/' + prefix : ''}/billing/integrations/v1/connections/{connectionCode}`,
+      scope:
+        version === 'v2'
+          ? connectionReadScope
+          : 'billing.integration.catalog.read',
+      configurationPath: `${prefix ? '/' + prefix : ''}/billing/integrations/${version}/connections/{connectionCode}`,
     };
   } catch {
     throw new ServiceUnavailableException(
@@ -126,11 +135,15 @@ export class BillingConnectionsService {
     private readonly products: Repository<BillingProductEntity>,
   ) {}
 
-  discovery() {
-    return billingConnectionDiscovery(this.config);
+  discovery(version: ConnectionContract = 'v1') {
+    return billingConnectionDiscovery(this.config, version);
   }
 
-  async resolve(request: AuthenticatedRequest, code: string) {
+  async resolve(
+    request: AuthenticatedRequest,
+    code: string,
+    version: ConnectionContract = 'v1',
+  ) {
     if (!request.principal?.isMachine)
       throw new UnauthorizedException('Service bearer token required');
     if (!billingConnectionCode.safeParse(code).success)
@@ -167,7 +180,7 @@ export class BillingConnectionsService {
     if (!product)
       throw new NotFoundException('Connection product is unavailable');
     return {
-      contract: 'hemia.payments.connection.v1' as const,
+      contract: `hemia.payments.connection.${version}` as const,
       connectionCode: code,
       version: published.version,
       configuration,

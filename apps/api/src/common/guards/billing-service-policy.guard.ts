@@ -42,6 +42,7 @@ export class BillingServicePolicyGuard implements CanActivate {
     if (!rule)
       throw new ForbiddenException('Service resource policy is required');
     if (rule === 'catalog') return true; // Controllers pass the product filter to the query.
+    if (rule === 'connection') return true; // Resolution checks the snapshot owner and product.
     if (rule === 'catalog-target') {
       await this.assertCatalogTarget(authorization, body);
     } else if (rule === 'invoice-list') {

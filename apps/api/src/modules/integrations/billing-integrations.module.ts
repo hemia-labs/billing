@@ -15,8 +15,14 @@ import { BillingCheckoutModule } from '../checkout';
 import { BillingLicensesModule } from '../licenses';
 import { BillingIntegrationsController } from './billing-integrations.controller';
 import { BillingConnectionsService } from './billing-connections.service';
-import { BillingConnectionsController } from './billing-connections.controller';
-import { ConnectionDiscoveryController } from './connection-discovery.controller';
+import {
+  BillingConnectionsController,
+  BillingConnectionsV2Controller,
+} from './billing-connections.controller';
+import {
+  ConnectionDiscoveryController,
+  ConnectionDiscoveryV2Controller,
+} from './connection-discovery.controller';
 
 @Module({
   imports: [
@@ -31,7 +37,9 @@ import { ConnectionDiscoveryController } from './connection-discovery.controller
   ],
   controllers: [
     ConnectionDiscoveryController,
+    ConnectionDiscoveryV2Controller,
     BillingConnectionsController,
+    BillingConnectionsV2Controller,
     BillingIntegrationsController,
     BillingIntegrationAdminController,
     BillingServiceClientsController,

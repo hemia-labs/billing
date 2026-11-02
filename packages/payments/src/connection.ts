@@ -13,10 +13,10 @@ export type PaymentsConnectionOptions = {
   tokenTimeoutMs?: number;
   requestTimeoutMs?: number;
 };
-const discoveryPath = "/api/v1/billing/integrations/v1/connections/discovery";
+const discoveryPath = "/api/v1/billing/integrations/v2/connections/discovery";
 const configurationPath =
-  "/api/v1/billing/integrations/v1/connections/{connectionCode}";
-const scope = "billing.integration.catalog.read";
+  "/api/v1/billing/integrations/v2/connections/{connectionCode}";
+const scope = "billing.integration.connections.read";
 const identifier = (value: unknown, max = 120): value is string =>
   text(value, max) && !/\s/.test(value);
 const timeout = (value: number | undefined) => {
@@ -206,7 +206,7 @@ export async function resolvePaymentsConnection(
       "configurationPath",
     ]);
     if (
-      metadata.contract !== "hemia.payments.connections.v1" ||
+      metadata.contract !== "hemia.payments.connections.v2" ||
       metadata.scope !== scope ||
       metadata.configurationPath !== configurationPath ||
       !identifier(metadata.audience) ||
@@ -252,7 +252,7 @@ export async function resolvePaymentsConnection(
     );
     if (
       !record(result) ||
-      result.contract !== "hemia.payments.connection.v1" ||
+      result.contract !== "hemia.payments.connection.v2" ||
       result.connectionCode !== options.connectionCode ||
       result.version !== 1
     )
