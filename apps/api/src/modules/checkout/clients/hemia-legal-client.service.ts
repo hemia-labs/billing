@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +16,8 @@ import {
 
 @Injectable()
 export class HemiaLegalClientService {
+  private readonly logger = new Logger(HemiaLegalClientService.name);
+
   constructor(private readonly config: ConfigService) {}
   async validateAcceptance(
     input: ValidateLegalAcceptanceInput,
@@ -44,6 +47,7 @@ export class HemiaLegalClientService {
     }
     let response: Response, body: unknown;
     try {
+      const tokenStartedAt = performance.now();
       const issued = await fetch(tokenUrl, {
         method: 'POST',
         redirect: 'error',
@@ -68,6 +72,7 @@ export class HemiaLegalClientService {
         token.expires_in <= 0
       )
         throw new Error();
+      const validationStartedAt = performance.now();
       response = await fetch(url, {
         method: 'POST',
         redirect: 'error',
@@ -84,6 +89,12 @@ export class HemiaLegalClientService {
         }),
       });
       body = response.ok ? await response.json() : null;
+      this.logger.debug({
+        event: 'billing_checkout_legal_timing',
+        tokenMs: Math.round(validationStartedAt - tokenStartedAt),
+        validationMs: Math.round(performance.now() - validationStartedAt),
+        status: response.status,
+      });
     } catch {
       throw new BadGatewayException('Legal authorization unavailable');
     }

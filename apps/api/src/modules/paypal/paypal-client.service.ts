@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   CreatePaypalSubscriptionInput,
@@ -19,6 +19,7 @@ interface CachedToken {
 
 @Injectable()
 export class PaypalClientService {
+  private readonly logger = new Logger(PaypalClientService.name);
   private cachedToken?: CachedToken;
 
   constructor(private readonly config: ConfigService) {}
@@ -78,6 +79,7 @@ export class PaypalClientService {
       };
     }
 
+    const startedAt = performance.now();
     const raw = await this.request<Record<string, unknown>>(
       '/v1/billing/subscriptions',
       {
@@ -88,7 +90,12 @@ export class PaypalClientService {
         signal: AbortSignal.timeout(15_000),
         body: JSON.stringify(payload),
       },
-    );
+    ).finally(() => {
+      this.logger.debug({
+        event: 'billing_paypal_subscription_timing',
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    });
 
     return {
       id: String(raw.id),

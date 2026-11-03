@@ -230,7 +230,7 @@ export class BillingPaymentAttemptsService {
       if (previous.requestHash !== hash)
         throw new ConflictException('IDEMPOTENCY_KEY_REUSED');
     }
-    await this.dataSource.transaction(async (manager) => {
+    const row = await this.dataSource.transaction(async (manager) => {
       await manager.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
         ['billing.payment_attempt:' + payload.idempotencyKey],
@@ -240,10 +240,10 @@ export class BillingPaymentAttemptsService {
         this.assertOwner(existing, payload, actor);
         if (existing.requestHash !== hash)
           throw new ConflictException('IDEMPOTENCY_KEY_REUSED');
-        return;
+        return existing;
       }
       const repository = manager.getRepository(BillingPaymentAttemptEntity);
-      await repository.save(
+      return repository.save(
         repository.create({
           id: payload.idempotencyKey,
           organizationId: payload.organizationId,
@@ -263,6 +263,8 @@ export class BillingPaymentAttemptsService {
         }),
       );
     });
+    if (payload.operation === 'checkout' && row.status === 'pending')
+      return this.prepare(row, payload, actor);
     return this.retry(payload.idempotencyKey, payload, actor, permissions);
   }
   async get(
@@ -388,7 +390,31 @@ export class BillingPaymentAttemptsService {
       row.requestPayload.successUrl,
       row.requestPayload.cancelUrl,
     );
+    if ((row.requestPayload.operation ?? 'checkout') === 'checkout')
+      return this.prepare(row, context, actor);
     return this.execute(row, context, actor, false);
+  }
+
+  private async prepare(
+    row: BillingPaymentAttemptEntity,
+    context: PaymentAttemptContextDto,
+    actor: BillingServiceActor,
+  ) {
+    const preparation = this.execute(row, context, actor, false);
+
+    // Keep the fast response when possible. The durable attempt and its lease
+    // let preparation finish independently of the caller's HTTP deadline.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        preparation,
+        new Promise<PaymentAttemptResponse>((resolve) => {
+          timer = setTimeout(() => resolve(this.response(row, true)), 1_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   async confirm(
     id: string,
