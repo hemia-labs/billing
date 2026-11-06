@@ -1,5 +1,11 @@
 # api
 
+## 1.4.1
+
+### Patch Changes
+
+- 867977c: Process verified PayPal webhooks promptly, shorten checkout response waits, and log the duration of external checkout calls.
+
 ## 1.4.0
 
 ### Minor Changes
