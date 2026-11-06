@@ -61,7 +61,7 @@ export class PaypalWebhookWorker
     this.connectListener();
   }
 
-  @Cron('*/5 * * * *', { name: 'paypal-webhook-recovery' })
+  @Cron('*/15 * * * * *', { name: 'paypal-webhook-recovery' })
   recover(): void {
     this.wake();
   }

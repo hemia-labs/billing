@@ -27,6 +27,7 @@ import {
 } from '../billing-shared';
 import { CatalogPageDto, CatalogPaginationQueryDto } from '../catalog/dtos';
 import { PaypalClientService } from '../paypal';
+import { PaypalWebhookWorker } from './paypal/paypal-webhook-worker';
 import { PaypalEventResource } from './types';
 import { BillingWebhookProcessResult, PaypalWebhookHeaders } from './types';
 import {
@@ -56,6 +57,7 @@ export class BillingWebhooksService {
     private readonly webhookEvents: Repository<BillingWebhookEventEntity>,
     @InjectRepository(BillingAuditLogEntity)
     private readonly auditLogs: Repository<BillingAuditLogEntity>,
+    private readonly paypalWorker: PaypalWebhookWorker,
   ) {}
 
   async listConsoleWebhooks(
@@ -271,43 +273,48 @@ export class BillingWebhooksService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
-      const { event, created } = await this.getOrCreateLockedEvent(manager, {
-        providerEventId,
-        eventType,
-        resourceId,
-        transmissionId: headers.transmissionId,
-        payload,
-      });
+    const { result, queued } = await this.dataSource.transaction(
+      async (manager) => {
+        const { event, created } = await this.getOrCreateLockedEvent(manager, {
+          providerEventId,
+          eventType,
+          resourceId,
+          transmissionId: headers.transmissionId,
+          payload,
+        });
 
-      if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
-        event.verificationStatus = WebhookVerificationStatus.Verified;
-        event.eventType = eventType;
-        event.resourceId = resourceId;
-        event.payloadJson = payload;
-        event.transmissionId = headers.transmissionId;
-        event.processingStatus = WebhookProcessingStatus.Pending;
-        event.attempts = 0;
-        event.nextRetryAt = new Date();
-        event.lockedUntil = null;
-        event.leaseToken = null;
-        event.requiresManualReview = false;
-        event.errorMessage = null;
-        event.processedAt = null;
-        await manager.getRepository(BillingWebhookEventEntity).save(event);
-      }
+        if (event.verificationStatus !== WebhookVerificationStatus.Verified) {
+          event.verificationStatus = WebhookVerificationStatus.Verified;
+          event.eventType = eventType;
+          event.resourceId = resourceId;
+          event.payloadJson = payload;
+          event.transmissionId = headers.transmissionId;
+          event.processingStatus = WebhookProcessingStatus.Pending;
+          event.attempts = 0;
+          event.nextRetryAt = new Date();
+          event.lockedUntil = null;
+          event.leaseToken = null;
+          event.requiresManualReview = false;
+          event.errorMessage = null;
+          event.processedAt = null;
+          await manager.getRepository(BillingWebhookEventEntity).save(event);
+        }
 
-      if (
-        event.processingStatus === WebhookProcessingStatus.Pending &&
-        !event.requiresManualReview
-      ) {
-        await manager.query('SELECT pg_notify($1, $2)', [
-          PAYPAL_WEBHOOK_CHANNEL,
-          event.id,
-        ]);
-      }
-      return this.toResult(event, !created);
-    });
+        const queued =
+          event.processingStatus === WebhookProcessingStatus.Pending &&
+          !event.requiresManualReview;
+        if (queued) {
+          await manager.query('SELECT pg_notify($1, $2)', [
+            PAYPAL_WEBHOOK_CHANNEL,
+            event.id,
+          ]);
+        }
+        return { result: this.toResult(event, !created), queued };
+      },
+    );
+    // The local worker can see the event only after its transaction commits.
+    if (queued) this.paypalWorker.recover();
+    return result;
   }
 
   private isRetryableIgnored(event: BillingWebhookEventEntity): boolean {

@@ -16,6 +16,7 @@ function fixture(payload: Record<string, unknown> = {}) {
     {} as never,
     events as never,
     logs as never,
+    {} as never,
   );
   return { event, events, logs, service };
 }

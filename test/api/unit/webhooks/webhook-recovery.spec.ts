@@ -119,12 +119,14 @@ function fixture() {
       Promise.resolve(),
     ),
   };
+  const worker = { recover: jest.fn() };
   const service = new BillingWebhooksService(
     dataSource as never,
     paypal as never,
     audit as never,
     events as never,
     auditLogs as never,
+    worker as never,
   );
   const seed = (
     status = WebhookProcessingStatus.Failed,
@@ -155,6 +157,7 @@ function fixture() {
     events,
     manager,
     paypal,
+    worker,
     audit,
     auditLogs,
     service,
@@ -203,6 +206,7 @@ describe('PayPal webhook durable receipt', () => {
       attempts: 0,
     });
     expect(f.state.notifications).toEqual(['stored-event']);
+    expect(f.worker.recover).toHaveBeenCalledTimes(1);
     expect(f.manager.query).toHaveBeenCalledWith(
       expect.stringContaining('ON CONFLICT(provider_event_id) DO NOTHING'),
       expect.any(Array),
@@ -233,6 +237,7 @@ describe('PayPal webhook durable receipt', () => {
       processingStatus: WebhookProcessingStatus.Failed,
     });
     expect(f.state.notifications).toEqual([]);
+    expect(f.worker.recover).not.toHaveBeenCalled();
 
     await send().expect(200);
     expect(f.state.event).toMatchObject({

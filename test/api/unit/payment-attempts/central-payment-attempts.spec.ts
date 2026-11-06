@@ -187,6 +187,53 @@ function fixture() {
 }
 
 describe('central durable payment attempts', () => {
+  it('acknowledges a slow checkout and exposes the same approval link after preparation', async () => {
+    jest.useFakeTimers();
+    try {
+      const f = fixture();
+      const service = f.service();
+      const approvalUrl = 'https://www.paypal.com/approve';
+      f.checkout.createCheckoutSession.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve({
+                  checkoutId: f.checkoutId,
+                  subscriptionId: f.subscriptionId,
+                  checkoutUrl: approvalUrl,
+                  status: BillingCheckoutSessionStatus.Created,
+                }),
+              6_000,
+            );
+          }),
+      );
+      const request = service.create(f.input, actor, scopes);
+      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(request).resolves.toMatchObject({
+        attemptId: f.input.idempotencyKey,
+        status: 'processing',
+      });
+      await expect(
+        service.create(f.input, actor, scopes),
+      ).resolves.toMatchObject({
+        attemptId: f.input.idempotencyKey,
+        status: 'processing',
+      });
+      await jest.advanceTimersByTimeAsync(5_000);
+      await expect(
+        service.get(f.input.idempotencyKey, f.input, actor),
+      ).resolves.toMatchObject({
+        attemptId: f.input.idempotencyKey,
+        status: 'ready',
+        checkoutUrl: approvalUrl,
+      });
+      expect(f.rows.size).toBe(1);
+      expect(f.checkout.createCheckoutSession).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it.each(['absent', 'present', 'unavailable'])(
     'projects a read-only preparation rejection only with verified absent artifacts (%s)',
     async (evidence) => {
