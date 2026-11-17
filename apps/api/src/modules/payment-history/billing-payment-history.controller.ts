@@ -16,8 +16,15 @@ export class BillingPaymentHistoryController {
 
   @Get()
   @Header('Cache-Control', 'no-store')
-  @BillingServiceAccess({ product: 'product_code', organization: 'organization_id', source: 'query' })
-  list(@Query() query: PaymentHistoryQueryDto, @Req() request: AuthenticatedRequest) {
+  @BillingServiceAccess({
+    product: 'product_code',
+    organization: 'organization_id',
+    source: 'query',
+  })
+  list(
+    @Query() query: PaymentHistoryQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
     return this.service.list(query, billingServiceActor(request));
   }
 }

@@ -1,4 +1,10 @@
-import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class PaymentHistoryQueryDto {
   @IsUUID()
