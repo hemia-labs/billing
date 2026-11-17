@@ -52,7 +52,14 @@ export type CreateCheckoutAttemptInput = {
   legalAcceptanceId?: string;
   expectedSubscriptionId?: string;
 };
+export type PaypalApproval = {
+  kind: "subscription";
+  subscriptionId: string;
+  clientId: string;
+  environment: "sandbox" | "live";
+};
 export type CheckoutAttemptResponse = {
+  paypalApproval?: PaypalApproval;
   provider?: string;
   abandoned?: boolean;
   attemptId: string;

@@ -1,22 +1,28 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowUpRight, CreditCard, Fingerprint, Scale, Settings2, Webhook } from "lucide-react";
 import { PageHeading } from "@/components/page-heading";
 import { Badge } from "@/components/zuno/badge";
 import { Button } from "@/components/zuno/button";
+import { Card, CardContent, CardFooter } from "@/components/zuno/card";
 import { hasPermission, useSession } from "@/components/auth-gate";
-import { integrationTypes } from "./integration-catalog";
+import { visibleIntegrationTypes } from "./integration-catalog";
+
+const integrationIcons = { oauth: Fingerprint, legal: Scale, payments: CreditCard, events: Webhook };
 
 export function IntegrationCatalogClient({ creating = false }: { creating?: boolean }) {
   const session = useSession();
-  const canRead = hasPermission(session, "billing.integrations.read");
+  const items = visibleIntegrationTypes(session.permissions ?? [], creating);
   const canManage = hasPermission(session, "billing.integrations.manage");
 
-  if (!(creating ? canManage : canRead)) {
+  const canConfigurePayments = hasPermission(session, "billing.catalog.read") && hasPermission(session, "billing.catalog.manage");
+
+  if (!items.length) {
     return (
       <PageHeading
         title="Integraciones"
-        description={`Necesitas billing.integrations.${creating ? "manage" : "read"} para acceder a esta sección.`}
+        description="No tienes permiso para acceder a las integraciones disponibles."
       />
     );
   }
@@ -32,42 +38,53 @@ export function IntegrationCatalogClient({ creating = false }: { creating?: bool
           <Button variant="outline" render={<Link href="/integrations" />}>
             Volver
           </Button>
-        ) : canManage ? (
+        ) : canManage || canConfigurePayments ? (
           <Button render={<Link href="/integrations/new" />}>
             Nueva integración
           </Button>
         ) : undefined}
       />
 
-      <section aria-label="Tipos de integración" className="grid gap-4 md:grid-cols-2">
-        {integrationTypes.map((item) => (
-          <article
-            key={item.key}
-            aria-labelledby={`integration-${item.key}`}
-            className="flex flex-col gap-5 rounded-lg border border-border bg-card p-5 shadow-sm"
-          >
-            <div className="min-w-0 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 id={`integration-${item.key}`} className="text-base font-semibold">{item.title}</h2>
-                <Badge variant="outline">{item.availability}</Badge>
-              </div>
-              <p className="max-w-2xl text-sm text-muted-foreground">{item.description}</p>
-            </div>
-            {creating ? item.key === "oauth" ? (
-              <Button className="mt-auto w-fit" variant="outline" render={<Link href="/integrations/clients/new" />}>
-                Configurar
-              </Button>
-            ) : null : (
-              <Button className="mt-auto w-fit" variant="outline" render={<Link href={item.href} />}>
-                {item.key === "oauth" || item.key === "events" ? "Administrar" : "Consultar"}
-              </Button>
-            )}
-          </article>
-        ))}
+      <section aria-label="Tipos de integración" className="grid items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {items.map((item) => {
+          const Icon = integrationIcons[item.key];
+          const configurable = item.key === "oauth" ? canManage : item.key === "payments" && canConfigurePayments;
+          const href = creating && item.key === "oauth" ? "/integrations/clients/new" : item.href;
+          return (
+            <Card
+              key={item.key}
+              aria-labelledby={`integration-${item.key}`}
+              className="flex min-w-0 flex-col overflow-hidden rounded-lg shadow-sm"
+              role="article"
+            >
+              <CardContent className="flex-1 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-secondary text-primary">
+                    <Icon aria-hidden="true" className="size-6" />
+                  </span>
+                  <Button aria-label={`Abrir ${item.title}`} size="icon" variant="ghost" render={<Link href={item.href} />}>
+                    <ArrowUpRight aria-hidden="true" className="size-4 text-muted-foreground" />
+                  </Button>
+                </div>
+                <h2 id={`integration-${item.key}`} className="mt-4 text-base font-semibold">{item.title}</h2>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.description}</p>
+              </CardContent>
+              <CardFooter className="min-h-16 flex-wrap justify-between gap-3 border-t border-border px-5 py-3">
+                {!creating || item.key === "oauth" || item.key === "payments" ? (
+                  <Button variant="outline" render={<Link href={href} />}>
+                    <Settings2 aria-hidden="true" className="size-4" />
+                    {configurable ? "Configurar" : "Consultar"}
+                  </Button>
+                ) : null}
+                <Badge className="ml-auto" variant="outline">{item.availability}</Badge>
+              </CardFooter>
+            </Card>
+          );
+        })}
       </section>
       {creating && (
         <p className="text-sm text-muted-foreground">
-          El registro desde esta pantalla está disponible para clientes OAuth. Las otras conexiones se consultan o administran en su sección correspondiente.
+          Puedes configurar clientes OAuth y conexiones PayPal según tus permisos. Las otras conexiones se consultan en su sección correspondiente.
         </p>
       )}
     </div>

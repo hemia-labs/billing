@@ -6,9 +6,22 @@ import {
 } from '../enums';
 
 @Entity('webhook_events')
-@Index('IDX_webhook_events_provider_event_id_unique', ['providerEventId'], {
-  unique: true,
-})
+@Index(
+  'IDX_webhook_events_legacy_event_unique',
+  ['provider', 'providerEventId'],
+  {
+    unique: true,
+    where: '"provider_connection_id" IS NULL',
+  },
+)
+@Index(
+  'IDX_webhook_events_connection_event_unique',
+  ['provider', 'providerConnectionId', 'providerEventId'],
+  {
+    unique: true,
+    where: '"provider_connection_id" IS NOT NULL',
+  },
+)
 @Index('IDX_webhook_events_provider', ['provider'])
 @Index('IDX_webhook_events_event_type', ['eventType'])
 @Index('IDX_webhook_events_resource_id', ['resourceId'])
@@ -23,6 +36,9 @@ export class BillingWebhookEventEntity {
 
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
+
+  @Column({ name: 'provider_connection_id', type: 'uuid', nullable: true })
+  providerConnectionId: string | null;
 
   @Column({ name: 'provider_event_id', length: 180 })
   providerEventId: string;

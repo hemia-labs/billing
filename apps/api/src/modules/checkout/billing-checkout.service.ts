@@ -1,3 +1,5 @@
+import { matchesProviderPriceScope } from '../catalog/provider-price-scope';
+import { providerConnectionId } from '../providers/provider-connection';
 import {
   renewalResume,
   renewalResumeResponse,
@@ -22,6 +24,7 @@ import {
   BillingCheckoutSessionEntity,
   BillingCustomerEntity,
   BillingPlanEntity,
+  BillingProviderPriceEntity,
   BillingProductEntity,
   BillingSubscriptionEntity,
 } from '../billing-shared';
@@ -92,6 +95,10 @@ export class BillingCheckoutService {
     return response;
   }
 
+  resolveProviderConnection(provider: BillingProvider, productCode: string) {
+    return this.providers.resolveConnection(provider, productCode);
+  }
+
   async resolveCheckoutProvider(
     dto: Pick<
       CreateCheckoutSessionDto,
@@ -119,9 +126,53 @@ export class BillingCheckoutService {
     return this.planResolver.configuredProvider(price);
   }
 
+  async resolveCheckoutSelection(
+    dto: Pick<
+      CreateCheckoutSessionDto,
+      | 'organizationId'
+      | 'productCode'
+      | 'planCode'
+      | 'planPriceCode'
+      | 'idempotencyKey'
+    >,
+    actor: BillingServiceActor,
+    provider: BillingProvider,
+    manager: EntityManager,
+  ) {
+    const existing = await this.findExistingCheckout(
+      manager.getRepository(BillingCheckoutSessionEntity),
+      dto,
+      actor,
+    );
+    if (existing?.providerPriceId)
+      return {
+        providerPriceMappingId: existing.providerPriceId,
+        providerConnectionId: providerConnectionId(existing.metadata),
+      };
+    const connectionId = await this.resolveProviderConnection(
+      provider,
+      dto.productCode,
+    );
+    const product = await this.findActiveProduct(dto.productCode, manager);
+    const plan = await this.findActivePlan(product.id, dto.planCode, manager);
+    return {
+      providerConnectionId: connectionId,
+      providerPriceMappingId: this.planResolver.resolve(
+        plan,
+        provider,
+        connectionId,
+        dto.planPriceCode,
+      ).providerPrice.id,
+    };
+  }
+
   async createCheckoutSession(
     dto: CreateCheckoutSessionDto & { resumeSourceSubscriptionId?: string },
     actor: BillingServiceActor,
+    pinnedConnection?: {
+      providerConnectionId: string | null;
+      providerPriceMappingId?: string;
+    },
   ): Promise<CheckoutSessionResponseDto> {
     await this.servicePolicy.assertContext(
       actor,
@@ -176,7 +227,7 @@ export class BillingCheckoutService {
       });
       this.assertResumeSource(resumeSource, dto);
       const remote = await this.providers
-        .get(provider)
+        .get(provider, providerConnectionId(resumeSource!.metadata))
         .getSubscription(resumeSource!.providerSubscriptionId!);
       if (
         remote.id !== resumeSource!.providerSubscriptionId ||
@@ -185,7 +236,10 @@ export class BillingCheckoutService {
         throw new ConflictException(
           'Original renewal is not confirmed cancelled',
         );
-      const adapter = this.providers.get(provider);
+      const adapter = this.providers.get(
+        provider,
+        providerConnectionId(resumeSource!.metadata),
+      );
       if (!adapter.validateFuturePlan)
         throw new ConflictException(
           'Provider cannot safely resume future renewal',
@@ -307,17 +361,48 @@ export class BillingCheckoutService {
       const plan =
         resumeSource?.plan ??
         (await this.findActivePlan(product.id, dto.planCode, manager));
+      const connectionId = resumeSource
+        ? providerConnectionId(resumeSource.metadata)
+        : pinnedConnection
+          ? providerConnectionId(pinnedConnection)
+          : await this.providers.resolveConnection(
+              dto.provider!,
+              dto.productCode,
+            );
+      const frozenMapping = pinnedConnection?.providerPriceMappingId
+        ? await manager.getRepository(BillingProviderPriceEntity).findOne({
+            where: { id: pinnedConnection.providerPriceMappingId },
+            relations: { planPrice: { planVersion: true } },
+          })
+        : null;
+      if (
+        pinnedConnection?.providerPriceMappingId &&
+        (!frozenMapping ||
+          frozenMapping.planPrice.planVersion.planId !== plan.id ||
+          frozenMapping.planPrice.code !== dto.planPriceCode ||
+          frozenMapping.provider !== dto.provider ||
+          !matchesProviderPriceScope(frozenMapping, connectionId))
+      )
+        throw new ConflictException(
+          'Frozen provider price does not match the checkout',
+        );
       const resolved = resumeSource
         ? {
             price: resumeSource.planPrice!,
             providerPrice: resumeSource.providerPrice!,
           }
-        : this.planResolver.resolve(plan, dto.provider!, dto.planPriceCode);
-      if (!resolved.providerPrice.providerPriceId) {
+        : frozenMapping
+          ? { price: frozenMapping.planPrice, providerPrice: frozenMapping }
+          : this.planResolver.resolve(
+              plan,
+              dto.provider!,
+              connectionId,
+              dto.planPriceCode,
+            );
+      if (!resolved.providerPrice.providerPriceId)
         throw new BadRequestException(
           'Provider plan id is required for checkout',
         );
-      }
       const customers = manager.getRepository(BillingCustomerEntity);
       const subscriptions = manager.getRepository(BillingSubscriptionEntity);
 
@@ -385,6 +470,7 @@ export class BillingCheckoutService {
           legalSnapshotHash: legal?.legalSnapshotHash ?? null,
           metadata: {
             ...creator,
+            providerConnectionId: connectionId,
             ...(legal ? { legalEvidence: legal.evidence } : {}),
           },
         }),
@@ -412,6 +498,7 @@ export class BillingCheckoutService {
           legalSnapshotHash: legal?.legalSnapshotHash ?? null,
           metadata: {
             ...creator,
+            providerConnectionId: connectionId,
             ...(legal ? { legalEvidence: legal.evidence } : {}),
             subscriptionId: subscription.id,
             idempotencyKey: dto.idempotencyKey,
@@ -526,25 +613,27 @@ export class BillingCheckoutService {
         );
       result = subscription.providerSubscriptionId
         ? await this.providers
-            .get(checkout.provider)
+            .get(checkout.provider, providerConnectionId(checkout.metadata))
             .getSubscription(subscription.providerSubscriptionId)
-        : await this.providers.get(checkout.provider).createSubscription({
-            providerPlanId: String(
-              checkout.metadata.providerPlanId ??
-                checkout.metadata.paypalPlanId,
-            ),
-            ...(renewalResume(subscription)
-              ? { startTime: renewalResume(subscription)!.effectiveAt }
-              : {}),
-            customId: checkout.id,
-            requestId: checkout.id,
-            returnUrl: checkout.successUrl,
-            cancelUrl: checkout.cancelUrl,
-            subscriberEmail:
-              typeof checkout.metadata.billingEmail === 'string'
-                ? checkout.metadata.billingEmail
-                : undefined,
-          });
+        : await this.providers
+            .get(checkout.provider, providerConnectionId(checkout.metadata))
+            .createSubscription({
+              providerPlanId: String(
+                checkout.metadata.providerPlanId ??
+                  checkout.metadata.paypalPlanId,
+              ),
+              ...(renewalResume(subscription)
+                ? { startTime: renewalResume(subscription)!.effectiveAt }
+                : {}),
+              customId: checkout.id,
+              requestId: checkout.id,
+              returnUrl: checkout.successUrl,
+              cancelUrl: checkout.cancelUrl,
+              subscriberEmail:
+                typeof checkout.metadata.billingEmail === 'string'
+                  ? checkout.metadata.billingEmail
+                  : undefined,
+            });
     } catch (cause: unknown) {
       error = cause;
     }
@@ -622,9 +711,17 @@ export class BillingCheckoutService {
         this.assertSameRequest(existing, requestHash, actor);
         return existing;
       }
+      const currentPlan = await manager
+        .getRepository(BillingPlanEntity)
+        .findOne({
+          where: { id: targetPlan.id },
+          lock: { mode: 'pessimistic_read' },
+        });
+      if (!currentPlan) throw new NotFoundException('Billing plan not found');
       const resolved = this.planResolver.resolve(
         targetPlan,
         dto.provider!,
+        providerConnectionId(subscription.metadata),
         dto.planPriceCode,
       );
       return repository.save(
@@ -650,6 +747,7 @@ export class BillingCheckoutService {
           metadata: {
             createdByIssuer: actor.issuer,
             createdByClientId: actor.clientId,
+            providerConnectionId: providerConnectionId(subscription.metadata),
             subscriptionId: subscription.id,
             operation: 'plan_change',
             idempotencyKey: dto.idempotencyKey,
@@ -805,7 +903,10 @@ export class BillingCheckoutService {
       !subscription.providerSubscriptionId &&
       now.getTime() + CHECKOUT_ATTEMPT_LEASE_MS >=
         checkout.createdAt.getTime() +
-          this.providers.get(checkout.provider).subscriptionIdempotencyWindowMs
+          this.providers.get(
+            checkout.provider,
+            providerConnectionId(checkout.metadata),
+          ).subscriptionIdempotencyWindowMs
     )
       throw new ConflictException(
         'Provider retry window expired; reconcile the original checkout before retrying',
@@ -1158,6 +1259,14 @@ export class BillingCheckoutService {
     planCode: string,
     manager: EntityManager,
   ): Promise<BillingPlanEntity> {
+    // Lock only the plan row: joined nullable catalog relations cannot be locked.
+    if (manager.queryRunner?.isTransactionActive) {
+      const locked = await manager.getRepository(BillingPlanEntity).findOne({
+        where: { productId, code: planCode, status: BillingPlanStatus.Active },
+        lock: { mode: 'pessimistic_read' },
+      });
+      if (!locked) throw new NotFoundException('Billing plan not found');
+    }
     const plan = await manager.getRepository(BillingPlanEntity).findOne({
       where: {
         productId,

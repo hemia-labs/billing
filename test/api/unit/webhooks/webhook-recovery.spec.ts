@@ -208,7 +208,7 @@ describe('PayPal webhook durable receipt', () => {
     expect(f.state.notifications).toEqual(['stored-event']);
     expect(f.worker.recover).toHaveBeenCalledTimes(1);
     expect(f.manager.query).toHaveBeenCalledWith(
-      expect.stringContaining('ON CONFLICT(provider_event_id) DO NOTHING'),
+      expect.stringContaining('ON CONFLICT DO NOTHING'),
       expect.any(Array),
     );
   });

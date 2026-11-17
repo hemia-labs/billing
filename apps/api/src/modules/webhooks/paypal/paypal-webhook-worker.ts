@@ -20,6 +20,7 @@ const MAX_ATTEMPTS = 15;
 
 type PaypalWebhookJob = {
   id: string;
+  provider_connection_id?: string | null;
   provider_event_id: string;
   event_type: string;
   payload_json: Record<string, unknown>;
@@ -209,7 +210,7 @@ export class PaypalWebhookWorker
                locked_until=clock_timestamp()+($2 * interval '1 second')
           FROM candidate
          WHERE event.id=candidate.id
-        RETURNING event.id,event.provider_event_id,event.event_type,
+        RETURNING event.id,event.provider_event_id,event.event_type,event.provider_connection_id,
                   event.payload_json,event.attempts,event.lease_token
         `,
         [token, LEASE_SECONDS],
@@ -235,6 +236,7 @@ export class PaypalWebhookWorker
     try {
       const input: BillingWebhookProcessorInput = {
         eventId: job.id,
+        providerConnectionId: job.provider_connection_id ?? null,
         providerEventId: job.provider_event_id,
         eventType: job.event_type,
         eventCreatedAt:

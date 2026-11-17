@@ -1,4 +1,8 @@
+import { Type } from 'class-transformer';
+import { CreateProviderPriceDto } from './create-billing-plan.dto';
 import {
+  IsArray,
+  ValidateNested,
   IsEnum,
   IsInt,
   IsIn,
@@ -71,10 +75,10 @@ export class CreateBillingAddonDto {
   @IsEnum(BillingProvider)
   provider: BillingProvider;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  providerPlanId?: string | null;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProviderPriceDto)
+  providerPrices: CreateProviderPriceDto[];
 
   @IsObject()
   entitlementEffects: AddonEntitlementEffects;

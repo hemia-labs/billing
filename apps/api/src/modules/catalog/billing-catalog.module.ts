@@ -1,7 +1,9 @@
+import { BillingProvidersModule } from '../providers/billing-providers.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   BillingAddonEntity,
+  BillingAddonProviderPriceEntity,
   BillingFeatureDefinitionEntity,
   BillingPlanEntitlementEntity,
   BillingPlanEntity,
@@ -20,8 +22,10 @@ import { BillingPlanCatalogResolver } from './billing-plan-catalog.resolver';
 
 @Module({
   imports: [
+    BillingProvidersModule,
     TypeOrmModule.forFeature([
       BillingAddonEntity,
+      BillingAddonProviderPriceEntity,
       BillingFeatureDefinitionEntity,
       BillingPlanEntitlementEntity,
       BillingPlanEntity,

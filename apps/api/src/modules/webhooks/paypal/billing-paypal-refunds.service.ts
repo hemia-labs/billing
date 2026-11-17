@@ -1,3 +1,7 @@
+import {
+  assertProviderConnection,
+  providerConnectionWhere,
+} from '../../providers/provider-connection';
 import { Injectable, Optional } from '@nestjs/common';
 import { EntityManager, In } from 'typeorm';
 import { BillingAuditService } from '../../audit';
@@ -70,8 +74,8 @@ export class BillingPaypalRefundsService {
     }
 
     const [lockedPayment] = await manager.query<{ id: string }[]>(
-      'SELECT id FROM payments WHERE provider=$1 AND provider_capture_id=$2',
-      [BillingProvider.Paypal, saleId],
+      "SELECT id FROM payments WHERE provider=$1 AND provider_capture_id=$2 AND COALESCE(metadata->>'providerConnectionId','global')=COALESCE($3::text,'global')",
+      [BillingProvider.Paypal, saleId, input.providerConnectionId ?? null],
     );
     if (!lockedPayment) return this.failed('Payment not found');
 
@@ -81,6 +85,12 @@ export class BillingPaypalRefundsService {
       relations: { subscription: true },
     });
     if (!payment) return this.failed('Payment not found');
+    assertProviderConnection(payment.metadata, input.providerConnectionId);
+    if (payment.subscription)
+      assertProviderConnection(
+        payment.subscription.metadata,
+        input.providerConnectionId,
+      );
 
     // Captures and refunds serialize on the subscription before the payment.
     if (payment.subscriptionId) {
@@ -100,7 +110,11 @@ export class BillingPaypalRefundsService {
 
     const refunds = manager.getRepository(BillingPaymentRefundEntity);
     const previousRefund = await refunds.findOne({
-      where: { provider: BillingProvider.Paypal, providerRefundId: refundId },
+      where: {
+        provider: BillingProvider.Paypal,
+        paymentId: payment.id,
+        providerRefundId: refundId,
+      },
     });
     const amountText = (refundCents / 100).toFixed(2);
     if (previousRefund) {
@@ -151,6 +165,16 @@ export class BillingPaypalRefundsService {
         };
     }
     await payments.save(payment);
+    // A partial refund removes checkout confirmation even when license/status stay unchanged.
+    if (
+      payment.subscription &&
+      payment.subscription.id === payment.subscriptionId &&
+      payment.subscription.organizationId === payment.organizationId
+    )
+      await manager.query('SELECT queue_billing_license($1::uuid, $2::text)', [
+        payment.organizationId,
+        payment.subscription.productCode,
+      ]);
 
     await this.audit.record({
       manager,
@@ -379,9 +403,14 @@ export class BillingPaypalRefundsService {
     if (!captureId) return this.failed('Invalid PayPal capture reference');
     const payments = manager.getRepository(BillingPaymentEntity);
     let payment = await payments.findOne({
-      where: { provider: BillingProvider.Paypal, providerCaptureId: captureId },
+      where: {
+        provider: BillingProvider.Paypal,
+        providerCaptureId: captureId,
+        metadata: providerConnectionWhere(input.providerConnectionId),
+      },
     });
     if (!payment) return this.failed('Payment not found');
+    assertProviderConnection(payment?.metadata, input.providerConnectionId);
     if (payment.metadata?.operation !== 'plan_change_proration')
       return { processingStatus: WebhookProcessingStatus.Ignored };
     const subscription = await manager
@@ -579,7 +608,7 @@ export class BillingPaypalRefundsService {
   ): Promise<void> {
     if (!providerSubscriptionId) return;
     await manager.query(
-      'INSERT INTO paypal_cancellation_jobs(organization_id,provider_subscription_id,target_type,target_subscription_id,target_addon_id,source_payment_refund_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(provider_subscription_id) DO NOTHING',
+      'INSERT INTO paypal_cancellation_jobs(organization_id,provider_subscription_id,target_type,target_subscription_id,target_addon_id,source_payment_refund_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
       [
         organizationId,
         providerSubscriptionId,

@@ -119,6 +119,8 @@ const subscription = await payments.subscriptions.current(verifiedOrganizationId
 
 An interrupted create is recovered with its known UUID. Retry the same key and body; changing the payload under the same key is a conflict. The SDK does not create local attempts or recreate a purchase from a GET. `ready` means a provider receipt exists, not that paid access has been granted. Confirm access from Billing's license and the exact effective plan/subscription.
 
+A ready initial PayPal checkout may also include optional `paypalApproval: { kind: "subscription", subscriptionId, clientId, environment }`. This separate `subscriptionId` is the real PayPal ID (`I-…`); the receipt's top-level `subscriptionId` remains Billing's internal UUID. The browser may pass this already-created subscription to PayPal's JavaScript SDK using the public client ID and environment returned by Billing. Reuse the same attempt when reopening payment; never create another subscription in the browser. Keep `checkoutUrl` as the redirect fallback for unsupported windows, legacy receipts, orders and revisions. The public client ID is not the consumer's Hemia OAuth client ID. Secrets remain in Billing. An approval callback does not grant access: wait for the authenticated Billing license webhook when the product uses webhook-only activation.
+
 Core `checkout.create/status/verify` and `subscriptions.changePlan` remain low-level APIs. Prefer `attempts` for durable creation/recovery. Core types and `CheckoutAttemptResponse` are exported from the main entry point; no framework is required.
 
 ## NestJS without a database
@@ -239,3 +241,7 @@ Legal outgoing scopes are `legal.integration.acceptances.prepare` and `.create`.
 Publishing this SDK does not deploy Billing's central payment-attempt/snapshot APIs. Deploy and test the matching Billing version before upgrading a consumer. Test PayPal approvals and authenticated callbacks in Sandbox before enabling purchases in production.
 
 Billing selects the configured provider; consumer checkout inputs never select it. An optional `provider` response field is informational. Approval URLs come from authenticated Billing responses and the SDK validates absolute HTTPS URLs without credentials, nonstandard ports, IP addresses, or localhost destinations. Billing validates upstream destinations against its provider adapter configuration. No provider allowlist or payment credentials are configured by a consumer.
+
+## PayPal connections managed by Billing
+
+Billing selects the active PayPal app using the configured product code. A provider connection and its plan-price mappings are administrative Billing settings; they are separate from the Console/OAuth connection used to initialize this SDK. PayPal credentials and webhook IDs stay in Billing. Consumers keep using the existing checkout, attempt and subscription APIs and never submit a PayPal connection ID. Billing retains the original provider connection and price mapping for existing contracts and retries. If an existing subscription needs a target plan, Billing must have a mapping for that subscription’s original connection; changing the product’s current app does not migrate the contract.

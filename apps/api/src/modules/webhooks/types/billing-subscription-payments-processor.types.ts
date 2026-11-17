@@ -4,6 +4,7 @@ import type { PaypalSubscriptionDetails } from '../../paypal/types';
 export type PaypalEventResource = Record<string, unknown>;
 
 export interface BillingWebhookProcessorInput {
+  providerConnectionId?: string | null;
   eventId: string;
   providerEventId: string;
   eventType: string;

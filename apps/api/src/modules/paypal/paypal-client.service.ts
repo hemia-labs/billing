@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { PaypalConnectionsService } from '../paypal-connections/paypal-connections.service';
+import { providerConnectionId } from '../providers/provider-connection';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -20,36 +23,88 @@ interface CachedToken {
 @Injectable()
 export class PaypalClientService {
   private readonly logger = new Logger(PaypalClientService.name);
-  private cachedToken?: CachedToken;
+  private tokens = new Map<string, CachedToken>();
+  private connectionId: string | null = null;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly connections: PaypalConnectionsService,
+  ) {}
+
+  forConnection(id?: string | null): PaypalClientService {
+    const connection = providerConnectionId({ providerConnectionId: id });
+    if (connection === this.connectionId) return this;
+    const client = new PaypalClientService(this.config, this.connections);
+    client.connectionId = connection;
+    client.tokens = this.tokens;
+    return client;
+  }
+
+  async resolveConnection(productCode: string): Promise<string | null> {
+    return this.connections.resolveForProduct(productCode);
+  }
+
+  async recoveryConnections() {
+    return this.connections.listForRecovery();
+  }
+
+  async credentials() {
+    if (this.connectionId) {
+      return this.connections.credentialsForConnection(this.connectionId);
+    }
+    return {
+      id: null,
+      environment:
+        this.config.get<'sandbox' | 'live'>('paypal.environment') ?? 'sandbox',
+      baseUrl: this.config.get<string>('paypal.baseUrl') ?? '',
+      clientId: this.config.get<string>('paypal.clientId') ?? '',
+      clientSecret: this.config.get<string>('paypal.clientSecret') ?? '',
+      webhookId: this.config.get<string>('paypal.webhookId') ?? '',
+      revision: 'global',
+    };
+  }
 
   async getAccessToken(): Promise<string> {
-    if (this.cachedToken && this.cachedToken.expiresAt > Date.now()) {
-      return this.cachedToken.accessToken;
-    }
+    return this.accessTokenFor(await this.credentials());
+  }
 
-    const body = await this.request<{
-      access_token: string;
-      expires_in: number;
-    }>(
-      '/v1/oauth2/token',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${this.getBasicAuthToken()}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: 'grant_type=client_credentials',
+  private async accessTokenFor(
+    credentials: Awaited<ReturnType<PaypalClientService['credentials']>>,
+  ) {
+    const fingerprint = createHash('sha256')
+      .update(credentials.clientId + ':' + credentials.clientSecret)
+      .digest('hex');
+    const key = `${credentials.id ?? 'global'}:${credentials.revision}:${fingerprint}`;
+    const cached = this.tokens.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
+    const response = await fetch(`${credentials.baseUrl}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      false,
-    );
-
-    this.cachedToken = {
+      body: 'grant_type=client_credentials',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await this.parseResponse(response);
+    if (
+      !response.ok ||
+      typeof body.access_token !== 'string' ||
+      !body.access_token ||
+      typeof body.expires_in !== 'number' ||
+      body.expires_in <= 0
+    )
+      throw new PaypalApiException(
+        'PayPal OAuth request failed',
+        response.ok ? 502 : response.status,
+        '/v1/oauth2/token',
+        undefined,
+        {},
+      );
+    this.tokens.set(key, {
       accessToken: body.access_token,
       expiresAt: Date.now() + Math.max(body.expires_in - 60, 0) * 1000,
-    };
-
+    });
     return body.access_token;
   }
 
@@ -238,6 +293,9 @@ export class PaypalClientService {
   async verifyWebhook(
     input: VerifyPaypalWebhookInput,
   ): Promise<PaypalWebhookVerificationResult> {
+    const credentials = await this.credentials();
+    if (!credentials.webhookId)
+      throw new Error('PayPal webhook is not configured');
     const raw = await this.request<Record<string, unknown>>(
       '/v1/notifications/verify-webhook-signature',
       {
@@ -248,7 +306,7 @@ export class PaypalClientService {
           transmission_id: input.transmissionId,
           transmission_sig: input.transmissionSig,
           transmission_time: input.transmissionTime,
-          webhook_id: this.config.get<string>('paypal.webhookId'),
+          webhook_id: credentials.webhookId,
           webhook_event: input.webhookEvent,
         }),
       },
@@ -270,6 +328,7 @@ export class PaypalClientService {
     init: RequestInit,
     withBearer = true,
   ): Promise<T> {
+    const credentials = await this.credentials();
     const headers = new Headers(init.headers);
 
     if (withBearer) {
@@ -277,7 +336,7 @@ export class PaypalClientService {
       headers.set('Content-Type', 'application/json');
     }
 
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetch(`${credentials.baseUrl}${endpoint}`, {
       ...init,
       headers,
       signal: init.signal ?? AbortSignal.timeout(15_000),
@@ -309,16 +368,6 @@ export class PaypalClientService {
     } catch {
       return { raw: text };
     }
-  }
-
-  private getBasicAuthToken(): string {
-    const clientId = this.config.get<string>('paypal.clientId') ?? '';
-    const clientSecret = this.config.get<string>('paypal.clientSecret') ?? '';
-    return Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  }
-
-  private get baseUrl(): string {
-    return this.config.get<string>('paypal.baseUrl') ?? '';
   }
 
   private findApprovalUrl(raw: Record<string, unknown>): string | undefined {

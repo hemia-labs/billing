@@ -45,7 +45,7 @@ module.exports = async function checkCheckoutScaling(ds) {
     [version.id],
   );
   await ds.query(
-    "INSERT INTO provider_prices(plan_price_id,provider,provider_price_id) VALUES($1,'paypal','P-TEST')",
+    "INSERT INTO provider_prices(plan_price_id,provider,provider_price_id,connection_scope) VALUES($1,'paypal','P-TEST','global')",
     [price.id],
   );
   const actor = { issuer: 'https://identity.test', clientId: 'checkout-test' };

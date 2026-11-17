@@ -1,3 +1,5 @@
+import { paymentHistoryQuery, parsePaymentHistory, type PaymentHistoryOptions, type PaymentHistoryPage } from "./history";
+export type { PaymentHistoryItem, PaymentHistoryPage, PaymentHistoryOptions } from "./history";
 import type {
   PaymentAttemptInput,
   PaymentAttemptContext,
@@ -609,6 +611,12 @@ export function createPaymentsClient(config: PaymentsConfig) {
     },
     checkout,
     attempts,
+    payments: {
+      async list(organizationId: string, options: PaymentHistoryOptions = {}): Promise<PaymentHistoryPage> {
+        const query = paymentHistoryQuery(organizationId, productCode, options);
+        return parsePaymentHistory(await request(`payments?${query}`, permissions.subscriptions, undefined, true), organizationId.toLowerCase(), productCode);
+      },
+    },
     snapshots: {
       async current(organizationId: string): Promise<PaymentSnapshot> {
         if (!uuid.test(organizationId))
@@ -1324,7 +1332,27 @@ function parseAttempt(v: unknown, id: string): CheckoutAttemptResponse {
       (change.action === "approve_payment" && !change.checkoutUrl))
       ? undefined
       : (change?.checkoutUrl ?? v.checkoutUrl);
+  let paypalApproval: CheckoutAttemptResponse["paypalApproval"];
+  if (v.paypalApproval !== undefined) {
+    const approval = v.paypalApproval;
+    if (!record(approval) || approval.kind !== "subscription" ||
+        typeof approval.subscriptionId !== "string" || !/^I-[A-Z0-9]{1,178}$/.test(approval.subscriptionId) ||
+        typeof approval.clientId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(approval.clientId) ||
+        !["sandbox", "live"].includes(String(approval.environment)) ||
+        v.provider !== "paypal" || v.operation !== "checkout" || v.status !== "ready" ||
+        !uuid.test(String(v.checkoutId)) || !uuid.test(String(v.subscriptionId)) ||
+        !["created", "pending"].includes(String(v.checkoutStatus)) ||
+        ![undefined, null, "pending"].includes(v.subscriptionStatus as string | null | undefined) ||
+        v.errorCode || v.abandoned || change || renewal || revision || typeof canonicalUrl !== "string")
+      throw new PaymentsError("contract");
+    const approvalUrl = new URL(canonicalUrl);
+    if (approvalUrl.hostname !== (approval.environment === "live" ? "www.paypal.com" : "www.sandbox.paypal.com"))
+      throw new PaymentsError("contract");
+    paypalApproval = { kind: "subscription", subscriptionId: approval.subscriptionId, clientId: approval.clientId,
+      environment: approval.environment as "sandbox" | "live" };
+  }
   return {
+    ...(paypalApproval ? { paypalApproval } : {}),
     attemptId: id,
     ...(v.provider === undefined ? {} : { provider: v.provider as string }),
     operation: v.operation as CheckoutAttemptResponse["operation"],

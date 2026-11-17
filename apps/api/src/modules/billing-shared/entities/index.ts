@@ -20,3 +20,5 @@ export * from './billing-subscription.entity';
 export * from './billing-subscription-addon.entity';
 export * from './billing-usage-counter.entity';
 export * from './billing-webhook-event.entity';
+export * from './billing-paypal-connection.entity';
+export * from './billing-addon-provider-price.entity';

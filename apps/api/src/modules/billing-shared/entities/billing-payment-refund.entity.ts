@@ -13,8 +13,8 @@ import { BillingWebhookEventEntity } from './billing-webhook-event.entity';
 
 @Entity('payment_refunds')
 @Index(
-  'UQ_payment_refunds_provider_refund_id',
-  ['provider', 'providerRefundId'],
+  'IDX_payment_refunds_payment_provider_refund_unique',
+  ['provider', 'paymentId', 'providerRefundId'],
   {
     unique: true,
   },

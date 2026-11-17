@@ -35,6 +35,9 @@ import {
   updateCatalogPlan,
 } from "../catalog-api";
 import { PlanForm } from "./plan-form";
+import { PlanActions } from "./plan-actions";
+import { ProviderMappings } from "../provider-mappings";
+import { useProviderConnectionOptions } from "../provider-connection-options";
 
 const planRequests = new Map<string, Promise<CatalogPlan>>();
 
@@ -185,9 +188,26 @@ export function PlanDetailClient({ id }: { id: string }) {
           ) : null}
         </div>
         {!editing && canManage ? (
-          <Button className="w-fit shrink-0" render={<Link href={planHref + "?mode=edit"} />}>
-            <Edit3 className="size-4" />Editar
-          </Button>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button className="w-fit" disabled={publishing} render={<Link href={planHref + "?mode=edit"} />}>
+              <Edit3 className="size-4" />Editar
+            </Button>
+            <PlanActions
+              disabled={publishing}
+              key={id}
+              onDeleted={() => {
+                planRequests.delete(id);
+                router.replace(productHref);
+              }}
+              onUpdated={(next) => {
+                planRequests.delete(id);
+                setPlan({ ...next, publishedVersion: plan.publishedVersion });
+                setEditingPlan(next);
+                setNotice({ text: next.status === "active" ? "Plan reactivado." : "Plan desactivado.", tone: "success" });
+              }}
+              plan={plan}
+            />
+          </div>
         ) : null}
       </header>
 
@@ -216,7 +236,7 @@ export function PlanDetailClient({ id }: { id: string }) {
         <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">Cargando editor...</div>
       ) : (
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
-          <VersionsPanel canPublish={canPublish} id={id} onPublish={publish} publishing={publishing} revision={versionsRevision} />
+          <VersionsPanel canManage={canManage} productId={plan.productId} canPublish={canPublish} id={id} onPublish={publish} publishing={publishing} revision={versionsRevision} />
 
           <aside className="rounded-xl border border-border bg-card p-5 shadow-sm">
             <h2 className="text-lg font-semibold">Detalles del plan</h2>
@@ -242,12 +262,16 @@ export function PlanDetailClient({ id }: { id: string }) {
 }
 
 function VersionsPanel({
+  canManage,
+  productId,
   canPublish,
   id,
   onPublish,
   publishing,
   revision,
 }: {
+  canManage: boolean;
+  productId: string;
   canPublish: boolean;
   id: string;
   onPublish: (versionId: string) => Promise<boolean>;
@@ -331,6 +355,9 @@ function VersionsPanel({
         <div className="mt-4 divide-y divide-border rounded-lg border border-border">
           {versions.items.map((item) => (
             <VersionRow
+              canManage={canManage}
+              productId={productId}
+              onMappingsChange={() => { planRequests.delete(id); }}
               canPublish={canPublish}
               detail={selectedId === item.id ? detail : null}
               detailError={selectedId === item.id ? detailError : ""}
@@ -364,6 +391,9 @@ function VersionsPanel({
 }
 
 function VersionRow({
+  canManage,
+  productId,
+  onMappingsChange,
   canPublish,
   detail,
   detailError,
@@ -374,6 +404,9 @@ function VersionRow({
   onToggle,
   publishing,
 }: {
+  canManage: boolean;
+  productId: string;
+  onMappingsChange: () => void;
   canPublish: boolean;
   detail: CatalogPlanVersion | null;
   detailError: string;
@@ -414,7 +447,7 @@ function VersionRow({
               <span>{detailError}</span>
               <Button onClick={onRetryDetail} size="sm" type="button" variant="outline">Reintentar</Button>
             </Alert>
-          ) : detail ? <VersionDetails item={detail} /> : <p className="text-sm text-muted-foreground">Cargando detalle...</p>}
+          ) : detail ? <VersionDetails canManage={canManage} item={detail} onMappingsChange={onMappingsChange} productId={productId} /> : <p className="text-sm text-muted-foreground">Cargando detalle...</p>}
         </div>
       ) : null}
       {item.status === "draft" && canPublish ? (
@@ -442,7 +475,8 @@ function VersionRow({
   );
 }
 
-function VersionDetails({ item }: { item: CatalogPlanVersion }) {
+export function VersionDetails({ item, canManage, productId, onMappingsChange }: { item: CatalogPlanVersion; canManage: boolean; productId: string; onMappingsChange: () => void }) {
+  const connectionOptions = useProviderConnectionOptions(productId);
   return (
     <div className="space-y-5">
       <section>
@@ -450,18 +484,12 @@ function VersionDetails({ item }: { item: CatalogPlanVersion }) {
         {item.prices.length ? (
           <div className="mt-2 divide-y divide-border">
             {item.prices.map((price) => (
-              <div className="flex flex-col justify-between gap-2 py-3 sm:flex-row sm:items-start" key={price.id}>
+              <div className="space-y-3 py-3" key={price.id}>
                 <div className="min-w-0">
                   <p className="font-medium tabular-nums">{formatPrice(price)}</p>
                   <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{price.code}</p>
                 </div>
-                <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground sm:justify-end">
-                  {price.providerPrices.length ? price.providerPrices.map((provider) => (
-                    <span key={provider.id} title={provider.providerPriceId ?? undefined}>
-                      {providerLabel(provider.provider)}{provider.providerPriceId ? " · " + provider.providerPriceId : ""}
-                    </span>
-                  )) : <span>Sin proveedor</span>}
-                </div>
+                <ProviderMappings canManage={canManage} initialMappings={price.providerPrices} key={price.id} kind="plan" onChanged={onMappingsChange} options={connectionOptions} resourceId={price.id} />
               </div>
             ))}
           </div>
@@ -506,9 +534,6 @@ function formatPrice(price: CatalogPlanPrice) {
   return price.currency + " " + amount + interval;
 }
 
-function providerLabel(value: string) {
-  return ({ paypal: "PayPal", stripe: "Stripe", mercado_pago: "Mercado Pago", manual_transfer: "Transferencia" } as Record<string, string>)[value] ?? value;
-}
 
 function statusLabel(value: string) {
   return ({ active: "Activo", archived: "Archivado", draft: "Borrador", published: "Publicada" } as Record<string, string>)[value] ?? value;

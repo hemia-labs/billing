@@ -523,6 +523,7 @@ describe('service list filtering in database queries', () => {
       {} as never,
       {} as never,
       {} as never,
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
     await service.listActiveProducts(['medsync']);
     expect(products.find).toHaveBeenCalledWith(

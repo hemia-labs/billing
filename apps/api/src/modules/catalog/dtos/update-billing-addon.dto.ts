@@ -80,11 +80,6 @@ export class UpdateBillingAddonDto {
   provider?: BillingProvider;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  providerPlanId?: string | null;
-
-  @IsOptional()
   @IsObject()
   entitlementEffects?: AddonEntitlementEffects;
 

@@ -144,8 +144,11 @@ describe('catalog plan writes', () => {
       [BillingPlanEntitlementEntity, repository('entitlement', staged)],
     ]);
     const manager = {
+      queryRunner: { isTransactionActive: true },
       getRepository: jest.fn((entity: unknown) =>
-        transactionRepositories.get(entity),
+        entity === BillingProductEntity
+          ? products
+          : transactionRepositories.get(entity),
       ),
       transaction: jest.fn(
         async (operation: (value: unknown) => Promise<unknown>) => {
@@ -167,6 +170,7 @@ describe('catalog plan writes', () => {
       {} as never,
       {} as never,
       new BillingPlanCatalogResolver(),
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
     const dto = plainToInstance(CreateBillingPlanDto, {
       productId: 'product-id',
@@ -187,6 +191,8 @@ describe('catalog plan writes', () => {
             providerPrices: [
               {
                 provider: BillingProvider.Paypal,
+                connectionScope: 'global',
+                providerConnectionId: null,
                 providerPriceId: 'paypal-id',
               },
             ],

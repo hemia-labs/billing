@@ -172,6 +172,7 @@ describe('Vault configuration', () => {
       password: 'secret',
       database: 'billing',
       synchronize: false,
+      autoLoadEntities: true,
     });
     expect(jest.spyOn(secrets, 'getRequired')).toHaveBeenCalledWith(
       'database/postgres',

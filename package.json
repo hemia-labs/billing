@@ -10,6 +10,8 @@
     "build": "bun run --filter '*' build",
     "dev:web": "bun run --cwd apps/web dev",
     "dev:api": "bun run --cwd apps/api start:dev",
+    "dev:stack": "node scripts/dev-stack.mjs",
+    "test:dev-stack": "node --test test/dev-stack/*.test.mjs",
     "test": "bun run --cwd apps/api test && bun run --cwd apps/api test:bun && bun run --cwd apps/web test",
     "test:api": "bun run --cwd apps/api test",
     "test:web": "bun run --cwd apps/web test",

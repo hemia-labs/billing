@@ -26,7 +26,11 @@ export class BillingPaymentAttemptEntity {
   createdByClientId: string;
   @Column({ name: 'request_hash', length: 64 }) requestHash: string;
   @Column({ name: 'request_payload', type: 'jsonb' })
-  requestPayload: CreatePaymentAttemptDto & { provider?: BillingProvider };
+  requestPayload: CreatePaymentAttemptDto & {
+    provider?: BillingProvider;
+    providerConnectionId?: string | null;
+    providerPriceMappingId?: string;
+  };
   @Column({ type: 'varchar', length: 16, default: 'pending' }) status:
     'pending' | 'ready' | 'rejected';
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })

@@ -21,14 +21,7 @@ import { BillingProviderPriceEntity } from './billing-provider-price.entity';
 @Index('IDX_subscriptions_plan_code', ['planCode'])
 @Index('IDX_subscriptions_provider', ['provider'])
 @Index('IDX_subscriptions_status', ['status'])
-@Index(
-  'IDX_subscriptions_provider_subscription_id_unique',
-  ['providerSubscriptionId'],
-  {
-    unique: true,
-    where: '"provider_subscription_id" IS NOT NULL AND "deleted_at" IS NULL',
-  },
-)
+@Index('IDX_subscriptions_provider_connection_unique', { synchronize: false })
 export class BillingSubscriptionEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

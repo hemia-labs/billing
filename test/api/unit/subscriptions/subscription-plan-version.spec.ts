@@ -198,6 +198,7 @@ describe('contracted plan version', () => {
       unused,
       unused,
       new BillingPlanCatalogResolver(),
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
 
     await expect(service.publishVersion(version.id)).rejects.toThrow(

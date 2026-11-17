@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PaypalConnectionsModule } from '../paypal-connections/paypal-connections.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingCheckoutModule } from '../checkout';
 import { BillingSubscriptionsManagementModule } from '../subscriptions-management';
@@ -9,6 +10,7 @@ import { BillingPaymentAttemptsService } from './billing-payment-attempts.servic
   imports: [
     TypeOrmModule.forFeature([BillingPaymentAttemptEntity]),
     BillingCheckoutModule,
+    PaypalConnectionsModule,
     BillingSubscriptionsManagementModule,
   ],
   providers: [BillingPaymentAttemptsService],

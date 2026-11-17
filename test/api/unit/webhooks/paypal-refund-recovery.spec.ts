@@ -52,7 +52,23 @@ function fixture() {
     );
   });
   global.fetch = fetchMock as typeof fetch;
-  const paypal = { getAccessToken: jest.fn(() => Promise.resolve('token')) };
+  const paypal = {
+    getAccessToken: jest.fn(() => Promise.resolve('token')),
+    recoveryConnections: () =>
+      Promise.resolve([
+        { id: null, environment: settings['paypal.environment'] },
+      ]),
+    credentials: () =>
+      Promise.resolve({
+        id: null,
+        environment: settings['paypal.environment'],
+        baseUrl: settings['paypal.baseUrl'],
+        clientId: settings['paypal.clientId'],
+        clientSecret: settings['paypal.clientSecret'],
+        webhookId: settings['paypal.webhookId'],
+        revision: 'test',
+      }),
+  };
   const service = new PaypalRefundRecoveryService(
     { query } as never,
     paypal as never,
@@ -188,6 +204,7 @@ it('matches capture refunds by their PayPal up link, never by the refund id', as
   expect(f.query).toHaveBeenCalledWith(expect.any(String), [
     'CAPTURE1',
     'WH-CAPTURE',
+    null,
   ]);
   expect(f.resend).toHaveBeenCalledWith('WH-CAPTURE');
 });

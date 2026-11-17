@@ -1,3 +1,4 @@
+import { legacyPaypalConnections } from '../../helpers/paypal-connections';
 import { providerRegistry } from '../../helpers/provider-registry';
 import {
   policyFixture,
@@ -1337,6 +1338,7 @@ describe('checkout idempotency', () => {
             clientSecret: 'test',
           },
         }),
+        legacyPaypalConnections,
       );
       const requestId = randomUUID();
       await client.createSubscription({

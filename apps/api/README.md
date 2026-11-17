@@ -393,6 +393,31 @@ Todas las pruebas, configuraciones y runners viven en `../../test/`: Jest usa `t
 
 Auth agrupa sesión y Redis; Integrations separa service-clients y oauth-clients; los módulos con varios controladores usan `controllers/`. Webhooks agrupa sus workers y servicios PayPal en `paypal/`; Event Bus mantiene transporte y contratos juntos. No cambian endpoints ni contratos.
 
+## Desactivar y eliminar planes
+
+`PATCH /api/v1/billing/console/catalog/plans/:id` permite cambiar `status` entre
+`active` y `archived`. Archivar retira el plan del catálogo de nuevas compras;
+conserva sus contratos y versiones.
+
+`DELETE /api/v1/billing/console/catalog/plans/:id` requiere
+`billing.catalog.manage` y un UUID válido. Devuelve `204` y marca `deleted_at`;
+conserva versiones, precios y proveedores. Un plan inexistente o ya eliminado
+devuelve `404`. Si hay suscripciones, checkouts o licencias históricas
+(incluidos registros eliminados lógicamente), o intentos de pago pendientes,
+devuelve `409`: en ese caso debe desactivarse.
+
+La eliminación bloquea la fila del plan hasta comprobar referencias. Las
+reservas de checkout y las revisiones bloquean esa misma fila en lectura dentro
+de su transacción, de modo que una compra concurrente no continúa con un plan
+eliminado. Las mutaciones de plan y versiones comprueban el padre bajo bloqueo.
+Los intentos de cambio de plan reservados por código sin FK no amplían su
+contrato: si una reserva concurre con la eliminación, la revisión rechaza el
+plan ausente antes de contactar al proveedor; el intento puede quedar pendiente
+para conciliación. No se eliminan ni cancelan pagos automáticamente.
+
+No requiere migraciones. Las pruebas de concurrencia usan exclusivamente el
+PostgreSQL desechable de `bun run --cwd apps/api test:authorization:docker`.
+
 ## Proveedor de pagos
 
 Billing selecciona el único proveedor activo de `provider_prices` asociado al precio publicado solicitado. Sin configuración devuelve `404`; con varios proveedores activos devuelve `409`. Un proveedor sin adaptador devuelve `422` antes de realizar una operación financiera. El SDK y los productos consumidores no eligen proveedor ni configuran credenciales de la pasarela.
@@ -400,3 +425,7 @@ Billing selecciona el único proveedor activo de `provider_prices` asociado al p
 La selección se conserva en el intento durable. Los reintentos reutilizan el proveedor y la clave originales; los cambios y cancelaciones de una suscripción usan el proveedor de ese contrato. No se cambia de proveedor al editar el catálogo ni se usa PayPal como alternativa ante una configuración inválida.
 
 PayPal es el adaptador implementado. Traduce sus estados, valida sus URLs de aprobación y declara sus ventanas de idempotencia. Fuera de una ventana de creación incierta, Billing requiere conciliación y no crea otra compra automáticamente. Otros proveedores necesitan su propio adaptador y recepción de eventos antes de habilitarse. Este cambio no requiere migraciones nuevas.
+
+## Conexión PayPal por producto
+
+La configuración administrativa, el mantenimiento de credenciales históricas y el despliegue están descritos en [conexiones PayPal](../../docs/paypal-product-connections.md). Requiere la migración manual aditiva y `PAYPAL_CONNECTION_ENCRYPTION_KEY`; no se ejecutan migraciones ni se generan secretos al arrancar.

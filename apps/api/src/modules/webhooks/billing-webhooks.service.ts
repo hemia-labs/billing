@@ -1,3 +1,4 @@
+import { IsNull } from 'typeorm';
 import { webhookOrganizationSql } from './webhook-organization.sql';
 import {
   BadRequestException,
@@ -237,6 +238,7 @@ export class BillingWebhooksService {
   async processPaypalWebhook(
     headers: PaypalWebhookHeaders,
     payload: Record<string, unknown>,
+    providerConnectionId: string | null = null,
   ): Promise<BillingWebhookProcessResult> {
     this.validateHeaders(headers);
     const providerEventId = this.requiredString(payload.id, 'id');
@@ -244,7 +246,10 @@ export class BillingWebhooksService {
     const resource = this.getResource(payload);
     const resourceId = this.stringOrNull(resource.id);
 
-    const verification = await this.paypal
+    const paypal = providerConnectionId
+      ? this.paypal.forConnection(providerConnectionId)
+      : this.paypal;
+    const verification = await paypal
       .verifyWebhook({
         transmissionId: headers.transmissionId,
         transmissionTime: headers.transmissionTime,
@@ -262,6 +267,7 @@ export class BillingWebhooksService {
     if (!verification.verified) {
       await this.saveUnverifiedEvent({
         providerEventId,
+        providerConnectionId,
         eventType,
         resourceId,
         transmissionId: headers.transmissionId,
@@ -277,6 +283,7 @@ export class BillingWebhooksService {
       async (manager) => {
         const { event, created } = await this.getOrCreateLockedEvent(manager, {
           providerEventId,
+          providerConnectionId,
           eventType,
           resourceId,
           transmissionId: headers.transmissionId,
@@ -338,6 +345,7 @@ export class BillingWebhooksService {
 
   private async saveUnverifiedEvent(input: {
     providerEventId: string;
+    providerConnectionId: string | null;
     eventType: string;
     resourceId: string | null;
     transmissionId: string;
@@ -346,9 +354,9 @@ export class BillingWebhooksService {
     return this.dataSource.transaction(async (manager) => {
       const events = manager.getRepository(BillingWebhookEventEntity);
       await manager.query(
-        `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json,error_message,processed_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,clock_timestamp())
-         ON CONFLICT(provider_event_id) DO NOTHING`,
+        `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json,error_message,processed_at,provider_connection_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,clock_timestamp(),$10)
+         ON CONFLICT DO NOTHING`,
         [
           BillingProvider.Paypal,
           input.providerEventId,
@@ -359,10 +367,15 @@ export class BillingWebhooksService {
           WebhookProcessingStatus.Failed,
           JSON.stringify(input.payload),
           'PayPal webhook signature verification failed',
+          input.providerConnectionId,
         ],
       );
       const event = await events.findOne({
-        where: { providerEventId: input.providerEventId },
+        where: {
+          provider: BillingProvider.Paypal,
+          providerEventId: input.providerEventId,
+          providerConnectionId: input.providerConnectionId ?? IsNull(),
+        },
         lock: { mode: 'pessimistic_write' },
       });
       if (!event) throw new Error('PayPal webhook could not be persisted');
@@ -417,6 +430,7 @@ export class BillingWebhooksService {
     manager: EntityManager,
     input: {
       providerEventId: string;
+      providerConnectionId: string | null;
       eventType: string;
       resourceId: string | null;
       transmissionId: string;
@@ -425,9 +439,9 @@ export class BillingWebhooksService {
   ): Promise<{ event: BillingWebhookEventEntity; created: boolean }> {
     const events = manager.getRepository(BillingWebhookEventEntity);
     const inserted = await manager.query<Array<{ id: string }>>(
-      `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
-       ON CONFLICT(provider_event_id) DO NOTHING RETURNING id`,
+      `INSERT INTO webhook_events(provider,provider_event_id,event_type,resource_id,transmission_id,verification_status,processing_status,payload_json,provider_connection_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+       ON CONFLICT DO NOTHING RETURNING id`,
       [
         BillingProvider.Paypal,
         input.providerEventId,
@@ -437,10 +451,15 @@ export class BillingWebhooksService {
         WebhookVerificationStatus.Verified,
         WebhookProcessingStatus.Pending,
         JSON.stringify(input.payload),
+        input.providerConnectionId,
       ],
     );
     const event = await events.findOne({
-      where: { providerEventId: input.providerEventId },
+      where: {
+        provider: BillingProvider.Paypal,
+        providerEventId: input.providerEventId,
+        providerConnectionId: input.providerConnectionId ?? IsNull(),
+      },
       lock: { mode: 'pessimistic_write' },
     });
     if (!event) throw new Error('Persisted PayPal webhook could not be loaded');

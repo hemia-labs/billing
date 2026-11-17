@@ -1,0 +1,218 @@
+const { createRequire } = require('node:module');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const req = createRequire(path.resolve(__dirname,'../../../../apps/api/package.json'));
+const { DataSource } = req('typeorm');
+const { ConfigService } = req('@nestjs/config');
+const { BillingPaypalConnectionEntity } = require('../../../../apps/api/src/modules/billing-shared/entities/billing-paypal-connection.entity');
+const { BillingProductEntity } = require('../../../../apps/api/src/modules/billing-shared/entities/billing-product.entity');
+const { PaypalConnectionCrypto } = require('../../../../apps/api/src/modules/paypal-connections/paypal-connection.crypto');
+const { PaypalConnectionsService } = require('../../../../apps/api/src/modules/paypal-connections/paypal-connections.service');
+const { ProductPaypalConnections1794355200000 } = require('../../../../apps/api/src/database/migrations/1794355200000-product-paypal-connections');
+
+const port = Number(process.env.TEST_DATABASE_PORT);
+assert(Number.isInteger(port) && port>0);
+const ds = new DataSource({ type:'postgres',host:'127.0.0.1',port,username:'postgres',password:'isolated-test-only',database:'billing_paypal_connections_test',
+ entities:[process.cwd()+'/src/**/*.entity.ts'],migrations:[process.cwd()+'/src/database/migrations/*.ts'],synchronize:false,migrationsRun:false,logging:false });
+const config = new ConfigService({paypalConnections:{encryptionKey:Buffer.alloc(32,7).toString('base64')},paypal:{environment:'sandbox',clientId:'global-client',clientSecret:'global-secret'},app:{globalPrefix:'api/v1'}});
+const crypto = new PaypalConnectionCrypto(config);
+const service = new PaypalConnectionsService(ds.getRepository(BillingPaypalConnectionEntity),ds.getRepository(BillingProductEntity),crypto,config);
+const base = {name:'MedSync PayPal',environment:'sandbox',clientId:'app-a',clientSecret:'secret-a',webhookId:''};
+async function rejectsCode(promise,code){ await assert.rejects(promise,(e)=>e.code===code); }
+async function run(){
+ await ds.initialize();
+ ds.migrations = ds.migrations.filter(m => m.name !== 'ProviderPriceConnections1794355200002');
+ assert.equal((await ds.query("SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema='public'"))[0].n,0);
+ const migrations=await ds.runMigrations({transaction:'all'});
+ const draftMigration='PaypalConnectionDrafts1794355200001';
+ assert(migrations.some(migration=>migration.name===draftMigration),'the real draft migration must execute');
+ assert.equal((await ds.query('SELECT name FROM migrations WHERE timestamp=$1',[1794355200001]))[0].name,draftMigration);
+ // Empty rollback/reapply uses the real recorded migration, never a test schema fixture.
+ await ds.undoLastMigration({transaction:'all'});
+ assert.equal((await ds.query("SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema='public' AND table_name='paypal_connections' AND column_name='is_draft'"))[0].n,0);
+ assert.equal((await ds.query('SELECT count(*)::int AS n FROM migrations WHERE name=$1',[draftMigration]))[0].n,0);
+ const reapplied=await ds.runMigrations({transaction:'all'});
+ assert.deepEqual(reapplied.map(migration=>migration.name),[draftMigration]);
+ // A concurrent draft must commit before the rollback preflight runs.
+ const [raceProduct]=await ds.query("INSERT INTO products(code,name) VALUES('rollback-race','Rollback race') RETURNING id");
+ const writer=ds.createQueryRunner();
+ await writer.connect();
+ let concurrentRollback;
+ try {
+   await writer.startTransaction();
+   await writer.query("INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,is_current,is_draft) VALUES($1,'Concurrent draft','sandbox','race-app','isolated-cipher',false,true)",[raceProduct.id]);
+   concurrentRollback=ds.undoLastMigration({transaction:'all'});
+   const denied=assert.rejects(concurrentRollback,/draft rollback requires explicit draft reconciliation/);
+   let waiting=false;
+   for(let attempt=0;attempt<100;attempt++) {
+     const [state]=await ds.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'LOCK TABLE paypal_connections IN ACCESS EXCLUSIVE MODE%') AS waiting");
+     if(state.waiting){waiting=true;break;}
+     await new Promise(resolve=>setTimeout(resolve,10));
+   }
+   assert(waiting,'rollback must acquire the table lock before checking for drafts');
+   await writer.commitTransaction();
+   await denied;
+   assert.equal((await ds.query('SELECT count(*)::int AS n FROM paypal_connections WHERE product_id=$1 AND is_draft=true',[raceProduct.id]))[0].n,1);
+   assert.equal((await ds.query('SELECT count(*)::int AS n FROM migrations WHERE name=$1',[draftMigration]))[0].n,1);
+ } finally {
+   if(writer.isTransactionActive)await writer.rollbackTransaction();
+   await writer.release();
+   if(concurrentRollback)await concurrentRollback.catch(()=>{});
+ }
+
+ const [product] = await ds.query("INSERT INTO products(code,name) VALUES('medsync-paypal-test','Test') RETURNING id");
+ const [other] = await ds.query("INSERT INTO products(code,name) VALUES('other-paypal-test','Other') RETURNING id");
+ assert.deepEqual(await service.get(product.id),{connection:null,draft:null,source:'global',encryptionConfigured:true});
+ const stamp = value => value.toISOString();
+ const context = state => ({expectedUpdatedAt:stamp(state.draft.updatedAt),expectedCurrentConnectionId:state.connection?.id??null,expectedCurrentUpdatedAt:state.connection?stamp(state.connection.updatedAt):null});
+ const activate = state => service.activate(product.id,state.draft.id,context(state));
+ const resave = (state, changes={}) => service.save(product.id,{...base,...changes,draftId:state.draft.id,expectedUpdatedAt:stamp(state.draft.updatedAt)});
+ const [uuidCode] = await ds.query('INSERT INTO products(code,name) VALUES($1,\'UUID code\') RETURNING id',[product.id]);
+ assert.equal(await service.resolveForProduct(product.id),null);
+ assert.notEqual(uuidCode.id,product.id);
+ await assert.rejects(service.save(product.id,{...base,clientSecret:undefined}),e=>e.status===400);
+ let draftA = await service.save(product.id,base);
+ assert.equal(draftA.connection,null);
+ assert.equal(draftA.source,'global');
+ assert.equal(draftA.draft.enabled,false);
+ assert.equal(draftA.draft.isCurrent,false);
+ assert.equal(draftA.draft.isDraft,true);
+ assert.equal(draftA.draft.hasClientSecret,true);
+ assert.equal(draftA.draft.webhookPath,`/api/v1/billing/webhooks/paypal/${draftA.draft.id}`);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),null,'draft-only retains global fallback');
+ assert.equal((await service.list(product.id)).connections.length,0,'draft is separate from history');
+ assert(!(await service.listForRecovery()).some(c=>c.id===draftA.draft.id),'draft excluded from recovery');
+ await assert.rejects(service.credentialsForConnection(draftA.draft.id),e=>e.status===503);
+ const beforeRollback=await ds.query('SELECT id,client_secret_encrypted FROM paypal_connections WHERE is_draft=true');
+ await assert.rejects(ds.undoLastMigration({transaction:'all'}),/draft rollback requires explicit draft reconciliation/);
+ assert.deepEqual(await ds.query('SELECT id,client_secret_encrypted FROM paypal_connections WHERE is_draft=true'),beforeRollback,'failed rollback preserves every draft and ciphertext');
+ assert.equal((await ds.query('SELECT count(*)::int AS n FROM migrations WHERE name=$1',[draftMigration]))[0].n,1,'failed rollback preserves migration registration');
+ assert(!JSON.stringify(draftA).includes('secret-a'));
+ const ordinary = await ds.getRepository(BillingPaypalConnectionEntity).findOneBy({id:draftA.draft.id});
+ assert.equal(ordinary.clientSecretEncrypted,undefined);
+ const [stored] = await ds.query('SELECT client_secret_encrypted FROM paypal_connections WHERE id=$1',[draftA.draft.id]);
+ assert(!stored.client_secret_encrypted.includes('secret-a'));
+ await assert.rejects(activate(draftA),e=>e.status===400);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),null);
+ const obsolete = context(draftA);
+ draftA = await resave(draftA,{clientSecret:undefined,webhookId:'WH-A'});
+ await assert.rejects(service.activate(product.id,draftA.draft.id,obsolete),e=>e.status===409);
+ const first = await activate(draftA);
+ assert.equal(first.draft,null);
+ assert.equal(first.connection.enabled,true);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),first.connection.id);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a');
+ // Saving the same app copies and re-encrypts its secret without touching runtime.
+ let same = await service.save(product.id,{...base,clientSecret:undefined,webhookId:'WH-A-NEW'});
+ assert.equal(same.connection.id,first.connection.id);
+ assert.equal(same.connection.enabled,true);
+ assert.equal(same.connection.webhookId,'WH-A');
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a');
+ assert.equal(same.draft.webhookPath,first.connection.webhookPath);
+ const sameStored = (await ds.query('SELECT client_secret_encrypted FROM paypal_connections WHERE id=$1',[same.draft.id]))[0];
+ assert.equal(crypto.decrypt(sameStored.client_secret_encrypted,same.draft.id),'secret-a');
+ assert.throws(()=>crypto.decrypt(sameStored.client_secret_encrypted,first.connection.id));
+ const beforeDisable=context(same);
+ const disabled=await service.setStatus(product.id,first.connection.id,{enabled:false});
+ assert.equal(disabled.draft.id,same.draft.id);
+ await assert.rejects(service.resolveForProduct('medsync-paypal-test'),e=>e.status===503);
+ await assert.rejects(service.activate(product.id,same.draft.id,beforeDisable),e=>e.status===409);
+ await service.setStatus(product.id,first.connection.id,{enabled:true});
+ const beforeRotation = await service.get(product.id);
+ await service.rotate(product.id,first.connection.id,{clientSecret:'rotated-current'});
+ await assert.rejects(service.activate(product.id,same.draft.id,context(beforeRotation)),e=>e.status===409);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'rotated-current');
+ same = await service.get(product.id);
+ const sameActivated=await activate(same);
+ assert.equal(sameActivated.connection.id,first.connection.id,'same-app activation preserves pinned ID');
+ assert.equal(sameActivated.draft,null);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a');
+ assert.equal(sameActivated.connection.webhookId,'WH-A-NEW');
+ // Replacing the app changes nothing until explicit activation commits.
+ const b = {name:'Replacement',environment:'live',clientId:'app-b',clientSecret:'secret-b',webhookId:'WH-B'};
+ let replacement=await service.save(product.id,b);
+ assert.equal(replacement.connection.id,first.connection.id);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),first.connection.id);
+ replacement=await resave(replacement,{...b,webhookId:''});
+ await assert.rejects(activate(replacement),e=>e.status===400);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),first.connection.id);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a');
+ replacement=await resave(replacement,b);
+ const originalCipher=(await ds.query('SELECT client_secret_encrypted FROM paypal_connections WHERE id=$1',[replacement.draft.id]))[0].client_secret_encrypted;
+ await ds.query('UPDATE paypal_connections SET client_secret_encrypted=\'invalid-cipher\' WHERE id=$1',[replacement.draft.id]);
+ await assert.rejects(activate(replacement),e=>e.status===503);
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),first.connection.id);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a');
+ await ds.query('UPDATE paypal_connections SET client_secret_encrypted=$2 WHERE id=$1',[replacement.draft.id,originalCipher]);
+ const beforeBad=await service.get(product.id);
+ await assert.rejects(service.save(product.id,b),e=>e.status===409,'cannot overwrite a draft without its revision');
+ await assert.rejects(service.activate(other.id,replacement.draft.id,context(replacement)),e=>e.status===404);
+ await assert.rejects(service.activate(product.id,randomUUID(),context(replacement)),e=>e.status===404);
+ await assert.rejects(service.activate(product.id,replacement.draft.id,{...context(replacement),expectedCurrentConnectionId:null,expectedCurrentUpdatedAt:null}),e=>e.status===409);
+ const noKey = new PaypalConnectionsService(ds.getRepository(BillingPaypalConnectionEntity),ds.getRepository(BillingProductEntity),new PaypalConnectionCrypto(new ConfigService()),new ConfigService());
+ await assert.rejects(noKey.activate(product.id,replacement.draft.id,context(replacement)),e=>e.status===503);
+ assert.deepEqual(await service.get(product.id),beforeBad);
+ const attempts=await Promise.allSettled([
+   service.save(product.id,{...b,name:'Edited replacement',draftId:replacement.draft.id,expectedUpdatedAt:stamp(replacement.draft.updatedAt)}),
+   activate(replacement),
+ ]);
+ assert.equal(attempts.filter(result=>result.status==='fulfilled').length,1,'save-vs-activate has exactly one winner');
+ replacement=await service.get(product.id);
+ const second = replacement.draft ? await activate(replacement) : replacement;
+ assert.notEqual(second.connection.id,first.connection.id);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'secret-a','old pinned app remains usable');
+ assert.equal((await service.list(product.id)).connections.filter(c=>c.isCurrent).length,1);
+ assert.equal((await service.list(product.id)).connections.find(c=>c.id===first.connection.id).isCurrent,false);
+ const before = await service.credentialsForConnection(first.connection.id);
+ await assert.rejects(service.rotate(other.id,first.connection.id,{clientSecret:'must-not-change'}),e=>e.status===404);
+ await service.rotate(product.id,first.connection.id,{clientSecret:'rotated-secret'});
+ const after = await service.credentialsForConnection(first.connection.id);
+ assert.notEqual(after.revision,before.revision);
+ assert.equal(after.clientSecret,'rotated-secret');
+ assert.equal(after.clientId,'app-a'); assert.equal(after.environment,'sandbox');
+ assert.equal(await service.resolveForProduct('medsync-paypal-test'),second.connection.id);
+ assert(!JSON.stringify(await service.list(product.id)).includes('rotated-secret'));
+ const thirdDraft=await service.save(product.id,{...base,clientId:'app-c',clientSecret:'secret-c',webhookId:'WH-C'});
+ const activations=await Promise.allSettled([activate(thirdDraft),activate(thirdDraft)]);
+ assert.equal(activations.filter(result=>result.status==='fulfilled').length,1,'activate-vs-activate has exactly one winner');
+ assert.equal((await service.list(product.id)).connections.filter(c=>c.isCurrent).length,1);
+ const currentId=(await service.list(product.id)).connections.find(c=>c.isCurrent).id;
+ await ds.query('UPDATE paypal_connections SET is_current=false WHERE product_id=$1',[product.id]);
+ await assert.rejects(service.resolveForProduct('medsync-paypal-test'),e=>e.status===503);
+ await assert.rejects(service.get(product.id),e=>e.status===503);
+ await ds.query('UPDATE paypal_connections SET is_current=true WHERE id=$1',[currentId]);
+ assert.equal((await noKey.get(product.id)).encryptionConfigured,false);
+ await assert.rejects(noKey.save(product.id,base),e=>e.status===503);
+ await assert.rejects(noKey.credentialsForConnection(first.connection.id),e=>e.status===503);
+ await rejectsCode(ds.query(`INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,webhook_id,enabled) VALUES($1,'Duplicate','sandbox','x','cipher','WH',true)`,[product.id]),'23505');
+ await rejectsCode(ds.query(`INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,enabled,is_current) VALUES($1,'Bad','sandbox','x','cipher',true,false)`,[product.id]),'23514');
+ await ds.query(`INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,is_current,is_draft) VALUES($1,'Draft','sandbox','x','cipher',false,true)`,[other.id]);
+ await rejectsCode(ds.query(`INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,is_current,is_draft) VALUES($1,'Draft2','sandbox','x','cipher',false,true)`,[other.id]),'23505');
+ await rejectsCode(ds.query(`INSERT INTO paypal_connections(product_id,name,environment,client_id,client_secret_encrypted,webhook_id,enabled,is_current,is_draft) VALUES($1,'Invalid draft','sandbox','x','cipher','WH',true,false,true)`,[product.id]),'23514');
+ const event = async(connection,id)=>ds.query(`INSERT INTO webhook_events(provider,provider_connection_id,provider_event_id,event_type,verification_status) VALUES('paypal',$1,$2,'TEST','verified') RETURNING id`,[connection,id]);
+ const eventId='shared-event';
+ await event(first.connection.id,eventId);await event(second.connection.id,eventId);await event(null,eventId);
+ await rejectsCode(event(first.connection.id,eventId),'23505');await rejectsCode(event(null,eventId),'23505');
+ await rejectsCode(event(randomUUID(),'foreign'),'23503');
+
+ const [customer] = await ds.query("INSERT INTO customers(organization_id,provider) VALUES($1,'paypal') RETURNING id",[randomUUID()]);
+ const [plan] = await ds.query("INSERT INTO plans(product_id,code,name) VALUES($1,'connection-plan','Plan') RETURNING id",[product.id]);
+ const subscription = async(connection)=>ds.query(`INSERT INTO subscriptions(organization_id,billing_customer_id,plan_id,product_code,plan_code,provider,provider_subscription_id,metadata) VALUES($1,$2,$3,'medsync-paypal-test','connection-plan','paypal','I-SHARED',$4) RETURNING id`,[randomUUID(),customer.id,plan.id,{providerConnectionId:connection}]);
+ const [subA] = await subscription(first.connection.id), [subB] = await subscription(second.connection.id);
+ await rejectsCode(subscription(first.connection.id),'23505');
+ const [addon] = await ds.query(`INSERT INTO addons(product_id,product_code,code,name,unit_price,currency,billing_interval,type,pricing_model,provider) VALUES($1,'medsync-paypal-test','seats','Seats',10,'MXN','monthly','recurring','flat','paypal') RETURNING id`,[product.id]);
+ const addonContract = async(sub,connection)=>ds.query(`INSERT INTO subscription_addons(subscription_id,addon_id,addon_code,quantity,unit_price,currency,billing_interval,pricing_model,entitlement_effects,provider,provider_subscription_id,metadata) VALUES($1,$2,'seats',1,10,'MXN','monthly','flat','{}','paypal','I-ADDON-SHARED',$3) RETURNING id`,[sub,addon.id,{providerConnectionId:connection}]);
+ const [addonA] = await addonContract(subA.id,first.connection.id), [addonB] = await addonContract(subB.id,second.connection.id);
+ const [[paymentA],[paymentB]] = await Promise.all([subA,subB].map(sub=>ds.query("INSERT INTO payments(organization_id,subscription_id,provider,amount,currency,status) VALUES($1,$2,'paypal',10,'MXN','paid') RETURNING id",[randomUUID(),sub.id])));
+ const [inbox] = await event(first.connection.id,'refund-event');
+ const refund = async(payment)=>ds.query(`INSERT INTO payment_refunds(provider,provider_refund_id,payment_id,webhook_event_id,amount,currency,refunded_at) VALUES('paypal','R-SHARED',$1,$2,1,'MXN',now()) RETURNING id`,[payment,inbox.id]);
+ const [refundA]=await refund(paymentA.id);await refund(paymentB.id);await rejectsCode(refund(paymentA.id),'23505');
+ const job = async(sub,add)=>ds.query(`INSERT INTO paypal_cancellation_jobs(organization_id,provider_subscription_id,target_type,target_subscription_id,target_addon_id,source_payment_refund_id) VALUES($1,'I-JOB-SHARED',$2,$3,$4,$5)`,[randomUUID(),add?'addon':'subscription',sub,add||null,refundA.id]);
+ await job(subA.id);await job(subB.id);await rejectsCode(job(subA.id),'23505');
+ await job(subA.id,addonA.id);await job(subB.id,addonB.id);await rejectsCode(job(subA.id,addonA.id),'23505');
+ await assert.rejects(new ProductPaypalConnections1794355200000().down(ds.createQueryRunner()),/reconciliation/);
+ assert.equal((await service.credentialsForConnection(first.connection.id)).clientSecret,'rotated-secret');
+ console.log('PASS product PayPal: real draft migration registration, empty up/down/reapply, lossy/concurrent rollback denial, global fallback, current-preserving save, explicit activation, stale/concurrent denial, same-app pin preservation, history rotation, redaction, fail-closed key, webhook/subscription/refund/cancellation namespaces and rollback protection');
+}
+run().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>ds.destroy());

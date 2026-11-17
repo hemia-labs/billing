@@ -15,6 +15,7 @@ import hemiaLegalConfig from './config/hemia-legal.config';
 import { envVarsSchema } from './config/env.validation';
 import { environmentFile } from './config/env-file';
 import paypalConfig from './config/paypal.config';
+import paypalConnectionsConfig from './config/paypal-connections.config';
 import redisConfig from './config/redis.config';
 import ssoConfig from './config/sso.config';
 import { DatabaseModule } from './database/database.module';
@@ -37,6 +38,7 @@ import { BillingModule } from './modules/billing.module';
         databaseConfig,
         hemiaLegalConfig,
         paypalConfig,
+        paypalConnectionsConfig,
         redisConfig,
         ssoConfig,
       ],

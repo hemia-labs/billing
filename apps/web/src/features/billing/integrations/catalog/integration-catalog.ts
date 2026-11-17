@@ -2,31 +2,37 @@ export const integrationTypes = [
   {
     key: "oauth",
     title: "Clientes OAuth",
-    description: "Autoriza aplicaciones de Identity y limita su acceso a productos y organizaciones de Billing.",
+    description: "Conecta aplicaciones de Identity y administra su acceso.",
     availability: "Configurable",
     href: "/integrations/oauth",
   },
   {
     key: "legal",
     title: "Hemia Legal",
-    description: "Consulta la conexión de servicio y la validación de aceptaciones durante el checkout.",
+    description: "Consulta los acuerdos legales asociados al checkout.",
     availability: "Consulta disponible",
     href: "/integrations/legal",
   },
   {
     key: "payments",
     title: "Proveedores de pago",
-    description: "Billing crea checkouts y administra suscripciones con PayPal.",
-    availability: "Disponible en checkout",
+    description: "Conecta PayPal y administra las apps que reciben tus pagos.",
+    availability: "Configurable",
     href: "/integrations/payments",
   },
   {
     key: "events",
     title: "Eventos y webhooks",
-    description: "Consulta la recepción y el procesamiento de eventos de pago.",
+    description: "Consulta los eventos de pago y sus entregas.",
     availability: "Consulta disponible",
     href: "/integrations/events",
   },
 ] as const;
 
 export type IntegrationType = (typeof integrationTypes)[number]["key"];
+
+export function visibleIntegrationTypes(permissions: readonly string[], creating = false) {
+  return integrationTypes.filter((item) => item.key === "payments"
+    ? permissions.includes("billing.catalog.read") && (!creating || permissions.includes("billing.catalog.manage"))
+    : permissions.includes(creating ? "billing.integrations.manage" : "billing.integrations.read"));
+}

@@ -1,5 +1,6 @@
 import {
   BillingAddonEntity,
+  BillingAddonProviderPriceEntity,
   BillingFeatureDefinitionEntity,
   BillingPlanEntitlementEntity,
   BillingPlanEntity,
@@ -45,11 +46,12 @@ export class BillingCatalogMapper {
   static toPlanDto(
     this: void,
     entity: BillingPlanEntity,
+    consoleView = false,
   ): BillingPlanResponseDto {
     return {
       ...BillingCatalogMapper.toPlanOverviewDto(entity),
-      versions: (entity.versions ?? []).map(
-        BillingCatalogMapper.toPlanVersionDto,
+      versions: (entity.versions ?? []).map((version) =>
+        BillingCatalogMapper.toPlanVersionDto(version, consoleView),
       ),
     };
   }
@@ -75,6 +77,7 @@ export class BillingCatalogMapper {
   static toPlanVersionDto(
     this: void,
     entity: BillingPlanVersionEntity,
+    consoleView = false,
   ): BillingPlanVersionResponseDto {
     return {
       id: entity.id,
@@ -82,7 +85,9 @@ export class BillingCatalogMapper {
       status: entity.status,
       effectiveFrom: entity.effectiveFrom,
       effectiveUntil: entity.effectiveUntil,
-      prices: (entity.prices ?? []).map(BillingCatalogMapper.toPlanPriceDto),
+      prices: (entity.prices ?? []).map((price) =>
+        BillingCatalogMapper.toPlanPriceDto(price, consoleView),
+      ),
       entitlements: (entity.entitlements ?? []).map(
         BillingCatalogMapper.toPlanEntitlementDto,
       ),
@@ -92,6 +97,7 @@ export class BillingCatalogMapper {
   static toPlanPriceDto(
     this: void,
     entity: BillingPlanPriceEntity,
+    consoleView = false,
   ): BillingPlanPriceResponseDto {
     return {
       id: entity.id,
@@ -101,19 +107,26 @@ export class BillingCatalogMapper {
       currency: entity.currency,
       amount: entity.amount,
       status: entity.status,
-      providerPrices: (entity.providerPrices ?? []).map(
-        BillingCatalogMapper.toProviderPriceDto,
+      providerPrices: (entity.providerPrices ?? []).map((mapping) =>
+        BillingCatalogMapper.toProviderPriceDto(mapping, consoleView),
       ),
     };
   }
 
   static toProviderPriceDto(
     this: void,
-    entity: BillingProviderPriceEntity,
+    entity: BillingProviderPriceEntity | BillingAddonProviderPriceEntity,
+    consoleView = false,
   ): BillingProviderPriceResponseDto {
     return {
       id: entity.id,
       provider: entity.provider,
+      ...(consoleView
+        ? {
+            connectionScope: entity.connectionScope,
+            providerConnectionId: entity.providerConnectionId,
+          }
+        : {}),
       providerProductId: entity.providerProductId,
       providerPriceId: entity.providerPriceId,
       providerMetadata: entity.providerMetadata,

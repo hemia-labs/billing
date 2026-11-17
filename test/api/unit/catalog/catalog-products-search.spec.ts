@@ -26,6 +26,7 @@ describe('catalog product search', () => {
       unused,
       unused,
       unused,
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
     const query = new ListBillingAddonsQueryDto();
     query.product_id = 'product-id';
@@ -76,6 +77,7 @@ describe('catalog product search', () => {
       unused,
       unused,
       unused,
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
     const query = new ListBillingProductsQueryDto();
     query.q = '  med%_sync  ';

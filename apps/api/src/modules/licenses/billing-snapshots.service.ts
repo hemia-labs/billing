@@ -2,8 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
 import {
   BillingSubscriptionEntity,
+  LicenseStatus,
   SubscriptionStatus,
 } from '../billing-shared';
+import { checkoutConfirmation } from './checkout-confirmation';
+import { refundConfirmation } from './refund-confirmation';
 import { BillingLicensesService } from './billing-licenses.service';
 import {
   cancellationIntent,
@@ -81,12 +84,50 @@ export class BillingSnapshotsService {
           : undefined) ?? eligible[0];
       const change = current ? pendingPlanChange(current) : null;
       const cancellation = current ? cancellationIntent(current) : null;
+      const confirmation =
+        license.active &&
+        license.licenseStatus === LicenseStatus.Active &&
+        current?.status === SubscriptionStatus.Active &&
+        current.organizationId === organizationId &&
+        current.productCode === productCode &&
+        license.subscriptionId === current.id &&
+        license.planCode === current.planCode
+          ? await checkoutConfirmation(
+              runner.manager,
+              current,
+              clock.confirmedAt,
+            )
+          : undefined;
+      const refund =
+        current &&
+        current.organizationId === organizationId &&
+        current.productCode === productCode &&
+        license.subscriptionId === current.id
+          ? await refundConfirmation(
+              runner.manager,
+              current,
+              license,
+              clock.confirmedAt,
+            )
+          : undefined;
       const snapshot = {
         organizationId,
         productCode,
         revision: clock.revision,
         confirmedAt: clock.confirmedAt.toISOString(),
-        license,
+        license:
+          confirmation || refund
+            ? {
+                ...license,
+                billing: {
+                  ...license.billing,
+                  ...(confirmation
+                    ? { checkoutConfirmation: confirmation }
+                    : {}),
+                  ...(refund ? { refundConfirmation: refund } : {}),
+                },
+              }
+            : license,
         subscription: current
           ? {
               id: current.id,

@@ -14,6 +14,7 @@ import { BillingSubscriptionsManagementService } from '../../../../apps/api/src/
 import { BillingServicePolicyService } from '../../../../apps/api/src/common/services/billing-service-policy.service';
 import { CheckoutInProgressException } from '../../../../apps/api/src/modules/checkout/errors/checkout-in-progress.exception';
 import {
+  BillingCheckoutSessionEntity,
   BillingCheckoutSessionStatus,
   BillingProvider,
   BillingSubscriptionEntity,
@@ -25,7 +26,7 @@ const scopes = [
   'billing.integration.checkout.create',
   'billing.subscriptions.manage',
 ];
-function fixture() {
+function fixture(popup = false) {
   const rows = new Map<string, BillingPaymentAttemptEntity>();
   const input: CreatePaymentAttemptDto = {
     idempotencyKey: randomUUID(),
@@ -64,18 +65,69 @@ function fixture() {
       },
     ),
   };
+  const committedSignals: unknown[][] = [];
+  let stagedSignals: unknown[][] | null = null;
+  let rejectReadyCommit = false;
   const domainQuery = jest.fn<
     Promise<Array<{ id: string }>>,
     [sql?: string, params?: unknown[]]
-  >(() => Promise.resolve([]));
+  >((sql, params = []) => {
+    if (sql?.includes('queue_billing_license')) {
+      if (!stagedSignals)
+        throw new Error('Outbox queue must share the receipt transaction');
+      expect(rows.get(input.idempotencyKey)?.status).toBe('ready');
+      stagedSignals.push(params);
+    }
+    return Promise.resolve([]);
+  });
+  const popupSubscription = {
+    id: subscriptionId,
+    organizationId: input.organizationId,
+    productCode: input.productCode,
+    provider: BillingProvider.Paypal,
+    status: SubscriptionStatus.Pending,
+    providerSubscriptionId: 'I-OWNED123',
+    metadata: {},
+  };
+  const popupCheckout = {
+    id: checkoutId,
+    organizationId: input.organizationId,
+    productCode: input.productCode,
+    userId: input.userId,
+    provider: BillingProvider.Paypal,
+    status: BillingCheckoutSessionStatus.Created,
+    providerCheckoutUrl: 'https://www.sandbox.paypal.com/approve',
+    metadata: {
+      subscriptionId,
+      createdByIssuer: actor.issuer,
+      createdByClientId: actor.clientId,
+    },
+  };
+  const paypalConnections = {
+    approvalConfiguration: jest.fn<
+      Promise<{ clientId: string; environment: 'sandbox' }>,
+      [string | null]
+    >(() =>
+      Promise.resolve({
+        clientId: 'public-app',
+        environment: 'sandbox',
+      }),
+    ),
+  };
   const manager = {
     getRepository: (entity: unknown) =>
       entity === BillingSubscriptionEntity
         ? {
             findOne: () =>
-              Promise.resolve({ provider: BillingProvider.Paypal }),
+              Promise.resolve(
+                popup
+                  ? popupSubscription
+                  : { provider: BillingProvider.Paypal },
+              ),
           }
-        : repository,
+        : popup && entity === BillingCheckoutSessionEntity
+          ? { findOne: () => Promise.resolve(popupCheckout) }
+          : repository,
     query: domainQuery,
   } as unknown as EntityManager;
   let queue: Promise<unknown> = Promise.resolve();
@@ -83,13 +135,37 @@ function fixture() {
     manager,
     getRepository: () => repository,
     transaction: <T>(work: (m: EntityManager) => Promise<T>) => {
-      const result = queue.then(() => work(manager));
+      const result = queue.then(async () => {
+        const before = structuredClone(rows);
+        stagedSignals = [];
+        try {
+          const result = await work(manager);
+          if (rejectReadyCommit && stagedSignals.length)
+            throw new Error('Commit rejected');
+          committedSignals.push(...stagedSignals);
+          return result;
+        } catch (error) {
+          rows.clear();
+          for (const [id, row] of before) rows.set(id, row);
+          throw error;
+        } finally {
+          stagedSignals = null;
+        }
+      });
       queue = result.catch(() => undefined);
       return result;
     },
   } as unknown as DataSource;
+  const resolveProviderConnection = jest.fn((): Promise<string | null> =>
+    Promise.resolve(null),
+  );
   const checkout = {
+    resolveCheckoutSelection: jest.fn(async () => ({
+      providerPriceMappingId: 'mapping-id',
+      providerConnectionId: await resolveProviderConnection(),
+    })),
     validateApprovalUrl: (_provider: BillingProvider, value: string) => value,
+    resolveProviderConnection,
     resolveCheckoutProvider: jest.fn(() =>
       Promise.resolve(BillingProvider.Paypal),
     ),
@@ -97,7 +173,9 @@ function fixture() {
       Promise.resolve({
         checkoutId,
         subscriptionId,
-        checkoutUrl: 'https://www.paypal.com/approve',
+        checkoutUrl: popup
+          ? popupCheckout.providerCheckoutUrl
+          : 'https://www.paypal.com/approve',
         status: BillingCheckoutSessionStatus.Created,
       }),
     ),
@@ -164,6 +242,7 @@ function fixture() {
       checkout as unknown as BillingCheckoutService,
       subscriptions as unknown as BillingSubscriptionsManagementService,
       policy as unknown as BillingServicePolicyService,
+      paypalConnections as never,
     );
   const change = () => ({
     ...input,
@@ -173,6 +252,13 @@ function fixture() {
   });
   return {
     rows,
+    committedSignals,
+    rejectNextReadyCommit: () => {
+      rejectReadyCommit = true;
+    },
+    paypalConnections,
+    popupSubscription,
+    popupCheckout,
     input,
     checkoutId,
     subscriptionId,
@@ -220,7 +306,11 @@ describe('central durable payment attempts', () => {
         attemptId: f.input.idempotencyKey,
         status: 'processing',
       });
+      expect(f.committedSignals).toHaveLength(0);
       await jest.advanceTimersByTimeAsync(5_000);
+      expect(f.committedSignals).toEqual([
+        [f.input.organizationId, f.input.productCode],
+      ]);
       await expect(
         service.get(f.input.idempotencyKey, f.input, actor),
       ).resolves.toMatchObject({
@@ -371,7 +461,7 @@ describe('central durable payment attempts', () => {
         cancellationRequested: true,
         checkoutUrl: 'https://www.paypal.com/restore-future',
       },
-    } as never);
+    });
     const restored = await f.service().get(input.idempotencyKey, input, actor);
     expect(restored).toMatchObject({
       status: 'ready',
@@ -418,7 +508,7 @@ describe('central durable payment attempts', () => {
       subscriptionStatus: SubscriptionStatus.Pending,
       provider: BillingProvider.Paypal,
       renewalResume,
-    } as never);
+    });
     const created = await f.service().create(input, actor, scopes);
     expect(created).toMatchObject({
       operation: 'resume_renewal',
@@ -437,7 +527,7 @@ describe('central durable payment attempts', () => {
       subscriptionStatus: SubscriptionStatus.Pending,
       provider: BillingProvider.Paypal,
       renewalResume: { ...renewalResume, state: 'scheduled' },
-    } as never);
+    });
     expect(
       await f.service().get(input.idempotencyKey, input, actor),
     ).toMatchObject({
@@ -679,6 +769,8 @@ describe('central durable payment attempts', () => {
 describe('frozen provider selection', () => {
   it('retains its original provider and financial key after an uncertain response and catalog change', async () => {
     const f = fixture();
+    const pinned = randomUUID();
+    f.checkout.resolveProviderConnection.mockResolvedValue(pinned);
     f.checkout.createCheckoutSession.mockRejectedValueOnce(
       new BadGatewayException(),
     );
@@ -690,6 +782,7 @@ describe('frozen provider selection', () => {
     f.checkout.resolveCheckoutProvider.mockRejectedValue(
       new BadRequestException('Catalog changed'),
     );
+    f.checkout.resolveProviderConnection.mockResolvedValue(randomUUID());
     const ready = await f
       .service()
       .retry(f.input.idempotencyKey, f.input, actor, scopes);
@@ -705,7 +798,12 @@ describe('frozen provider selection', () => {
         idempotencyKey: f.input.idempotencyKey,
       }),
       actor,
+      { providerConnectionId: pinned, providerPriceMappingId: 'mapping-id' },
     );
+    expect(f.checkout.resolveProviderConnection).toHaveBeenCalledTimes(1);
+    expect(
+      f.rows.get(f.input.idempotencyKey)?.requestPayload.providerConnectionId,
+    ).toBe(pinned);
   });
   it('recovers provider from authoritative status for a historical ready attempt without selection metadata', async () => {
     const f = fixture();
@@ -876,4 +974,151 @@ it('projects restoration approval for a scheduled cancellation while terminal no
   expect(
     (await f.service().get(response.id, f.input, actor)).checkoutUrl,
   ).toBeUndefined();
+});
+
+describe('PayPal popup metadata on durable attempts', () => {
+  it('reuses the prepared provider subscription and pinned configuration across retry/read without creating or verifying twice', async () => {
+    const f = fixture(true);
+    const receipt = await f.service().create(f.input, actor, scopes);
+    expect(receipt.paypalApproval).toEqual({
+      kind: 'subscription',
+      subscriptionId: 'I-OWNED123',
+      clientId: 'public-app',
+      environment: 'sandbox',
+    });
+    expect(receipt.subscriptionId).toBe(f.subscriptionId);
+    expect(receipt.checkoutUrl).toBe(f.popupCheckout.providerCheckoutUrl);
+    f.checkout.getCheckoutStatus.mockResolvedValue({
+      ...(await f.checkout.getCheckoutStatus()),
+      checkoutStatus: BillingCheckoutSessionStatus.Created,
+      subscriptionStatus: SubscriptionStatus.Pending,
+    });
+    f.checkout.getCheckoutStatus.mockClear();
+    expect(
+      (await f.service().retry(f.input.idempotencyKey, f.input, actor, scopes))
+        .paypalApproval,
+    ).toEqual(receipt.paypalApproval);
+    expect(
+      (await f.service().get(f.input.idempotencyKey, f.input, actor))
+        .paypalApproval,
+    ).toEqual(receipt.paypalApproval);
+    expect(f.checkout.createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect(f.subscriptions.verifyCheckoutSession).not.toHaveBeenCalled();
+    expect(f.paypalConnections.approvalConfiguration).toHaveBeenCalledTimes(1);
+    expect(f.paypalConnections.approvalConfiguration).toHaveBeenCalledWith(
+      null,
+    );
+    await expect(
+      f
+        .service()
+        .get(
+          f.input.idempotencyKey,
+          { ...f.input, userId: randomUUID() },
+          actor,
+        ),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('keeps the redirect fallback when optional configuration is unavailable', async () => {
+    const f = fixture(true);
+    f.paypalConnections.approvalConfiguration.mockRejectedValue(
+      new Error('configuration unavailable'),
+    );
+    const receipt = await f.service().create(f.input, actor, scopes);
+    expect(receipt.status).toBe('ready');
+    expect(receipt.paypalApproval).toBeUndefined();
+    expect(receipt.checkoutUrl).toBe(f.popupCheckout.providerCheckoutUrl);
+  });
+
+  it('omits stale popup metadata after activation and leaves legacy receipts usable', async () => {
+    const f = fixture(true);
+    await f.service().create(f.input, actor, scopes);
+    const active = await f
+      .service()
+      .get(f.input.idempotencyKey, f.input, actor);
+    expect(active.subscriptionStatus).toBe('active');
+    expect(active.paypalApproval).toBeUndefined();
+    delete f.rows.get(f.input.idempotencyKey)!.receipt.paypalApproval;
+    expect(
+      (await f.service().get(f.input.idempotencyKey, f.input, actor))
+        .paypalApproval,
+    ).toBeUndefined();
+  });
+
+  it('projects only approved popup fields and omits unsupported operations', async () => {
+    const f = fixture(true);
+    const receipt = await f.service().create(f.input, actor, scopes);
+    const saved = f.rows.get(f.input.idempotencyKey)!;
+    saved.receipt.paypalApproval = {
+      ...receipt.paypalApproval,
+      clientSecret: 'NEVER-FORWARD',
+      accessToken: 'NEVER-FORWARD',
+    } as never;
+    f.checkout.getCheckoutStatus.mockResolvedValue({
+      ...(await f.checkout.getCheckoutStatus()),
+      checkoutStatus: BillingCheckoutSessionStatus.Created,
+      subscriptionStatus: SubscriptionStatus.Pending,
+    });
+    expect(
+      JSON.stringify(
+        await f.service().get(f.input.idempotencyKey, f.input, actor),
+      ),
+    ).not.toContain('NEVER-FORWARD');
+    f.rows.get(f.input.idempotencyKey)!.requestPayload.operation =
+      'change_plan';
+    const changed = await f
+      .service()
+      .get(f.input.idempotencyKey, f.input, actor);
+    expect(changed.paypalApproval).toBeUndefined();
+  });
+});
+
+describe('atomic checkout readiness notification', () => {
+  it('queues the existing organization/product delivery after the ready receipt and does not signal or create again on replay', async () => {
+    const f = fixture(true);
+    const ready = await f.service().create(f.input, actor, scopes);
+    expect(ready.status).toBe('ready');
+    expect(f.committedSignals).toEqual([
+      [f.input.organizationId, f.input.productCode],
+    ]);
+    expect(f.rows.get(f.input.idempotencyKey)?.receipt.paypalApproval).toEqual(
+      ready.paypalApproval,
+    );
+    await f.service().retry(f.input.idempotencyKey, f.input, actor, scopes);
+    await f.service().create(f.input, actor, scopes);
+    expect(f.committedSignals).toHaveLength(1);
+    expect(f.checkout.createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect(f.subscriptions.verifyCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the queued readiness with the receipt if the transaction fails before commit', async () => {
+    const f = fixture(true);
+    f.rejectNextReadyCommit();
+    await expect(f.service().create(f.input, actor, scopes)).rejects.toThrow(
+      'Commit rejected',
+    );
+    expect(
+      f.domainQuery.mock.calls.some(([sql]) =>
+        sql?.includes('queue_billing_license'),
+      ),
+    ).toBe(true);
+    expect(f.committedSignals).toHaveLength(0);
+    expect(f.rows.get(f.input.idempotencyKey)?.status).toBe('pending');
+    expect(
+      f.rows.get(f.input.idempotencyKey)?.receipt.paypalApproval,
+    ).toBeUndefined();
+    expect(f.checkout.createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect(f.subscriptions.verifyCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it('does not signal an uncertain attempt as ready', async () => {
+    const f = fixture(true);
+    f.checkout.createCheckoutSession.mockRejectedValue(
+      new BadGatewayException('provider unavailable'),
+    );
+    expect((await f.service().create(f.input, actor, scopes)).status).toBe(
+      'pending',
+    );
+    expect(f.committedSignals).toHaveLength(0);
+  });
 });

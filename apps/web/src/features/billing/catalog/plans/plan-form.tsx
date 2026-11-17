@@ -28,12 +28,19 @@ import type {
   PlanPriceBillingInterval,
   PlanPriceStatus,
   ProviderPriceStatus,
+  ProviderConnectionScope,
+  CatalogProviderPricePayload,
 } from "../catalog-api";
+import { validatePlanProviderMappings } from "../provider-mapping-form";
 import { primaryVersion } from "../catalog-api";
+import { ProviderConnectionField, useProviderConnectionOptions } from "../provider-connection-options";
+
+type DraftProviderPayload = Omit<CatalogProviderPricePayload, "connectionScope"> & { connectionScope?: ProviderConnectionScope };
+type DraftPricePayload = Omit<CatalogPlanPricePayload, "providerPrices"> & { providerPrices: DraftProviderPayload[] };
 
 export type PlanFormDraft = {
   name: string; code: string; description: string;
-  prices: { code: string; amount: string; currency: BillingCurrency; billingInterval: PlanPriceBillingInterval; billingIntervalCount: number; providerPrices?: CatalogPlanPricePayload['providerPrices']; status?: CatalogPlanPricePayload['status'] }[];
+  prices: { code: string; amount: string; currency: BillingCurrency; billingInterval: PlanPriceBillingInterval; billingIntervalCount: number; providerPrices?: DraftProviderPayload[]; status?: CatalogPlanPricePayload['status'] }[];
   features: { code: string; name: string; valueType: FeatureValueType; value: string; unit: string; aggregationStrategy: FeatureAggregationStrategy; isMetered: boolean }[];
 };
 
@@ -59,6 +66,8 @@ type ParsedEntitlement = {
 };
 
 type ProviderPriceDraft = {
+  connectionScope: ProviderConnectionScope;
+  providerConnectionId: string | null;
   key: string;
   provider: BillingProvider;
   providerProductId: string;
@@ -119,7 +128,7 @@ export function PlanForm({
         .sort((left, right) => right.version - left.version)[0] ?? primaryVersion(initialPlan)
     : undefined;
   const [prices, setPrices] = useState<PriceDraft[]>(() =>
-    initialDraft ? initialDraft.prices.map(price => ({ ...price, key: crypto.randomUUID(), status: price.status ?? 'active', providerPrices: (price.providerPrices ?? []).map(provider => ({ ...provider, key: crypto.randomUUID(), providerProductId: provider.providerProductId ?? '', providerPriceId: provider.providerPriceId ?? '', providerMetadata: provider.providerMetadata ?? {}, status: provider.status ?? 'active' })) })) : currentVersion?.prices.length ? currentVersion.prices.map(priceDraftFromCatalog) : [blankPrice()],
+    initialDraft ? initialDraft.prices.map(price => ({ ...price, key: crypto.randomUUID(), status: price.status ?? 'active', providerPrices: (price.providerPrices ?? []).map(provider => ({ ...provider, key: crypto.randomUUID(), connectionScope: provider.connectionScope ?? "unassigned", providerConnectionId: provider.providerConnectionId ?? null, providerProductId: provider.providerProductId ?? '', providerPriceId: provider.providerPriceId ?? '', providerMetadata: provider.providerMetadata ?? {}, status: provider.status ?? 'active' })) })) : currentVersion?.prices.length ? currentVersion.prices.map(priceDraftFromCatalog) : [blankPrice()],
   );
   const [entitlements, setEntitlements] = useState<EntitlementDraft[]>(() =>
     initialDraft ? initialDraft.features.map(feature => ({ ...feature, key: crypto.randomUUID() })) : currentVersion?.entitlements.length
@@ -148,6 +157,7 @@ export function PlanForm({
   const errorRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const productId = initialPlan?.productId ?? lockedProduct?.id ?? defaultProductId ?? "";
+  const connectionOptions = useProviderConnectionOptions(prices.some((price) => price.providerPrices.some((mapping) => mapping.provider === "paypal")) ? productId : "");
   const returnHref = cancelHref ?? (productId ? `/products/${productId}?tab=plans` : "/products");
   const originalCommercial = useMemo(
     () => JSON.stringify(commercialSnapshot(
@@ -170,7 +180,7 @@ export function PlanForm({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (readOnly) return;
+    if (readOnly || saving) return;
 
     const form = new FormData(event.currentTarget);
     const productId = stringValue(form, "productId");
@@ -221,6 +231,12 @@ export function PlanForm({
 
     const nextCommercial = commercialSnapshot(nextPrices, parsed.items);
     const includeVersion = !initialPlan || JSON.stringify(nextCommercial) !== originalCommercial;
+    const mappingError = includeVersion ? validatePlanProviderMappings(nextPrices) : null;
+    if (mappingError) {
+      setMessage(mappingError);
+      focusErrors();
+      return;
+    }
     const versionPayload: Pick<CatalogPlanPayload, "features" | "version"> = includeVersion
       ? {
           features: parsed.items.map((item) => ({
@@ -234,7 +250,10 @@ export function PlanForm({
           version: {
             version: initialPlan ? Math.max(0, ...initialPlan.versions.map((item) => item.version)) + 1 : 1,
             status: "draft",
-            prices: nextPrices,
+            prices: nextPrices.map((price) => ({ ...price, providerPrices: price.providerPrices.map((mapping) => {
+              if (mapping.connectionScope !== "global" && mapping.connectionScope !== "connection") throw new Error("Selecciona la conexión de cada mapping.");
+              return { ...mapping, connectionScope: mapping.connectionScope };
+            }) })),
             entitlements: parsed.items.map((item) => ({
               featureCode: item.code,
               valueJson: item.valueJson,
@@ -521,7 +540,7 @@ export function PlanForm({
                         <div className="flex items-end gap-3">
                           <label className="grid min-w-0 flex-1 gap-2 text-sm font-medium" htmlFor={"provider-" + priceIndex + "-" + providerIndex}>
                             Proveedor {providerIndex + 1}
-                            <Select disabled={readOnly} onValueChange={(value) => updateProviderPrice(priceIndex, providerIndex, "provider", value as BillingProvider, setPrices)} value={providerPrice.provider}>
+                            <Select disabled={readOnly} onValueChange={(value) => setPrices((items) => items.map((item, index) => index === priceIndex ? { ...item, providerPrices: item.providerPrices.map((mapping, index) => index === providerIndex ? { ...mapping, provider: value as BillingProvider, connectionScope: "unassigned", providerConnectionId: null } : mapping) } : item))} value={providerPrice.provider}>
                               <SelectTrigger className={selectTriggerClassName} id={"provider-" + priceIndex + "-" + providerIndex}>
                                 <SelectValue>{(value: BillingProvider | null) => value ? providerLabels[value] : "Selecciona proveedor"}</SelectValue>
                               </SelectTrigger>
@@ -538,6 +557,7 @@ export function PlanForm({
                           <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
                             IDs y configuración del proveedor{providerPrice.status === "archived" ? " · Archivado" : ""}
                           </summary>
+                          <div className="pt-4"><ProviderConnectionField binding={providerPrice} disabled={readOnly || saving} id={"provider-" + priceIndex + "-" + providerIndex + "-connection"} onChange={(binding) => setPrices((items) => items.map((item, index) => index === priceIndex ? { ...item, providerPrices: item.providerPrices.map((mapping, index) => index === providerIndex ? { ...mapping, ...binding } : mapping) } : item))} options={connectionOptions} provider={providerPrice.provider} /></div>
                           {advancedProviderFields}
                         </details>
                       </div>
@@ -729,6 +749,8 @@ function priceDraftFromCatalog(price: CatalogPlanPrice): PriceDraft {
     providerPrices: price.providerPrices.map((providerPrice) => ({
       key: providerPrice.id,
       provider: providerPrice.provider,
+      connectionScope: providerPrice.connectionScope ?? "unassigned",
+      providerConnectionId: providerPrice.providerConnectionId ?? null,
       providerProductId: providerPrice.providerProductId ?? "",
       providerPriceId: providerPrice.providerPriceId ?? "",
       providerMetadata: providerPrice.providerMetadata ?? {},
@@ -737,7 +759,7 @@ function priceDraftFromCatalog(price: CatalogPlanPrice): PriceDraft {
   };
 }
 
-function pricePayload(price: PriceDraft | CatalogPlanPrice): CatalogPlanPricePayload {
+export function pricePayload(price: PriceDraft | CatalogPlanPrice): DraftPricePayload {
   return {
     code: price.code.trim(),
     billingInterval: price.billingInterval,
@@ -747,6 +769,8 @@ function pricePayload(price: PriceDraft | CatalogPlanPrice): CatalogPlanPricePay
     status: price.status,
     providerPrices: price.providerPrices.map((providerPrice) => ({
       provider: providerPrice.provider,
+      connectionScope: providerPrice.connectionScope ?? "unassigned",
+      providerConnectionId: providerPrice.providerConnectionId ?? null,
       providerProductId: providerPrice.providerProductId?.trim() || null,
       providerPriceId: providerPrice.providerPriceId?.trim() || null,
       providerMetadata: providerPrice.providerMetadata ?? {},
@@ -756,7 +780,7 @@ function pricePayload(price: PriceDraft | CatalogPlanPrice): CatalogPlanPricePay
 }
 
 function commercialSnapshot(
-  prices: CatalogPlanPricePayload[],
+  prices: DraftPricePayload[],
   entitlements: Array<EntitlementDraft | ParsedEntitlement>,
 ) {
   return {
@@ -777,6 +801,8 @@ function blankProviderPrice(): ProviderPriceDraft {
   return {
     key: crypto.randomUUID(),
     provider: "paypal",
+    connectionScope: "unassigned",
+    providerConnectionId: null,
     providerProductId: "",
     providerPriceId: "",
     providerMetadata: {},
