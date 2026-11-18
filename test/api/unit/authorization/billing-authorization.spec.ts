@@ -1,3 +1,5 @@
+import catalogV1 from '../../../../apps/api/src/modules/auth/billing-authorization-v1.json';
+import catalogV2 from '../../../../apps/api/src/modules/auth/billing-authorization-v2.json';
 import { ForbiddenException, ConflictException } from '@nestjs/common';
 import {
   permissionScope,
@@ -122,7 +124,7 @@ describe('Billing authorization contract and scope', () => {
   );
   it('rejects a different catalog instead of falling back', () =>
     expect(() =>
-      validateBillingContext({ ...claims(), catalog_version: 2 }, expected),
+      validateBillingContext({ ...claims(), catalog_version: 3 }, expected),
     ).toThrow(ConflictException));
   it('does not let TTL exceed the 300 second bound', () =>
     expect(() =>
@@ -300,5 +302,162 @@ describe('Billing authorization contract and scope', () => {
     expect(builder.andWhere.mock.invocationCallOrder[0]).toBeLessThan(
       builder.getManyAndCount.mock.invocationCallOrder[0],
     );
+  });
+});
+
+describe('versioned global webhook reader', () => {
+  const role = 'billing.webhook_viewer';
+  const reader = () =>
+    validateBillingContext(
+      {
+        ...claims(),
+        catalog_version: 2,
+        assignments: [grant(role, 'all_customers')],
+      },
+      expected,
+    );
+
+  it('preserves every v1 definition in an additive v2 catalog', () => {
+    expect(catalogV2).toEqual({
+      ...catalogV1,
+      catalog_version: 2,
+      roles: [
+        ...catalogV1.roles,
+        {
+          code: role,
+          name: 'Consulta de webhooks',
+          status: 'active',
+          allowed_scopes: ['all_customers'],
+          permissions: ['billing.webhooks.read'],
+        },
+      ],
+    });
+  });
+
+  it.each([1, 2] as const)(
+    'preserves permissions for existing roles in catalog v%i',
+    (version) => {
+      for (const existing of catalogV1.roles) {
+        const auth = validateBillingContext(
+          {
+            ...claims(),
+            catalog_version: version,
+            assignments: [grant(existing.code, existing.allowed_scopes[0])],
+          },
+          expected,
+        );
+        expect(auth.catalogVersion).toBe(version);
+        expect(new Set(permissionsForAuthorization(auth))).toEqual(
+          new Set(existing.permissions),
+        );
+      }
+    },
+  );
+
+  it('grants only global webhook read and no action inherited from other operational roles', () => {
+    const auth = reader();
+    expect(auth.catalogVersion).toBe(2);
+    expect(permissionScope(auth, 'billing.webhooks.read')).toBeNull();
+    expect(permissionsForAuthorization(auth)).toEqual([
+      'billing.webhooks.read',
+    ]);
+    for (const permission of catalogV2.permissions.filter(
+      (p) => p.code !== 'billing.webhooks.read',
+    )) {
+      expect(() => permissionScope(auth, permission.code)).toThrow(
+        ForbiddenException,
+      );
+    }
+  });
+
+  it.each(['organizations', 'catalog_global', 'global'])(
+    'rejects unsupported reader scope %s',
+    (type) => {
+      expect(() =>
+        validateBillingContext(
+          {
+            ...claims(),
+            catalog_version: 2,
+            assignments: [
+              grant(
+                role,
+                type,
+                type === 'organizations' ? [uuid(6)] : undefined,
+              ),
+            ],
+          },
+          expected,
+        ),
+      ).toThrow(ForbiddenException);
+    },
+  );
+
+  it('does not accept the new role through an old catalog or an unknown role through v2', () => {
+    expect(() =>
+      validateBillingContext(
+        { ...claims(), assignments: [grant(role, 'all_customers')] },
+        expected,
+      ),
+    ).toThrow(ForbiddenException);
+    expect(() =>
+      validateBillingContext(
+        {
+          ...claims(),
+          catalog_version: 2,
+          assignments: [grant('billing.unknown', 'all_customers')],
+        },
+        expected,
+      ),
+    ).toThrow(ForbiddenException);
+    expect(() =>
+      permissionScope(
+        authorization([grant(role, 'all_customers')]),
+        'billing.webhooks.read',
+      ),
+    ).toThrow(ForbiddenException);
+  });
+
+  it('keeps a restricted invoice assignment restricted when webhook read is global', () => {
+    const auth = validateBillingContext(
+      {
+        ...claims(),
+        catalog_version: 2,
+        assignments: [
+          grant(role, 'all_customers'),
+          {
+            ...grant('billing.invoice_operator', 'organizations', [uuid(6)]),
+            assignment_id: uuid(8),
+          },
+        ],
+      },
+      expected,
+    );
+    expect(permissionScope(auth, 'billing.webhooks.read')).toBeNull();
+    expect(permissionScope(auth, 'billing.invoices.issue')).toEqual([uuid(6)]);
+    expect(permissionScope(auth, 'billing.invoices.read')).toEqual([uuid(6)]);
+    expect(() => permissionScope(auth, 'billing.webhooks.retry')).toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('continues enforcing expiration and exact scope shape for the new role', () => {
+    expect(() =>
+      permissionScope({ ...reader(), expiresAt: 1 }, 'billing.webhooks.read'),
+    ).toThrow(ForbiddenException);
+    expect(() =>
+      validateBillingContext(
+        {
+          ...claims(),
+          catalog_version: 2,
+          assignments: [
+            {
+              ...grant(role, 'all_customers'),
+              scope: { type: 'all_customers', organization_ids: [uuid(6)] },
+            },
+          ],
+        },
+        expected,
+      ),
+    ).toThrow(ForbiddenException);
   });
 });

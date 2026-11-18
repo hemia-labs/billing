@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
@@ -21,6 +22,7 @@ import {
 import { Skeleton } from "@/components/zuno/skeleton";
 import { StatCard } from "@/components/stat-card";
 import { hasPermission, useSession } from "@/components/auth-gate";
+import { homeRedirect } from "@/lib/nav";
 import {
   ApiError,
   apiErrorMessage,
@@ -121,6 +123,9 @@ export function DashboardSummaryClient() {
       cancelled = true;
     };
   }, [canReadDashboard]);
+
+  const destination = homeRedirect(session.permissions ?? []);
+  if (destination) redirect(destination);
 
   if (!canReadDashboard) {
     return (

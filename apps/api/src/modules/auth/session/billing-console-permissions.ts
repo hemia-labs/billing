@@ -1,6 +1,14 @@
 import type { AuthorizationMode } from '../../../config/authorization.config';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
-import catalog from '../billing-authorization-v1.json';
+import catalogV1 from '../billing-authorization-v1.json';
+import catalogV2 from '../billing-authorization-v2.json';
+
+const catalogs = { 1: catalogV1, 2: catalogV2 };
+function authorizationCatalog(version: 1 | 2) {
+  if (version !== 1 && version !== 2)
+    throw new ConflictException('BILLING_AUTHORIZATION_CONTRACT_MISMATCH');
+  return catalogs[version];
+}
 
 export type BillingAssignment = {
   assignment_id: string;
@@ -13,6 +21,7 @@ export type BillingAssignment = {
 export type BillingAuthorization = {
   assignments: BillingAssignment[];
   expiresAt: number;
+  catalogVersion?: 1 | 2;
   mode?: AuthorizationMode;
   organizationId?: string;
 };
@@ -44,8 +53,13 @@ export function validateBillingContext(
   },
   mode: AuthorizationMode = 'roles',
 ): BillingAuthorization {
-  if (claims.contract_version !== 1 || claims.catalog_version !== 1)
+  const catalogVersion = claims.catalog_version;
+  if (
+    claims.contract_version !== 1 ||
+    (catalogVersion !== 1 && catalogVersion !== 2)
+  )
     throw new ConflictException('BILLING_AUTHORIZATION_CONTRACT_MISMATCH');
+  const catalog = authorizationCatalog(catalogVersion);
   const now = Math.floor(Date.now() / 1000);
   if (
     !exact(claims, [
@@ -142,6 +156,7 @@ export function validateBillingContext(
   return {
     assignments,
     expiresAt: claims.exp,
+    catalogVersion,
     ...(mode === 'authenticated'
       ? { mode, organizationId: expected.organizationId }
       : {}),
@@ -153,6 +168,7 @@ export function permissionScope(
   permission: string,
 ): string[] | null {
   if (auth.expiresAt <= Math.floor(Date.now() / 1000)) deny();
+  const catalog = authorizationCatalog(auth.catalogVersion ?? 1);
   const definition = catalog.permissions.find((p) => p.code === permission);
   if (!definition) deny();
   if (auth.mode === 'authenticated') {
@@ -194,8 +210,8 @@ export function permissionScope(
 export function permissionsForAuthorization(
   auth: BillingAuthorization,
 ): string[] {
-  return catalog.permissions
-    .filter((p) => {
+  return authorizationCatalog(auth.catalogVersion ?? 1)
+    .permissions.filter((p) => {
       try {
         permissionScope(auth, p.code);
         return true;
