@@ -12,6 +12,8 @@ Configurar `HEMIA_AUTHORIZATION_MODE=authenticated` en los entornos de Access y 
 
 ## Revertir
 
-Cambiar la variable a `roles` (o retirarla) y recrear los backends. El modo forma parte de la clave de caché: cambiar de modo solicita un contexto nuevo para ese modo y no reutiliza el contexto del otro. Una asignación vacía se rechaza en modo `roles`. Las mutaciones siguen solicitando contexto actualizado. No es necesaria una migración ni cambiar usuarios o roles.
+Para activar los roles de Billing, configura `HEMIA_BILLING_AUTHORIZATION_MODE=roles` en Access y `HEMIA_AUTHORIZATION_MODE=roles` en Billing. Recrea ambos backends. Access seguirá usando su configuración general para los demás productos. El modo forma parte de la clave de caché de Billing. Una asignación vacía se rechaza en modo `roles`.
+
+Antes del cambio, revisa las asignaciones activas. El catálogo v2 conserva las asignaciones v1 y añade `billing.webhook_viewer` con alcance `all_customers` y el permiso `billing.webhooks.read`. Despliega ambos backends compatibles con v1 y v2 antes de publicar el catálogo y asignar el rol.
 
 El modo `authenticated` amplía las acciones disponibles a usuarios autenticados, también en producción; usarlo solo mientras se prueba el flujo y restaurar `roles` al habilitar la autorización definitiva.

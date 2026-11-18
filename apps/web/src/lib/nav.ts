@@ -22,6 +22,12 @@ export const nav = [
   { permission: "billing.catalog.manage", href: "/settings", label: "Configuración", icon: Settings },
 ];
 
+export function homeRedirect(permissions: readonly string[]): "/webhooks" | null {
+  return !permissions.includes("billing.dashboard.read") && permissions.includes("billing.webhooks.read")
+    ? "/webhooks"
+    : null;
+}
+
 export function labelFor(pathname: string) {
   const match = nav
     .filter((n) => (n.href === "/" ? pathname === "/" : pathname.startsWith(n.href)))
