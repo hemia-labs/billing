@@ -1,5 +1,11 @@
 # api
 
+## 1.6.0
+
+### Minor Changes
+
+- 6dd84d9: Agrega un rol de solo lectura para los webhooks de todas las organizaciones y conserva la compatibilidad con las asignaciones existentes de Billing.
+
 ## 1.5.0
 
 ### Minor Changes
