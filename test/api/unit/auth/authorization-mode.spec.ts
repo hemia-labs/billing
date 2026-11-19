@@ -1,26 +1,47 @@
 import authorizationConfig from '../../../../apps/api/src/config/authorization.config';
 import { envVarsSchema } from '../../../../apps/api/src/config/env.validation';
 
-describe('Billing authorization mode configuration', () => {
-  const originalEnvironment = process.env;
+const environment = {
+  NODE_ENV: 'test',
+  SECRETS_ENABLED: true,
+  VAULT_BASE_URL: 'https://vault.example.test',
+  VAULT_ROLE_ID: 'role',
+  VAULT_SECRET_ID: 'secret',
+};
+
+describe('role-based authorization configuration', () => {
+  const original = process.env;
   afterEach(() => {
-    process.env = originalEnvironment;
+    process.env = original;
   });
-  it('defaults to roles and allows the explicit authenticated setting in any environment', () => {
-    process.env = { NODE_ENV: 'test' };
-    expect(authorizationConfig().mode).toBe('roles');
-    for (const nodeEnv of ['development', 'production']) {
-      process.env = {
-        NODE_ENV: nodeEnv,
-        HEMIA_AUTHORIZATION_MODE: 'authenticated',
-      };
-      expect(authorizationConfig().mode).toBe('authenticated');
+
+  it('requires roles by default and accepts the explicit roles setting', () => {
+    for (const mode of [undefined, 'roles']) {
+      process.env = { ...original };
+      if (mode === undefined) delete process.env.HEMIA_AUTHORIZATION_MODE;
+      else process.env.HEMIA_AUTHORIZATION_MODE = mode;
+      expect(authorizationConfig()).toEqual({ mode: 'roles' });
+      const result = envVarsSchema.validate({
+        ...environment,
+        ...(mode ? { HEMIA_AUTHORIZATION_MODE: mode } : {}),
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.value.HEMIA_AUTHORIZATION_MODE).toBe('roles');
     }
   });
-  it('rejects unsupported modes rather than silently enabling them', () => {
-    const mode = envVarsSchema.extract('HEMIA_AUTHORIZATION_MODE');
-    expect(mode.validate('authenticated').error).toBeUndefined();
-    expect(mode.validate('roles').error).toBeUndefined();
-    expect(mode.validate('disabled').error).toBeDefined();
-  });
+
+  it.each(['authenticated', '', 'unknown'])(
+    'rejects %j before startup',
+    (mode) => {
+      process.env = { ...original, HEMIA_AUTHORIZATION_MODE: mode };
+      expect(() => authorizationConfig()).toThrow(
+        'HEMIA_AUTHORIZATION_MODE must be roles',
+      );
+      const result = envVarsSchema.validate({
+        ...environment,
+        HEMIA_AUTHORIZATION_MODE: mode,
+      });
+      expect(result.error?.message).toContain('HEMIA_AUTHORIZATION_MODE');
+    },
+  );
 });

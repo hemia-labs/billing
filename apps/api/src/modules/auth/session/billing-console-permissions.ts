@@ -22,8 +22,6 @@ export type BillingAuthorization = {
   assignments: BillingAssignment[];
   expiresAt: number;
   catalogVersion?: 1 | 2;
-  mode?: AuthorizationMode;
-  organizationId?: string;
 };
 const uuid = (v: unknown): v is string =>
   typeof v === 'string' &&
@@ -53,6 +51,7 @@ export function validateBillingContext(
   },
   mode: AuthorizationMode = 'roles',
 ): BillingAuthorization {
+  if (mode !== 'roles') deny();
   const catalogVersion = claims.catalog_version;
   if (
     claims.contract_version !== 1 ||
@@ -101,7 +100,7 @@ export function validateBillingContext(
     claims.exp <= claims.iat ||
     claims.exp > claims.iat + 300 ||
     !Array.isArray(claims.assignments) ||
-    (mode !== 'authenticated' && !claims.assignments.length) ||
+    !claims.assignments.length ||
     claims.assignments.length > 64
   )
     deny();
@@ -157,9 +156,6 @@ export function validateBillingContext(
     assignments,
     expiresAt: claims.exp,
     catalogVersion,
-    ...(mode === 'authenticated'
-      ? { mode, organizationId: expected.organizationId }
-      : {}),
   };
 }
 
@@ -171,12 +167,6 @@ export function permissionScope(
   const catalog = authorizationCatalog(auth.catalogVersion ?? 1);
   const definition = catalog.permissions.find((p) => p.code === permission);
   if (!definition) deny();
-  if (auth.mode === 'authenticated') {
-    if (!uuid(auth.organizationId)) deny();
-    return definition.resource_domain === 'catalog'
-      ? null
-      : [auth.organizationId];
-  }
   const matching = auth.assignments.filter((a) => {
     const role = catalog.roles.find((r) => r.code === a.role_code);
     return (

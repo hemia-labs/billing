@@ -3,9 +3,7 @@ import * as Joi from 'joi';
 const hasValue = (value?: string): boolean => Boolean(value?.trim());
 
 const schema = Joi.object({
-  HEMIA_AUTHORIZATION_MODE: Joi.string()
-    .valid('roles', 'authenticated')
-    .default('roles'),
+  HEMIA_AUTHORIZATION_MODE: Joi.string().valid('roles').default('roles'),
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),

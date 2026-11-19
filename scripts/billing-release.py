@@ -73,6 +73,7 @@ def create(tag, output, images=None):
             raise ValueError('Selected image digest differs from local image')
         config['services'][service].pop('build', None)
         config['services'][service]['image'] = images[service]
+    config['services']['backend'].setdefault('environment', {})['HEMIA_AUTHORIZATION_MODE'] = 'roles'
     config['services']['backend']['env_file'] = [{'path': '${BILLING_API_ENV_FILE:?Set the server environment file}', 'format': 'raw'}]
     config['services']['frontend']['ports'] = ['${BILLING_BIND_ADDRESS:-127.0.0.1}:${BILLING_WEB_PORT:-5175}:5175']
     config['services']['backend']['ports'] = ['${BILLING_BIND_ADDRESS:-127.0.0.1}:${BILLING_API_PORT:-3015}:3015']
