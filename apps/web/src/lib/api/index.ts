@@ -10,6 +10,7 @@ type ApiFetchOptions = Omit<RequestInit, "body" | "credentials"> & {
 };
 
 type ApiErrorBody = {
+  code?: unknown;
   message?: unknown;
   error?: unknown;
   details?: unknown;
@@ -20,6 +21,7 @@ export class ApiError extends Error {
     public readonly status: number,
     message: string,
     public readonly details?: unknown,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -67,7 +69,7 @@ export function toQueryString(
 
 export function redirectToLogin(returnTo = currentReturnTo()): void {
   const url = new URL(`${authBaseUrl}/auth/login`);
-  url.searchParams.set("returnTo", returnTo);
+  url.searchParams.set("returnTo", safeLoginReturnTo(returnTo, window.location.origin));
   window.location.assign(url.toString());
 }
 
@@ -75,6 +77,8 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback;
   if (error.status === 401) return "Sesión expirada. Inicia sesión de nuevo.";
   if (error.status === 403) return "No tienes permiso para esta acción.";
+  if (error.code === "BILLING_PROVIDER_PRICE_NOT_CONFIGURED") return "Falta configurar un ID de plan o precio PayPal activo para la conexión seleccionada. Configúralo antes de nuevas contrataciones.";
+  if (error.code === "BILLING_PROVIDER_PRICE_SCOPE_CONFLICT") return "El mapping no coincide con la conexión PayPal seleccionada o ya existe uno activo para esa app. Revisa sus IDs y conexión.";
   if (error.status === 404) return "No se encontró el recurso solicitado.";
   if (error.status >= 500) return "El servicio no está disponible. Intenta de nuevo.";
   return error.message || fallback;
@@ -112,7 +116,7 @@ async function toApiError(response: Response): Promise<ApiError> {
       ? rawMessage
       : response.statusText || "Request failed";
 
-  return new ApiError(response.status, message, body?.details);
+  return new ApiError(response.status, message, body?.details, typeof body?.code === "string" ? body.code : undefined);
 }
 
 async function readErrorBody(response: Response): Promise<ApiErrorBody | null> {
@@ -125,4 +129,21 @@ async function readErrorBody(response: Response): Promise<ApiErrorBody | null> {
 
 function currentReturnTo(): string {
   return window.location.pathname + window.location.search + window.location.hash;
+}
+
+export type AuthCallbackError = "access_unavailable" | "access_denied" | "auth_failed";
+
+export function authCallbackError(search: string): AuthCallbackError | null {
+  return new URLSearchParams(search).getAll("error").find((value): value is AuthCallbackError => value === "access_unavailable" || value === "access_denied" || value === "auth_failed") ?? null;
+}
+
+export function safeLoginReturnTo(returnTo: string, origin: string): string {
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//") || returnTo.split(/[?#]/, 1)[0].includes("\\")) return "/";
+  try {
+    const url = new URL(returnTo, origin);
+    if (url.origin !== origin) return "/";
+    // Keep unrelated query parameters, including their original encoding and repeated values.
+    const query = url.search.slice(1).split("&").filter((part) => !authCallbackError(part)).join("&");
+    return url.pathname + (query ? "?" + query : "") + url.hash;
+  } catch { return "/"; }
 }

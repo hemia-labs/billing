@@ -6,6 +6,8 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Param,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { BillingWebhooksService } from '../billing-webhooks.service';
 import { BillingWebhookProcessResult, PaypalWebhookHeaders } from '../types';
@@ -33,6 +35,30 @@ export class BillingWebhooksController {
         transmissionSig,
       }),
       payload,
+    );
+  }
+
+  @Post('paypal/:connectionId')
+  @HttpCode(HttpStatus.OK)
+  processConnectedPaypalWebhook(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @Headers('paypal-transmission-id') transmissionId: string | undefined,
+    @Headers('paypal-transmission-time') transmissionTime: string | undefined,
+    @Headers('paypal-cert-url') certUrl: string | undefined,
+    @Headers('paypal-auth-algo') authAlgo: string | undefined,
+    @Headers('paypal-transmission-sig') transmissionSig: string | undefined,
+    @Body() payload: Record<string, unknown>,
+  ): Promise<BillingWebhookProcessResult> {
+    return this.service.processPaypalWebhook(
+      this.buildHeaders({
+        transmissionId,
+        transmissionTime,
+        certUrl,
+        authAlgo,
+        transmissionSig,
+      }),
+      payload,
+      connectionId,
     );
   }
 

@@ -91,6 +91,16 @@ const schema = Joi.object({
   ACCESS_API_URL: Joi.string().uri().optional(),
   ACCESS_JWKS_URI: Joi.string().uri().optional(),
   ACCESS_AUDIENCE: Joi.string().default('access-api'),
+  PAYPAL_CONNECTION_ENCRYPTION_KEY: Joi.string()
+    .allow('')
+    .pattern(/^[A-Za-z0-9+/]{43}=$/)
+    .messages({
+      'string.pattern.base':
+        'PAYPAL_CONNECTION_ENCRYPTION_KEY must be a base64-encoded 32-byte key',
+      'string.base':
+        'PAYPAL_CONNECTION_ENCRYPTION_KEY must be a base64-encoded 32-byte key',
+    })
+    .optional(),
   PAYPAL_ENV: Joi.string().valid('sandbox', 'live').default('sandbox'),
   PAYPAL_CLIENT_ID: Joi.string().allow('').default(''),
   PAYPAL_CLIENT_SECRET: Joi.string().allow('').default(''),

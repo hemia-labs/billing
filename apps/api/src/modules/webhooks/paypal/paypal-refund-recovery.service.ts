@@ -40,14 +40,8 @@ export class PaypalRefundRecoveryService
   @Cron('*/15 * * * *', { name: 'paypal-refund-delivery-recovery' })
   recover(): Promise<void> {
     if (this.running) return this.running;
-    if (
-      this.stopping ||
-      !this.config.get<string>('paypal.webhookId') ||
-      !this.config.get<string>('paypal.clientId') ||
-      !this.config.get<string>('paypal.clientSecret')
-    )
-      return Promise.resolve();
-    this.running = this.scan()
+    if (this.stopping) return Promise.resolve();
+    this.running = this.scanConnections()
       .catch((error: unknown) => {
         const reason =
           error instanceof Error &&
@@ -67,7 +61,43 @@ export class PaypalRefundRecoveryService
     return this.running;
   }
 
-  private async scan(): Promise<void> {
+  private async scanConnections(): Promise<void> {
+    for (const connection of await this.paypal.recoveryConnections()) {
+      if (this.stopping) return;
+      try {
+        const client = connection.id
+          ? this.paypal.forConnection(connection.id)
+          : this.paypal;
+        const credentials = await client.credentials();
+        if (
+          !credentials.clientId ||
+          !credentials.clientSecret ||
+          !credentials.webhookId
+        )
+          continue;
+        await this.scan(connection.id, client, credentials);
+      } catch (error) {
+        const reason =
+          error instanceof Error &&
+          /^(PayPal recovery HTTP \d{3}|Invalid PayPal (event list|next page|pagination URL|recovery response))$/.test(
+            error.message,
+          )
+            ? error.message
+            : 'PayPal recovery request failed';
+        this.logger.error({
+          event: 'billing_paypal_refund_recovery_failed',
+          ...(connection.id ? { connectionId: connection.id } : {}),
+          reason,
+        });
+      }
+    }
+  }
+
+  private async scan(
+    connectionId: string | null,
+    paypal: PaypalClientService,
+    credentials: Awaited<ReturnType<PaypalClientService['credentials']>>,
+  ): Promise<void> {
     const now = Date.now();
     let examined = 0,
       redeliveries = 0,
@@ -83,7 +113,14 @@ export class PaypalRefundRecoveryService
     for (const type of REFUND_TYPES) {
       let next: string | undefined;
       for (let page = 0; page < MAX_PAGES && !this.stopping; page++) {
-        const response = await this.listEvents(type, start, end, next);
+        const response = await this.listEvents(
+          type,
+          start,
+          end,
+          next,
+          paypal,
+          credentials,
+        );
         if (!Array.isArray(response.events))
           throw new Error('Invalid PayPal event list');
         examined += response.events.length;
@@ -91,19 +128,27 @@ export class PaypalRefundRecoveryService
           if (this.stopping) return;
           const event = this.record(value);
           if (event?.event_type !== type || !this.id(event.id)) continue;
-          const captureId = this.captureId(event);
-          if (!captureId || (this.retryAfter.get(event.id) ?? 0) > Date.now())
+          const captureId = this.captureId(event, credentials.environment);
+          if (
+            !captureId ||
+            (this.retryAfter.get(`${connectionId ?? 'global'}:${event.id}`) ??
+              0) > Date.now()
+          )
             continue;
           const owned = await this.dataSource.query<Array<{ id: string }>>(
             `SELECT p.id FROM payments p
              WHERE p.provider='paypal' AND p.provider_capture_id=$1
+               AND COALESCE(p.metadata->>'providerConnectionId','global')=COALESCE($3::text,'global')
                AND NOT EXISTS (SELECT 1 FROM webhook_events w
-                 WHERE w.provider='paypal' AND w.provider_event_id=$2)
+                 WHERE w.provider='paypal' AND w.provider_event_id=$2 AND w.provider_connection_id IS NOT DISTINCT FROM $3::uuid)
              LIMIT 1`,
-            [captureId, event.id],
+            [captureId, event.id, connectionId],
           );
           if (!owned.length) continue;
-          this.retryAfter.set(event.id, Date.now() + HOUR_MS);
+          this.retryAfter.set(
+            `${connectionId ?? 'global'}:${event.id}`,
+            Date.now() + HOUR_MS,
+          );
           try {
             // Re-delivery preserves the existing signature verification and durable processing path.
             await this.request(
@@ -111,9 +156,11 @@ export class PaypalRefundRecoveryService
               {
                 method: 'POST',
                 body: JSON.stringify({
-                  webhook_ids: [this.config.get<string>('paypal.webhookId')],
+                  webhook_ids: [credentials.webhookId],
                 }),
               },
+              paypal,
+              credentials.baseUrl,
             );
             redeliveries++;
             this.logger.warn({
@@ -157,12 +204,14 @@ export class PaypalRefundRecoveryService
     type: string,
     start: string,
     end: string,
-    next?: string,
+    next: string | undefined,
+    paypal: PaypalClientService,
+    credentials: Awaited<ReturnType<PaypalClientService['credentials']>>,
   ): Promise<Record<string, unknown>> {
-    const base = new URL(this.config.getOrThrow<string>('paypal.baseUrl'));
+    const base = new URL(credentials.baseUrl);
     const url = new URL(next ?? '/v1/notifications/webhooks-events', base);
     const hosts =
-      this.config.get<string>('paypal.environment') === 'live'
+      credentials.environment === 'live'
         ? ['api.paypal.com', 'api-m.paypal.com']
         : ['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com'];
     if (
@@ -179,24 +228,28 @@ export class PaypalRefundRecoveryService
     url.searchParams.set('start_time', start);
     url.searchParams.set('end_time', end);
     url.searchParams.set('page_size', '100');
-    return this.request(url.pathname + url.search, { method: 'GET' });
+    return this.request(
+      url.pathname + url.search,
+      { method: 'GET' },
+      paypal,
+      credentials.baseUrl,
+    );
   }
 
   private async request(
     path: string,
     init: RequestInit,
+    paypal: PaypalClientService,
+    baseUrl: string,
   ): Promise<Record<string, unknown>> {
-    const response = await fetch(
-      this.config.getOrThrow<string>('paypal.baseUrl') + path,
-      {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${await this.paypal.getAccessToken()}`,
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(15_000),
+    const response = await fetch(baseUrl + path, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${await paypal.getAccessToken()}`,
+        'Content-Type': 'application/json',
       },
-    );
+      signal: AbortSignal.timeout(15_000),
+    });
     if (!response.ok)
       throw new Error(`PayPal recovery HTTP ${response.status}`);
     const body: unknown = await response.json();
@@ -205,7 +258,10 @@ export class PaypalRefundRecoveryService
     return result;
   }
 
-  private captureId(event: Record<string, unknown>): string | undefined {
+  private captureId(
+    event: Record<string, unknown>,
+    environment: string,
+  ): string | undefined {
     const resource = this.record(event.resource);
     if (!resource) return;
     if (event.event_type === 'PAYMENT.SALE.REFUNDED')
@@ -217,7 +273,7 @@ export class PaypalRefundRecoveryService
       if (this.id(value)) return value;
     if (!Array.isArray(resource.links)) return;
     const hosts =
-      this.config.get<string>('paypal.environment') === 'live'
+      environment === 'live'
         ? ['api.paypal.com', 'api-m.paypal.com']
         : ['api.sandbox.paypal.com', 'api-m.sandbox.paypal.com'];
     for (const value of resource.links) {

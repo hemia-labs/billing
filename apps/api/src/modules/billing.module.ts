@@ -14,6 +14,7 @@ import { BillingSubscriptionsManagementModule } from './subscriptions-management
 import { BillingSubscriptionAddonsModule } from './subscription-addons';
 import { BillingWebhooksModule } from './webhooks';
 import { PaypalModule } from './paypal';
+import { PaypalConnectionsModule } from './paypal-connections/paypal-connections.module';
 import { BillingOperationsModule } from './operations';
 import {
   BillingAddonEntity,
@@ -77,6 +78,7 @@ import {
     BillingSubscriptionAddonsModule,
     BillingWebhooksModule,
     PaypalModule,
+    PaypalConnectionsModule,
   ],
 })
 export class BillingModule {}

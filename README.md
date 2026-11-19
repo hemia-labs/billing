@@ -24,7 +24,20 @@ bun install
 bun run dev        # inicia frontend; ejecutar dev:api en otra terminal
 bun run dev:web    # solo frontend (http://localhost:5175)
 bun run dev:api    # solo backend  (http://localhost:3015)
+bun run dev:stack  # Identity + Access + Billing, con comprobaciones de disponibilidad
+bun run dev:stack --check # comprobar servicios existentes, sin iniciarlos
 ```
+
+`dev:stack` espera los checkouts vecinos `../identity-access/identity` y
+`../identity-access/access`; puedes indicar otros con `IDENTITY_ROOT` y
+`ACCESS_ROOT`. Usa sus archivos de entorno locales existentes y los puertos
+4000/5173 (Identity), 3019 (Access) y 3015/5175 (Billing). Requiere dependencias
+instaladas, PostgreSQL y Redis disponibles, y el esquema previamente preparado.
+No instala paquetes ni ejecuta migraciones o seeds. Reutiliza servicios sanos;
+si un puerto está ocupado por un servicio incorrecto o no listo, se detiene sin
+matarlo. Ctrl+C cierra únicamente los procesos iniciados por ese comando. Los
+logs se guardan en un directorio temporal privado indicado en la terminal.
+Ver [recuperación de sesión y arranque local](docs/auth-recovery.md).
 
 ## Build
 

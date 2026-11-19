@@ -29,8 +29,9 @@ import {
   listCatalogPlans,
 } from "../catalog-api";
 import { AddonsTable, PlansTable } from "../catalog-client";
+import { ProductPaymentSummary } from "./product-payment-summary";
 
-type ProductTab = "plans" | "addons";
+type ProductTab = "plans" | "addons" | "payments";
 type StatusFilter = "all" | CatalogStatus;
 
 const pageSize = 10;
@@ -41,7 +42,7 @@ export function ProductDetailClient({ id }: { id: string }) {
   const session = useSession();
   const canRead = hasPermission(session, "billing.catalog.read");
   const canManage = hasPermission(session, "billing.catalog.manage");
-  const tab: ProductTab = searchParams.get("tab") === "addons" ? "addons" : "plans";
+  const tab: ProductTab = searchParams.get("tab") === "payments" ? "payments" : searchParams.get("tab") === "addons" ? "addons" : "plans";
   const [product, setProduct] = useState<CatalogProduct | null>(null);
   const [productLoading, setProductLoading] = useState(true);
   const [productError, setProductError] = useState("");
@@ -104,7 +105,7 @@ export function ProductDetailClient({ id }: { id: string }) {
           </div>
           {product.description ? <p className="mt-2 max-w-3xl text-sm text-muted-foreground">{product.description}</p> : null}
         </div>
-        {canManage ? (
+        {canManage && tab !== "payments" ? (
           <Button className="w-fit shrink-0" render={<Link href={isPlans ? "/products/plans/new?product_id=" + id : "/products/addons/new?product_id=" + id} />}>
             <Plus className="size-4" />{isPlans ? "Nuevo plan" : "Nuevo add-on"}
           </Button>
@@ -114,16 +115,17 @@ export function ProductDetailClient({ id }: { id: string }) {
       <Tabs
         className="gap-4"
         onValueChange={(value) => {
-          if ((value === "plans" || value === "addons") && value !== tab) {
-            router.push(value === "plans" ? baseHref : baseHref + "?tab=addons", { scroll: false });
+          if ((value === "plans" || value === "addons" || value === "payments") && value !== tab) {
+            router.push(value === "plans" ? baseHref : baseHref + "?tab=" + value, { scroll: false });
           }
         }}
         value={tab}
         variant="underline"
       >
-        <TabsList className="w-full">
+        <TabsList className="w-full overflow-x-auto overflow-y-hidden">
           <TabsTab className="min-h-10 px-3" value="plans">Planes <span className="ml-1 text-muted-foreground">({plans.data?.total ?? "—"})</span></TabsTab>
-          <TabsTab className="min-h-10 px-3" value="addons">Add-ons <span className="ml-1 text-muted-foreground">({addons.data?.total ?? "—"})</span></TabsTab>
+          <TabsTab className="min-h-10 shrink-0 px-3" value="addons">Add-ons <span className="ml-1 text-muted-foreground">({addons.data?.total ?? "—"})</span></TabsTab>
+          <TabsTab className="min-h-10 shrink-0 px-3" value="payments">Pagos</TabsTab>
         </TabsList>
 
         <TabsPanel className="mt-0" value="plans">
@@ -180,6 +182,9 @@ export function ProductDetailClient({ id }: { id: string }) {
               total={addons.data?.total ?? 0}
             />
           </section>
+        </TabsPanel>
+        <TabsPanel className="mt-0" value="payments">
+          {tab === "payments" ? <ProductPaymentSummary canManage={canManage} key={id} product={product} /> : null}
         </TabsPanel>
       </Tabs>
     </div>

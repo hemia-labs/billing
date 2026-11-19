@@ -1,3 +1,4 @@
+import { resolveProviderPrice } from './provider-price-scope';
 import {
   BadRequestException,
   ConflictException,
@@ -110,26 +111,24 @@ export class BillingPlanCatalogResolver {
   providerPrice(
     price: BillingPlanPriceEntity,
     provider: BillingProvider,
+    connectionId: string | null,
   ): BillingProviderPriceEntity {
-    const providerPrice = (price.providerPrices ?? []).find(
-      (item) =>
-        item.provider === provider &&
-        item.status === ProviderPriceStatus.Active,
+    return resolveProviderPrice(
+      price.providerPrices ?? [],
+      provider,
+      connectionId,
     );
-
-    if (!providerPrice)
-      throw new NotFoundException('Active provider price not found');
-    return providerPrice;
   }
 
   resolve(
     plan: BillingPlanEntity,
     provider: BillingProvider,
+    connectionId: string | null,
     planPriceCode?: string,
   ): ResolvedPlanCatalog {
     const version = this.publishedVersion(plan);
     const price = this.activePrice(version, planPriceCode);
-    const providerPrice = this.providerPrice(price, provider);
+    const providerPrice = this.providerPrice(price, provider, connectionId);
 
     return {
       entitlements: this.entitlements(version),

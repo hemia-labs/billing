@@ -6,6 +6,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -17,6 +18,7 @@ import {
   BillingAddonType,
   BillingProvider,
 } from '../enums';
+import { BillingAddonProviderPriceEntity } from './billing-addon-provider-price.entity';
 import { BillingProductEntity } from './billing-product.entity';
 import type { AddonEntitlementEffects } from '../types';
 
@@ -87,6 +89,9 @@ export class BillingAddonEntity {
     nullable: true,
   })
   providerPlanId: string | null;
+
+  @OneToMany(() => BillingAddonProviderPriceEntity, (mapping) => mapping.addon)
+  providerPrices: BillingAddonProviderPriceEntity[];
 
   @Column({
     name: 'entitlement_effects',

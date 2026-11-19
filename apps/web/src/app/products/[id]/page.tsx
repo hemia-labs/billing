@@ -14,7 +14,7 @@ export default async function ProductPage({
 
   return (
     <div>
-      <ProductDetailClient id={id} />
+      <ProductDetailClient id={id} key={id} />
     </div>
   );
 }

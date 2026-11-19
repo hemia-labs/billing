@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -27,6 +30,8 @@ import {
   CreateBillingPlanDto,
   CreateBillingProductDto,
   CreatePlanVersionDto,
+  CreateProviderPriceDto,
+  UpdateProviderPriceStatusDto,
   ListBillingAddonsQueryDto,
   ListBillingPlansQueryDto,
   ListBillingProductsQueryDto,
@@ -133,6 +138,13 @@ export class BillingCatalogConsoleController {
     return this.service.updatePlan(id, dto);
   }
 
+  @Delete('plans/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Permissions('billing.catalog.manage')
+  deletePlan(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    return this.service.deletePlan(id);
+  }
+
   @Get('features')
   @Permissions('billing.catalog.read')
   listFeatures(
@@ -194,6 +206,48 @@ export class BillingCatalogConsoleController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<BillingPlanVersionResponseDto> {
     return this.service.publishVersion(id);
+  }
+
+  @Post('plan-prices/:id/provider-prices')
+  @Permissions('billing.catalog.manage')
+  createProviderPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateProviderPriceDto,
+  ) {
+    return this.service.createProviderPrice(id, dto);
+  }
+
+  @Patch('provider-prices/:id/status')
+  @Permissions('billing.catalog.manage')
+  updateProviderPriceStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateProviderPriceStatusDto,
+  ) {
+    return this.service.updateProviderPriceStatus(id, dto);
+  }
+
+  @Get('addons/:id/provider-prices')
+  @Permissions('billing.catalog.read')
+  listAddonProviderPrices(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.listAddonProviderPrices(id);
+  }
+
+  @Post('addons/:id/provider-prices')
+  @Permissions('billing.catalog.manage')
+  createAddonProviderPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateProviderPriceDto,
+  ) {
+    return this.service.createAddonProviderPrice(id, dto);
+  }
+
+  @Patch('addon-provider-prices/:id/status')
+  @Permissions('billing.catalog.manage')
+  updateAddonProviderPriceStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateProviderPriceStatusDto,
+  ) {
+    return this.service.updateAddonProviderPriceStatus(id, dto);
   }
 
   @Get('addons')

@@ -56,7 +56,11 @@ export type CatalogPlanOverview = Omit<CatalogPlan, "versions"> & {
   publishedVersion: CatalogPlanVersionSummary | null;
 };
 
+export type ProviderConnectionScope = "unassigned" | "global" | "connection";
+
 export type CatalogProviderPrice = {
+  connectionScope: ProviderConnectionScope;
+  providerConnectionId: string | null;
   id: string;
   provider: BillingProvider;
   providerProductId: string | null;
@@ -117,6 +121,8 @@ export type CatalogPlanVersionSummary = {
 };
 
 export type CatalogProviderPricePayload = {
+  connectionScope: Exclude<ProviderConnectionScope, "unassigned">;
+  providerConnectionId: string | null;
   provider: BillingProvider;
   providerProductId?: string | null;
   providerPriceId?: string | null;
@@ -185,6 +191,7 @@ export type CatalogAddon = {
   maxQuantity: number | null;
   provider: BillingProvider;
   providerPlanId: string | null;
+  providerPrices?: CatalogProviderPrice[];
   entitlementEffects: AddonEntitlementEffects;
   status: CatalogStatus;
 };
@@ -203,6 +210,7 @@ export type CatalogAddonPayload = {
   maxQuantity?: number | null;
   provider: BillingProvider;
   providerPlanId?: string | null;
+  providerPrices?: CatalogProviderPricePayload[];
   entitlementEffects: AddonEntitlementEffects;
   status?: CatalogAddon["status"];
 };
@@ -279,11 +287,15 @@ export function createCatalogPlan(payload: CatalogPlanPayload) {
   });
 }
 
-export function updateCatalogPlan(id: string, payload: CatalogPlanPayload) {
+export function updateCatalogPlan(id: string, payload: Partial<CatalogPlanPayload>) {
   return apiFetch<CatalogPlan>(`/billing/console/catalog/plans/${id}`, {
     body: payload,
     method: "PATCH",
   });
+}
+
+export function deleteCatalogPlan(id: string) {
+  return apiFetch<void>(`/billing/console/catalog/plans/${id}`, { method: "DELETE" });
 }
 
 export function listCatalogAddons(filters: CatalogFilters) {
@@ -327,4 +339,24 @@ export function primaryProviderPrice(plan: CatalogPlan) {
 
 export function publishCatalogVersion(id: string) {
   return apiFetch(`/billing/console/catalog/plan-versions/${id}/publish`, { method: "POST" });
+}
+
+export function addPlanProviderPrice(priceId: string, payload: CatalogProviderPricePayload) {
+  return apiFetch<CatalogProviderPrice>(`/billing/console/catalog/plan-prices/${encodeURIComponent(priceId)}/provider-prices`, { method: "POST", body: payload });
+}
+
+export function setPlanProviderPriceStatus(id: string, status: ProviderPriceStatus) {
+  return apiFetch<CatalogProviderPrice>(`/billing/console/catalog/provider-prices/${encodeURIComponent(id)}/status`, { method: "PATCH", body: { status } });
+}
+
+export function listAddonProviderPrices(id: string, signal?: AbortSignal) {
+  return apiFetch<CatalogProviderPrice[]>(`/billing/console/catalog/addons/${encodeURIComponent(id)}/provider-prices`, { cache: "no-store", signal });
+}
+
+export function addAddonProviderPrice(id: string, payload: CatalogProviderPricePayload) {
+  return apiFetch<CatalogProviderPrice>(`/billing/console/catalog/addons/${encodeURIComponent(id)}/provider-prices`, { method: "POST", body: payload });
+}
+
+export function setAddonProviderPriceStatus(id: string, status: ProviderPriceStatus) {
+  return apiFetch<CatalogProviderPrice>(`/billing/console/catalog/addon-provider-prices/${encodeURIComponent(id)}/status`, { method: "PATCH", body: { status } });
 }

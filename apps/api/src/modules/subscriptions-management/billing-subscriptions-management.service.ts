@@ -1,3 +1,7 @@
+import {
+  providerConnectionId,
+  providerConnectionWhere,
+} from '../providers/provider-connection';
 import { isDeepStrictEqual } from 'node:util';
 import {
   renewalPlanChange,
@@ -171,7 +175,10 @@ export class BillingSubscriptionsManagementService {
               ['preparing', 'awaiting_approval'].includes(marker.state) &&
               checkout.providerCheckoutUrl
                 ? this.providers
-                    .get(candidate.provider)
+                    .get(
+                      candidate.provider,
+                      providerConnectionId(candidate.metadata),
+                    )
                     .validateApprovalUrl(checkout.providerCheckoutUrl)
                 : null,
           };
@@ -224,7 +231,10 @@ export class BillingSubscriptionsManagementService {
     targetPriceCode: string,
   ): Promise<PlanChangeQuote> {
     const subscription = await this.findSubscription(subscriptionId);
-    this.providers.get(subscription.provider);
+    this.providers.get(
+      subscription.provider,
+      providerConnectionId(subscription.metadata),
+    );
     const pending = pendingPlanChange(subscription);
     if (
       pending?.quote &&
@@ -249,6 +259,7 @@ export class BillingSubscriptionsManagementService {
     const target = this.planResolver.resolve(
       targetPlan,
       subscription.provider,
+      providerConnectionId(subscription.metadata),
       targetPriceCode,
     );
     const current =
@@ -262,7 +273,7 @@ export class BillingSubscriptionsManagementService {
 
   async cancelSubscription(subscriptionId: string, dto: CancelSubscriptionDto) {
     let source = await this.findSubscription(subscriptionId);
-    this.providers.get(source.provider);
+    this.providers.get(source.provider, providerConnectionId(source.metadata));
     const capture = pendingPlanChange(source);
     if (
       capture &&
@@ -415,7 +426,10 @@ export class BillingSubscriptionsManagementService {
       throw new ConflictException(
         'Renewal plan correction requires confirmation first',
       );
-    this.providers.get(subscription.provider);
+    this.providers.get(
+      subscription.provider,
+      providerConnectionId(subscription.metadata),
+    );
     const requestHash = createHash('sha256')
       .update(
         JSON.stringify([
@@ -710,7 +724,10 @@ export class BillingSubscriptionsManagementService {
       throw new ConflictException(
         'Payment requires reconciliation before discarding',
       );
-    const adapter = this.providers.get(source.provider);
+    const adapter = this.providers.get(
+      source.provider,
+      providerConnectionId(source.metadata),
+    );
     const provider = await adapter.getSubscription(
       source.providerSubscriptionId,
     );
@@ -868,7 +885,10 @@ export class BillingSubscriptionsManagementService {
     const intent = pendingPlanChange(claimed)!;
     let paymentNeedsReconciliation = false;
     try {
-      const adapter = this.providers.get(claimed.provider);
+      const adapter = this.providers.get(
+        claimed.provider,
+        providerConnectionId(claimed.metadata),
+      );
       if (intent.paymentOrderId) {
         try {
           const order = await adapter.getOrder(intent.paymentOrderId);
@@ -1062,7 +1082,7 @@ export class BillingSubscriptionsManagementService {
         'Renewal correction requires an active subscription',
       );
     const provider = await this.providers
-      .get(source.provider)
+      .get(source.provider, providerConnectionId(source.metadata))
       .getSubscription(source.providerSubscriptionId);
     if (
       provider.id !== source.providerSubscriptionId ||
@@ -1265,7 +1285,10 @@ export class BillingSubscriptionsManagementService {
     let completed = false;
     let paid = false;
     try {
-      const adapter = this.providers.get(claimed.provider);
+      const adapter = this.providers.get(
+        claimed.provider,
+        providerConnectionId(claimed.metadata),
+      );
       let provider = await adapter.getSubscription(
         marker.providerSubscriptionId,
       );
@@ -1384,17 +1407,19 @@ export class BillingSubscriptionsManagementService {
     try {
       if (claimed.providerSubscriptionId) {
         const provider = await this.providers
-          .get(claimed.provider)
+          .get(claimed.provider, providerConnectionId(claimed.metadata))
           .getSubscription(claimed.providerSubscriptionId);
         confirmed = [
           SubscriptionStatus.Cancelled,
           SubscriptionStatus.Expired,
         ].includes(provider.subscriptionStatus);
         if (!confirmed) {
-          await this.providers.get(claimed.provider).cancelSubscription({
-            providerSubscriptionId: claimed.providerSubscriptionId,
-            reason: cancellationIntent(claimed)?.reason ?? undefined,
-          });
+          await this.providers
+            .get(claimed.provider, providerConnectionId(claimed.metadata))
+            .cancelSubscription({
+              providerSubscriptionId: claimed.providerSubscriptionId,
+              reason: cancellationIntent(claimed)?.reason ?? undefined,
+            });
           confirmed = true;
         }
       }
@@ -1402,7 +1427,7 @@ export class BillingSubscriptionsManagementService {
       if (claimed.providerSubscriptionId) {
         try {
           const provider = await this.providers
-            .get(claimed.provider)
+            .get(claimed.provider, providerConnectionId(claimed.metadata))
             .getSubscription(claimed.providerSubscriptionId);
           confirmed = [
             SubscriptionStatus.Cancelled,
@@ -1478,7 +1503,7 @@ export class BillingSubscriptionsManagementService {
       if (!checkout)
         throw new NotFoundException('Plan revision checkout not found');
       let provider = await this.providers
-        .get(claimed.provider)
+        .get(claimed.provider, providerConnectionId(claimed.metadata))
         .getSubscription(claimed.providerSubscriptionId);
       if (
         provider.planId !== intent.targetProviderPlanId &&
@@ -1486,7 +1511,7 @@ export class BillingSubscriptionsManagementService {
         Date.parse(intent.effectiveAt) > Date.now()
       ) {
         const revision = await this.providers
-          .get(claimed.provider)
+          .get(claimed.provider, providerConnectionId(claimed.metadata))
           .reviseSubscription({
             providerSubscriptionId: claimed.providerSubscriptionId,
             providerPlanId: intent.targetProviderPlanId,
@@ -1503,7 +1528,7 @@ export class BillingSubscriptionsManagementService {
           status: BillingCheckoutSessionStatus.Pending,
         });
         provider = await this.providers
-          .get(claimed.provider)
+          .get(claimed.provider, providerConnectionId(claimed.metadata))
           .getSubscription(claimed.providerSubscriptionId);
       }
       await this.reconcileProration(
@@ -1655,7 +1680,7 @@ export class BillingSubscriptionsManagementService {
     if (intent.paymentOrderId) {
       try {
         order = await this.providers
-          .get(claimed.provider)
+          .get(claimed.provider, providerConnectionId(claimed.metadata))
           .getOrder(intent.paymentOrderId);
       } catch (error) {
         // A missing order is replaceable only before any capture and after quote expiry.
@@ -1698,7 +1723,10 @@ export class BillingSubscriptionsManagementService {
       if (
         intent.orderCreateAttemptedAt &&
         Date.now() - Date.parse(intent.orderCreateAttemptedAt) >
-          this.providers.get(claimed.provider).orderIdempotencyWindowMs
+          this.providers.get(
+            claimed.provider,
+            providerConnectionId(claimed.metadata),
+          ).orderIdempotencyWindowMs
       )
         throw new ConflictException(
           'Provider order creation requires reconciliation',
@@ -1734,19 +1762,21 @@ export class BillingSubscriptionsManagementService {
         });
       }
       if (quote.amountDueNow === '0.00') return;
-      order = await this.providers.get(claimed.provider).createOrder({
-        requestId: createHash('sha256')
-          .update(
-            checkout.id + ':order:' + (intent.paymentOrderGeneration ?? 0),
-          )
-          .digest('hex')
-          .slice(0, 32),
-        checkoutId: checkout.id,
-        amount: quote.amountDueNow,
-        currency: quote.currency,
-        returnUrl: checkout.successUrl,
-        cancelUrl: checkout.cancelUrl,
-      });
+      order = await this.providers
+        .get(claimed.provider, providerConnectionId(claimed.metadata))
+        .createOrder({
+          requestId: createHash('sha256')
+            .update(
+              checkout.id + ':order:' + (intent.paymentOrderGeneration ?? 0),
+            )
+            .digest('hex')
+            .slice(0, 32),
+          checkoutId: checkout.id,
+          amount: quote.amountDueNow,
+          currency: quote.currency,
+          returnUrl: checkout.successUrl,
+          cancelUrl: checkout.cancelUrl,
+        });
       if (!order.id) throw new BadGatewayException('Provider order id missing');
       await persist({
         paymentOrderId: order.id,
@@ -1779,19 +1809,24 @@ export class BillingSubscriptionsManagementService {
       if (
         intent.captureAttemptedAt &&
         Date.now() - Date.parse(intent.captureAttemptedAt) >
-          this.providers.get(claimed.provider).orderIdempotencyWindowMs
+          this.providers.get(
+            claimed.provider,
+            providerConnectionId(claimed.metadata),
+          ).orderIdempotencyWindowMs
       )
         throw new ConflictException('Provider capture requires reconciliation');
       if (!intent.captureAttemptedAt)
         await persist({ captureAttemptedAt: new Date().toISOString() });
       // Distinct UUID for capture, stable across retries and process restarts.
-      order = await this.providers.get(claimed.provider).captureOrder(
-        intent.paymentOrderId,
-        createHash('sha256')
-          .update(checkout.id + ':capture:' + intent.paymentOrderId)
-          .digest('hex')
-          .slice(0, 32),
-      );
+      order = await this.providers
+        .get(claimed.provider, providerConnectionId(claimed.metadata))
+        .captureOrder(
+          intent.paymentOrderId,
+          createHash('sha256')
+            .update(checkout.id + ':capture:' + intent.paymentOrderId)
+            .digest('hex')
+            .slice(0, 32),
+        );
     }
     if (order.status !== 'completed') return;
     if (
@@ -1824,6 +1859,9 @@ export class BillingSubscriptionsManagementService {
         where: {
           provider: subscription.provider,
           providerCaptureId: String(capture.id),
+          metadata: providerConnectionWhere(
+            providerConnectionId(subscription.metadata),
+          ),
         },
       });
       if (existing && existing.status !== PaymentStatus.Paid)
@@ -1844,6 +1882,7 @@ export class BillingSubscriptionsManagementService {
             periodEnd: new Date(quote.nextBillingAt),
             rawEventId: null,
             metadata: {
+              providerConnectionId: providerConnectionId(subscription.metadata),
               operation: 'plan_change_proration',
               checkoutId: checkout.id,
               previousPlan: {
@@ -1952,7 +1991,7 @@ export class BillingSubscriptionsManagementService {
         );
       if (previous?.state === 'scheduled') {
         const confirmed = await this.providers
-          .get(candidate.provider)
+          .get(candidate.provider, providerConnectionId(candidate.metadata))
           .getSubscription(candidate.providerSubscriptionId!);
         if (
           confirmed.id !== candidate.providerSubscriptionId ||
@@ -1981,11 +2020,15 @@ export class BillingSubscriptionsManagementService {
       const target = this.planResolver.resolve(
         targetPlan,
         candidate.provider,
+        providerConnectionId(candidate.metadata),
         dto.targetPlanPriceCode,
       );
       if (target.price.billingInterval !== candidate.planPrice!.billingInterval)
         throw new BadRequestException('Future renewal interval must match');
-      const adapter = this.providers.get(candidate.provider);
+      const adapter = this.providers.get(
+        candidate.provider,
+        providerConnectionId(candidate.metadata),
+      );
       if (!adapter.validateFuturePlan)
         throw new ConflictException(
           'Provider does not support safe future revisions',
@@ -2143,7 +2186,10 @@ export class BillingSubscriptionsManagementService {
       });
       if (!checkout)
         throw new NotFoundException('Future change checkout missing');
-      const adapter = this.providers.get(claimed.provider);
+      const adapter = this.providers.get(
+        claimed.provider,
+        providerConnectionId(claimed.metadata),
+      );
       let provider = await adapter.getSubscription(
         claimed.providerSubscriptionId,
       );
@@ -2384,7 +2430,10 @@ export class BillingSubscriptionsManagementService {
       !candidate.providerSubscriptionId
     )
       return;
-    const adapter = this.providers.get(candidate.provider);
+    const adapter = this.providers.get(
+      candidate.provider,
+      providerConnectionId(candidate.metadata),
+    );
     const provider = await adapter.getSubscription(
       candidate.providerSubscriptionId,
     );
@@ -2426,6 +2475,9 @@ export class BillingSubscriptionsManagementService {
           where: {
             provider: subscription.provider,
             providerCaptureId: early.id,
+            metadata: providerConnectionWhere(
+              providerConnectionId(subscription.metadata),
+            ),
           },
         });
         if (existing && existing.subscriptionId !== subscription.id)
@@ -2457,6 +2509,9 @@ export class BillingSubscriptionsManagementService {
                 periodStart: new Date(early.paidAt),
                 periodEnd: null,
                 metadata: {
+                  providerConnectionId: providerConnectionId(
+                    subscription.metadata,
+                  ),
                   operation: 'resume_renewal',
                   renewalResumeReview: {
                     state: 'required',
@@ -2478,6 +2533,9 @@ export class BillingSubscriptionsManagementService {
           where: {
             provider: subscription.provider,
             providerCaptureId: verified.id,
+            metadata: providerConnectionWhere(
+              providerConnectionId(subscription.metadata),
+            ),
           },
         });
         if (existing && existing.subscriptionId !== subscription.id)
@@ -2497,7 +2555,12 @@ export class BillingSubscriptionsManagementService {
               paidAt: new Date(verified.paidAt),
               periodStart: new Date(verified.paidAt),
               periodEnd: this.dateOrNull(provider.nextBillingAt),
-              metadata: { operation: 'resume_renewal' },
+              metadata: {
+                operation: 'resume_renewal',
+                providerConnectionId: providerConnectionId(
+                  subscription.metadata,
+                ),
+              },
             }),
           );
         if (!existing || existing.status === PaymentStatus.Paid)
@@ -2673,7 +2736,7 @@ export class BillingSubscriptionsManagementService {
     }
 
     const providerSubscription = await this.providers
-      .get(subscription.provider)
+      .get(subscription.provider, providerConnectionId(subscription.metadata))
       .getSubscription(subscription.providerSubscriptionId);
     const providerStatus = providerSubscription.status ?? null;
     let newStatus = providerSubscription.subscriptionStatus;
@@ -2950,6 +3013,7 @@ export class BillingSubscriptionsManagementService {
     const target = this.planResolver.resolve(
       targetPlan,
       subscription.provider,
+      providerConnectionId(subscription.metadata),
       targetPlanPriceCode,
     );
     if (target.price.id === currentPrice.id) {
@@ -2978,7 +3042,7 @@ export class BillingSubscriptionsManagementService {
     );
     if (response.pendingPlanChange?.checkoutUrl)
       response.pendingPlanChange.checkoutUrl = this.providers
-        .get(reloaded.provider)
+        .get(reloaded.provider, providerConnectionId(reloaded.metadata))
         .validateApprovalUrl(response.pendingPlanChange.checkoutUrl);
     return response;
   }

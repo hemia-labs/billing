@@ -42,6 +42,7 @@ export class CreatePaymentAttemptDto extends PaymentAttemptContextDto {
   @IsUrl(checkoutReturnUrlOptions) cancelUrl: string;
 }
 export interface PaymentAttemptResponse {
+  paypalApproval?: import('./paypal-approval').PaypalApproval;
   renewalResume?: ReturnType<
     typeof import('../subscriptions-management/subscription-management-state').renewalResumeResponse
   >;

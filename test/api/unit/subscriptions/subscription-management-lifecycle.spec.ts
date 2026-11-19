@@ -54,6 +54,8 @@ const changeDto = {
 };
 function catalog(code: string) {
   const provider = Object.assign(new BillingProviderPriceEntity(), {
+    connectionScope: 'global',
+    providerConnectionId: null,
     id: code + '-provider',
     planPriceId: code + '-price',
     provider: BillingProvider.Paypal,
@@ -232,6 +234,8 @@ function fixture() {
           )
           .map((x) => ({ id: x.id })),
       );
+    if (sql.startsWith('SELECT queue_billing_license'))
+      return Promise.resolve([]);
     throw new Error('Unexpected query ' + sql);
   });
   const correctionPrices = new Map<string, BillingPlanPriceEntity>();
@@ -472,8 +476,43 @@ describe('durable subscription management at the next paid cycle', () => {
     jest.setSystemTime(new Date('2030-01-10T00:00:00Z'));
   });
   afterEach(() => jest.useRealTimers());
+  it('quotes targets using the existing contract connection and fails clearly when that app has no mapping', async () => {
+    const f = fixture();
+    Object.assign(f.paypal, { forConnection: jest.fn(() => f.paypal) });
+    const connectionA = 'd3d5343a-f8fb-4d31-a96d-138c88c79c6f';
+    const connectionB = 'd3d5343a-f8fb-4d31-a96d-138c88c79c70';
+    f.rows.get('source')!.metadata.providerConnectionId = connectionA;
+    f.target.provider.connectionScope = 'connection';
+    f.target.provider.providerConnectionId = connectionA;
+    f.target.price.providerPrices.push(
+      Object.assign(new BillingProviderPriceEntity(), f.target.provider, {
+        id: 'b-provider',
+        providerConnectionId: connectionB,
+      }),
+    );
+    await expect(
+      f.service().quotePlanChange('source', 'pro', 'pro-monthly'),
+    ).resolves.toHaveProperty('currency', 'MXN');
+    f.target.price.providerPrices = f.target.price.providerPrices.filter(
+      (mapping) => mapping.providerConnectionId !== connectionA,
+    );
+    await expect(
+      f.service().quotePlanChange('source', 'pro', 'pro-monthly'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        code: 'BILLING_PROVIDER_PRICE_NOT_CONFIGURED',
+      }) as unknown,
+    });
+    expect(f.paypal.reviseSubscription).not.toHaveBeenCalled();
+  });
   it('persists cancellation and paid-through access before contacting PayPal', async () => {
     const f = fixture();
+    const connectionId = 'd3d5343a-f8fb-4d31-a96d-138c88c79c6f';
+    f.rows.get('source')!.metadata.providerConnectionId = connectionId;
+    const scoped = Object.assign(f.paypal, {
+      forConnection: jest.fn(() => f.paypal),
+    });
     f.paypal.cancelSubscription.mockImplementationOnce(() => {
       expect(f.rows.get('source')!.cancelAtPeriodEnd).toBe(true);
       expect(f.rows.get('source')!.metadata.cancellation).toMatchObject({
@@ -486,6 +525,7 @@ describe('durable subscription management at the next paid cycle', () => {
     const result = await f.service().cancelSubscription('source', cancelDto);
     expect(result.cancellation?.state).toBe('scheduled');
     expect(result.status).toBe(SubscriptionStatus.Cancelled);
+    expect(scoped.forConnection).toHaveBeenCalledWith(connectionId);
     expect(f.licenses.get('source')).toMatchObject({
       status: LicenseStatus.Active,
       validUntil: new Date(boundary),
@@ -1375,6 +1415,8 @@ describe('durable renewal plan correction without another charge', () => {
       },
     );
     const targetProvider = Object.assign(new BillingProviderPriceEntity(), {
+      connectionScope: 'global',
+      providerConnectionId: null,
       ...row.providerPrice,
       id: 'corrected-provider',
       providerPriceId: 'P-correct-despacho',

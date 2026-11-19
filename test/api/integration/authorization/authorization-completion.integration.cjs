@@ -220,6 +220,7 @@ async function run() {
       'BillingSubscriptionAddonEntity',
     ].map((e) => ds.getRepository(entities[e])),
     new BillingPlanCatalogResolver(),
+    {resolveConnection:async()=>null},
   );
   const [product] = await ds.query(
     "INSERT INTO products(code,name) VALUES('test','Test') RETURNING id",
@@ -308,6 +309,8 @@ async function run() {
     'PASS verified webhook ownership, list scope, retry scope, untrusted metadata and ambiguous mapping',
   );
   await require('./checkout-scaling.integration.cjs')(ds);
+  await require('./catalog-plan-delete.integration.cjs')(ds);
+  await require('./paypal-connections-runtime.integration.cjs')(ds);
 }
 run()
   .catch((e) => {

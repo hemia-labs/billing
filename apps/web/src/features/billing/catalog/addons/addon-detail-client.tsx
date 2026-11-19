@@ -12,6 +12,8 @@ import {
   updateCatalogAddon,
 } from "../catalog-api";
 import { AddonForm } from "./addon-form";
+import { ProviderMappings } from "../provider-mappings";
+import { useProviderConnectionOptions } from "../provider-connection-options";
 
 export function AddonDetailClient({ id }: { id: string }) {
   const session = useSession();
@@ -20,6 +22,7 @@ export function AddonDetailClient({ id }: { id: string }) {
   const [addon, setAddon] = useState<CatalogAddon | null>(null);
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [loading, setLoading] = useState(true);
+  const connectionOptions = useProviderConnectionOptions(addon?.provider === "paypal" ? addon.productId : "");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -58,7 +61,7 @@ export function AddonDetailClient({ id }: { id: string }) {
         redirectToLogin();
         return;
       }
-      setMessage(apiErrorMessage(error, "No se pudo guardar el add-on."));
+      throw new Error(apiErrorMessage(error, "No se pudo guardar el add-on."));
     }
   };
 
@@ -82,6 +85,7 @@ export function AddonDetailClient({ id }: { id: string }) {
     <div className="space-y-4">
       {message ? <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm font-medium shadow-sm">{message}</div> : null}
       {!canManage ? <div className="rounded-2xl border border-surface-line bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">Vista de sólo lectura.</div> : null}
+      <ProviderMappings canManage={canManage} key={addon.id} kind="addon" options={connectionOptions} provider={addon.provider} resourceId={addon.id} />
       <AddonForm initialAddon={addon} onSubmit={update} products={products} readOnly={!canManage} submitLabel="Guardar add-on" />
     </div>
   );

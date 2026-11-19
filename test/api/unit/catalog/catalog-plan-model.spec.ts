@@ -59,6 +59,8 @@ function planFixture(
 
   const providerPrice = new BillingProviderPriceEntity();
   providerPrice.provider = BillingProvider.Paypal;
+  providerPrice.connectionScope = 'global';
+  providerPrice.providerConnectionId = null;
   providerPrice.providerPriceId =
     input.paypalPlanId === undefined ? 'paypal-plan-id' : input.paypalPlanId;
   providerPrice.status = ProviderPriceStatus.Active;
@@ -118,6 +120,7 @@ function catalogServiceFixture(plans: BillingPlanEntity[]) {
     noop as never,
     noop as never,
     new BillingPlanCatalogResolver(),
+    { resolveConnection: () => Promise.resolve(null) } as never,
   );
 }
 
@@ -212,9 +215,12 @@ describe('catalog plan model', () => {
       resolver.resolve(
         plan,
         BillingProvider.Paypal,
+        null,
         'medsync_clinic_monthly_mxn',
       ),
-    ).toThrow('Active provider price not found');
+    ).toThrow(
+      'No unique active provider price is configured for the selected provider connection',
+    );
   });
 
   it('validates entitlement values against feature value type', () => {

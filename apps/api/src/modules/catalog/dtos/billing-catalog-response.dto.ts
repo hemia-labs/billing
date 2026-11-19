@@ -36,6 +36,8 @@ export class BillingActiveProductResponseDto {
 export class BillingProviderPriceResponseDto {
   id: string;
   provider: BillingProvider;
+  connectionScope?: 'unassigned' | 'global' | 'connection';
+  providerConnectionId?: string | null;
   providerProductId: string | null;
   providerPriceId: string | null;
   providerMetadata: Record<string, unknown>;

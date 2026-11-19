@@ -133,6 +133,7 @@ function fixture(status = SubscriptionStatus.Active) {
     }),
   };
   const manager = {
+    query: jest.fn(() => Promise.resolve([])),
     getRepository: (entity: unknown) => {
       if (entity === BillingSubscriptionEntity) return subscriptions;
       if (entity === BillingLicenseEntity) return licenses;
@@ -242,6 +243,7 @@ describe('paid subscription renewal', () => {
     f.snapshot.planId = 'P-TARGET';
     f.input.resource.amount.total = '299.00';
     const manager = {
+      query: jest.fn(() => Promise.resolve([])),
       getRepository: (entity: unknown) =>
         entity === BillingCheckoutSessionEntity
           ? {
@@ -1036,6 +1038,7 @@ it('simulates Nov 26 renewal locally: Despacho access before the boundary, one 4
       }),
     };
     const manager = {
+      query: jest.fn(() => Promise.resolve([])),
       getRepository: (entity: unknown) =>
         entity === BillingPaymentEntity
           ? paymentRepository
@@ -1138,4 +1141,109 @@ it('simulates Nov 26 renewal locally: Despacho access before the boundary, one 4
   } finally {
     jest.useRealTimers();
   }
+});
+
+describe('initial checkout payment proof and snapshot delivery', () => {
+  it('freezes verified first-cycle evidence and queues delivery even when activation already wrote identical license data', async () => {
+    const f = fixture();
+    f.billingInfo.cycle_executions = [
+      { tenure_type: 'REGULAR', sequence: 1, cycles_completed: 1 },
+    ];
+    await f.processor.process(f.manager as never, {
+      ...f.input,
+      eventType: 'BILLING.SUBSCRIPTION.ACTIVATED',
+      resource: { id: f.subscription.providerSubscriptionId },
+    });
+    const unchangedLicense = structuredClone(f.license);
+    f.manager.query.mockClear();
+    f.paypal.getSubscription.mockClear();
+    await f.processor.process(f.manager as never, f.input);
+    expect(
+      f.payments.save.mock.calls[0][0].metadata.initialCheckoutPayment,
+    ).toEqual({
+      providerSubscriptionId: f.subscription.providerSubscriptionId,
+      regularCyclesCompleted: 1,
+      paidAt: f.input.resource.create_time,
+    });
+    expect(f.license).toEqual(unchangedLicense);
+    expect(f.manager.query).toHaveBeenCalledWith(
+      'SELECT queue_billing_license($1::uuid, $2::text)',
+      [f.subscription.organizationId, f.subscription.productCode],
+    );
+    expect(f.paypal.getSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains initial proof after replays whose authenticated observation has advanced to a later cycle', async () => {
+    const f = fixture();
+    f.billingInfo.cycle_executions = [
+      { tenure_type: 'REGULAR', sequence: 1, cycles_completed: 1 },
+    ];
+    await f.processor.process(f.manager as never, f.input);
+    const initialProof = structuredClone(
+      f.payments.save.mock.calls[0][0].metadata.initialCheckoutPayment,
+    );
+    f.billingInfo.cycle_executions = [
+      { tenure_type: 'REGULAR', sequence: 1, cycles_completed: 2 },
+    ];
+    f.billingInfo.last_payment = { time: f.nextBilling.toISOString() };
+    await f.processor.process(f.manager as never, f.input);
+    expect(
+      f.payments.save.mock.calls.at(-1)![0].metadata.initialCheckoutPayment,
+    ).toEqual(initialProof);
+  });
+
+  it.each([
+    'renewal',
+    'missing_cycles',
+    'trial',
+    'different_subscription',
+    'different_payment_time',
+    'missing_payment_time',
+    'scheduled_renewal',
+  ])(
+    'does not infer initial checkout from first local row: %s',
+    async (invalid) => {
+      const f = fixture();
+      f.billingInfo.cycle_executions = [
+        { tenure_type: 'REGULAR', sequence: 1, cycles_completed: 1 },
+      ];
+      if (invalid === 'renewal')
+        f.billingInfo.cycle_executions = [
+          { tenure_type: 'REGULAR', sequence: 1, cycles_completed: 2 },
+        ];
+      if (invalid === 'missing_cycles') delete f.billingInfo.cycle_executions;
+      if (invalid === 'trial')
+        f.billingInfo.cycle_executions = [
+          { tenure_type: 'TRIAL', sequence: 1, cycles_completed: 1 },
+          { tenure_type: 'REGULAR', sequence: 2, cycles_completed: 1 },
+        ];
+      if (invalid === 'different_subscription') f.snapshot.id = 'I-OTHER';
+      if (invalid === 'different_payment_time')
+        f.billingInfo.last_payment = { time: f.nextBilling.toISOString() };
+      if (invalid === 'missing_payment_time') delete f.billingInfo.last_payment;
+      if (invalid === 'scheduled_renewal')
+        f.subscription.metadata.renewalResume = { state: 'effective' };
+      await f.processor.process(f.manager as never, f.input);
+      expect(f.payments.save.mock.calls[0][0].metadata).not.toHaveProperty(
+        'initialCheckoutPayment',
+      );
+    },
+  );
+
+  it('queues removal of paid confirmation when an initial sale is reversed', async () => {
+    const f = fixture();
+    await f.processor.process(f.manager as never, f.input);
+    f.manager.query.mockClear();
+    await f.processor.process(f.manager as never, {
+      ...f.input,
+      eventType: 'PAYMENT.SALE.REVERSED',
+    });
+    expect(f.payments.save.mock.calls.at(-1)![0].status).toBe(
+      PaymentStatus.Reversed,
+    );
+    expect(f.manager.query).toHaveBeenCalledWith(
+      'SELECT queue_billing_license($1::uuid, $2::text)',
+      [f.subscription.organizationId, f.subscription.productCode],
+    );
+  });
 });

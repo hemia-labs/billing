@@ -131,6 +131,14 @@ export class PaypalBillingAdapter implements BillingProviderAdapter {
   readonly subscriptionIdempotencyWindowMs = 72 * 60 * 60 * 1000;
   readonly orderIdempotencyWindowMs = 6 * 60 * 60 * 1000;
   constructor(private readonly client: PaypalClientService) {}
+  forConnection(id?: string | null): PaypalBillingAdapter {
+    return id == null
+      ? this
+      : new PaypalBillingAdapter(this.client.forConnection(id));
+  }
+  async resolveConnection(productCode: string) {
+    return this.client.resolveConnection(productCode);
+  }
   validateApprovalUrl(value: string) {
     return paypalApprovalUrl(value)!;
   }

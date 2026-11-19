@@ -1,3 +1,7 @@
+import {
+  providerConnectionWhere,
+  assertProviderConnection,
+} from '../providers/provider-connection';
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { BillingAuditService } from '../audit';
@@ -28,11 +32,16 @@ export class BillingSubscriptionAddonPaymentsProcessorService {
     if (!providerSubscriptionId) return null;
     const addons = manager.getRepository(BillingSubscriptionAddonEntity);
     const addon = await addons.findOne({
-      where: { provider: BillingProvider.Paypal, providerSubscriptionId },
+      where: {
+        provider: BillingProvider.Paypal,
+        providerSubscriptionId,
+        metadata: providerConnectionWhere(input.providerConnectionId),
+      },
       relations: { subscription: true },
       lock: { mode: 'pessimistic_write', tables: ['subscription_addons'] },
     });
     if (!addon) return null;
+    assertProviderConnection(addon.metadata, input.providerConnectionId);
 
     const status = this.statusFor(input.eventType, addon.status);
     if (!status || status === addon.status) {

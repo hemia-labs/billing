@@ -1,4 +1,9 @@
 import {
+  providerConnectionId,
+  providerConnectionWhere,
+  assertProviderConnection,
+} from '../../providers/provider-connection';
+import {
   applyConfirmedPlanChange,
   checkoutAbandonment,
   acceptRenewalResumePayment,
@@ -135,9 +140,11 @@ export class BillingSubscriptionPaymentsProcessorService {
     if (!providerSubscriptionId) return {};
 
     return {
-      paypalSubscription: await this.paypal.getSubscription(
-        providerSubscriptionId,
-      ),
+      paypalSubscription: await (
+        input.providerConnectionId
+          ? this.paypal.forConnection(input.providerConnectionId)
+          : this.paypal
+      ).getSubscription(providerSubscriptionId),
     };
   }
 
@@ -195,6 +202,7 @@ export class BillingSubscriptionPaymentsProcessorService {
       input,
       PaymentStatus.Paid,
       subscription,
+      context.paypalSubscription,
     );
     if (renewalResumePending(subscription)) {
       if (
@@ -226,6 +234,11 @@ export class BillingSubscriptionPaymentsProcessorService {
     }
 
     await this.upsertLicense(manager, input, subscription);
+    // An already active license may be unchanged; the newly recorded sale still changes its snapshot.
+    await manager.query('SELECT queue_billing_license($1::uuid, $2::text)', [
+      subscription.organizationId,
+      subscription.productCode,
+    ]);
     return { processingStatus: WebhookProcessingStatus.Processed };
   }
 
@@ -236,6 +249,7 @@ export class BillingSubscriptionPaymentsProcessorService {
     const candidate = await this.findSubscriptionForPayment(
       manager,
       input.resource,
+      input.providerConnectionId,
     );
     const subscription = candidate
       ? await manager.getRepository(BillingSubscriptionEntity).findOne({
@@ -293,9 +307,14 @@ export class BillingSubscriptionPaymentsProcessorService {
     input: BillingWebhookProcessorInput,
     status: PaymentStatus,
   ): Promise<BillingWebhookProcessorResult> {
-    const payment = await this.findPayment(manager, input.resource);
+    const payment = await this.findPayment(
+      manager,
+      input.resource,
+      input.providerConnectionId,
+    );
 
     if (!payment) return this.retryableFailure('Payment not found');
+    assertProviderConnection(payment.metadata, input.providerConnectionId);
 
     const previousStatus = payment.status;
     payment.status = status;
@@ -304,6 +323,15 @@ export class BillingSubscriptionPaymentsProcessorService {
       paypalStatusEvent: input.resource,
     };
     await manager.getRepository(BillingPaymentEntity).save(payment);
+    if (
+      payment.subscription &&
+      payment.subscription.id === payment.subscriptionId &&
+      payment.subscription.organizationId === payment.organizationId
+    )
+      await manager.query('SELECT queue_billing_license($1::uuid, $2::text)', [
+        payment.organizationId,
+        payment.subscription.productCode,
+      ]);
 
     if (previousStatus !== status) {
       await this.audit.record({
@@ -341,7 +369,11 @@ export class BillingSubscriptionPaymentsProcessorService {
 
     const subscriptions = manager.getRepository(BillingSubscriptionEntity);
     const subscription = await subscriptions.findOne({
-      where: { provider: BillingProvider.Paypal, providerSubscriptionId },
+      where: {
+        provider: BillingProvider.Paypal,
+        providerSubscriptionId,
+        metadata: providerConnectionWhere(input.providerConnectionId),
+      },
       lock: { mode: 'pessimistic_write', tables: ['subscriptions'] },
       relations: {
         plan: {
@@ -354,10 +386,16 @@ export class BillingSubscriptionPaymentsProcessorService {
     });
 
     if (!subscription) return null;
+    assertProviderConnection(subscription.metadata, input.providerConnectionId);
 
     const paypalSubscription =
       context.paypalSubscription ??
-      (await this.paypal.getSubscription(providerSubscriptionId));
+      (await (
+        input.providerConnectionId
+          ? this.paypal.forConnection(input.providerConnectionId)
+          : this.paypal
+      ).getSubscription(providerSubscriptionId));
+    context.paypalSubscription = paypalSubscription;
     const abandoned = checkoutAbandonment(subscription);
     if (abandoned) {
       // Provider observations never resurrect a locally abandoned checkout, even out of order.
@@ -564,9 +602,14 @@ export class BillingSubscriptionPaymentsProcessorService {
     input: BillingWebhookProcessorInput,
     status: PaymentStatus,
     subscription: BillingSubscriptionEntity,
+    observation: BillingWebhookProcessorContext['paypalSubscription'],
   ): Promise<BillingPaymentEntity> {
     const payments = manager.getRepository(BillingPaymentEntity);
-    const existing = await this.findPayment(manager, input.resource);
+    const existing = await this.findPayment(
+      manager,
+      input.resource,
+      input.providerConnectionId,
+    );
     const amount = this.extractAmount(input.resource);
     const previousStatus = existing?.status ?? null;
     const payment =
@@ -596,9 +639,19 @@ export class BillingSubscriptionPaymentsProcessorService {
     payment.periodEnd =
       subscription.currentPeriodEnd ?? subscription.nextBillingTime;
     payment.rawEventId = input.eventId;
+    const initial = this.initialCheckoutPaymentProof(
+      subscription,
+      input.resource,
+      observation,
+    );
     payment.metadata = {
       ...payment.metadata,
+      providerConnectionId: providerConnectionId(subscription.metadata),
       paypalResource: input.resource,
+      // Preserve the first-cycle proof when later observations/replays have advanced cycles.
+      ...(payment.metadata.initialCheckoutPayment === undefined && initial
+        ? { initialCheckoutPayment: initial }
+        : {}),
       ...(checkoutAbandonment(subscription)
         ? { refundReview: { state: 'required', reason: 'abandoned_checkout' } }
         : {}),
@@ -629,9 +682,48 @@ export class BillingSubscriptionPaymentsProcessorService {
     return saved;
   }
 
+  private initialCheckoutPaymentProof(
+    subscription: BillingSubscriptionEntity,
+    resource: PaypalEventResource,
+    observation: BillingWebhookProcessorContext['paypalSubscription'],
+  ) {
+    if (
+      !observation ||
+      observation.id !== subscription.providerSubscriptionId ||
+      this.extractSubscriptionId(resource, false) !== observation.id ||
+      subscription.status !== SubscriptionStatus.Active ||
+      subscription.metadata.renewalResume ||
+      checkoutAbandonment(subscription) ||
+      subscription.metadata.refundRevocation
+    )
+      return;
+    const billing = this.asRecord(observation.raw.billing_info);
+    const cycles = billing?.cycle_executions;
+    if (!Array.isArray(cycles) || cycles.length !== 1) return;
+    const cycle = this.asRecord(cycles[0]);
+    if (
+      cycle?.tenure_type !== 'REGULAR' ||
+      cycle.sequence !== 1 ||
+      cycle.cycles_completed !== 1
+    )
+      return;
+    const paidAt = this.dateOrNull(resource.create_time);
+    const lastPaidAt = this.dateOrNull(
+      this.asRecord(billing?.last_payment)?.time,
+    );
+    if (!paidAt || !lastPaidAt || paidAt.getTime() !== lastPaidAt.getTime())
+      return;
+    return {
+      providerSubscriptionId: observation.id,
+      paidAt: paidAt.toISOString(),
+      regularCyclesCompleted: 1,
+    };
+  }
+
   private async findPayment(
     manager: EntityManager,
     resource: PaypalEventResource,
+    connectionId?: string | null,
   ): Promise<BillingPaymentEntity | null> {
     const payments = manager.getRepository(BillingPaymentEntity);
     const providerCaptureId =
@@ -643,13 +735,21 @@ export class BillingSubscriptionPaymentsProcessorService {
     return (
       (providerCaptureId
         ? await payments.findOne({
-            where: { provider: BillingProvider.Paypal, providerCaptureId },
+            where: {
+              provider: BillingProvider.Paypal,
+              providerCaptureId,
+              metadata: providerConnectionWhere(connectionId),
+            },
             relations: { subscription: true },
           })
         : null) ??
       (providerPaymentId
         ? await payments.findOne({
-            where: { provider: BillingProvider.Paypal, providerPaymentId },
+            where: {
+              provider: BillingProvider.Paypal,
+              providerPaymentId,
+              metadata: providerConnectionWhere(connectionId),
+            },
             relations: { subscription: true },
           })
         : null)
@@ -659,12 +759,17 @@ export class BillingSubscriptionPaymentsProcessorService {
   private async findSubscriptionForPayment(
     manager: EntityManager,
     resource: PaypalEventResource,
+    connectionId?: string | null,
   ): Promise<BillingSubscriptionEntity | null> {
     const providerSubscriptionId = this.extractSubscriptionId(resource, false);
     if (!providerSubscriptionId) return null;
 
     return manager.getRepository(BillingSubscriptionEntity).findOne({
-      where: { provider: BillingProvider.Paypal, providerSubscriptionId },
+      where: {
+        provider: BillingProvider.Paypal,
+        providerSubscriptionId,
+        metadata: providerConnectionWhere(connectionId),
+      },
       relations: {
         plan: {
           versions: {

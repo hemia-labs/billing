@@ -1,3 +1,9 @@
+import { PaypalConnectionsService } from '../paypal-connections/paypal-connections.service';
+import {
+  preparePaypalApproval,
+  projectPaypalApproval,
+} from './paypal-approval';
+import { providerConnectionId } from '../providers/provider-connection';
 import { Cron } from '@nestjs/schedule';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -14,7 +20,7 @@ import type { BillingServiceActor } from '../../common/types/billing-service-aut
 import { hasAllPermissions } from '../../common/guards/permissions.util';
 import { BillingCheckoutService } from '../checkout';
 import { CheckoutInProgressException } from '../checkout/errors/checkout-in-progress.exception';
-import { BillingSubscriptionEntity } from '../billing-shared';
+import { BillingProvider, BillingSubscriptionEntity } from '../billing-shared';
 import { BillingSubscriptionsManagementService } from '../subscriptions-management/billing-subscriptions-management.service';
 import { BillingPaymentAttemptEntity } from './billing-payment-attempt.entity';
 import {
@@ -30,6 +36,7 @@ export class BillingPaymentAttemptsService {
     private readonly checkout: BillingCheckoutService,
     private readonly subscriptions: BillingSubscriptionsManagementService,
     private readonly policy: BillingServicePolicyService,
+    private readonly paypalConnections: PaypalConnectionsService,
   ) {}
 
   private assertOwner(
@@ -83,7 +90,7 @@ export class BillingPaymentAttemptsService {
     row: BillingPaymentAttemptEntity,
     processing = false,
   ): PaymentAttemptResponse {
-    const receipt = row.receipt;
+    const { paypalApproval: storedApproval, ...receipt } = row.receipt;
     const change = receipt.planChange;
     const renewal = receipt.renewalResume;
     const renewalChange = receipt.renewalPlanChange;
@@ -111,8 +118,23 @@ export class BillingPaymentAttemptsService {
     const safeChange = change
       ? { ...change, checkoutUrl: checkoutUrl ?? null }
       : undefined;
+    const paypalApproval =
+      !processing &&
+      row.status === 'ready' &&
+      provider === BillingProvider.Paypal &&
+      row.requestPayload.operation === 'checkout' &&
+      !receipt.errorCode &&
+      !receipt.abandoned &&
+      !change &&
+      !renewal &&
+      !renewalChange &&
+      ['created', 'pending'].includes(receipt.checkoutStatus ?? '') &&
+      [undefined, null, 'pending'].includes(receipt.subscriptionStatus)
+        ? projectPaypalApproval(storedApproval, checkoutUrl)
+        : undefined;
     return {
       ...receipt,
+      ...(paypalApproval ? { paypalApproval } : {}),
       ...(safeChange ? { planChange: safeChange } : {}),
       ...(row.requestPayload.provider
         ? { provider: row.requestPayload.provider }
@@ -243,6 +265,32 @@ export class BillingPaymentAttemptsService {
         return existing;
       }
       const repository = manager.getRepository(BillingPaymentAttemptEntity);
+      const provider = await this.resolveProvider(payload, actor, manager);
+      let connectionId: string | null;
+      let providerPriceMappingId: string | undefined;
+      if (payload.operation === 'checkout') {
+        const selection = await this.checkout.resolveCheckoutSelection(
+          payload,
+          actor,
+          provider,
+          manager,
+        );
+        connectionId = selection.providerConnectionId;
+        providerPriceMappingId = selection.providerPriceMappingId;
+      } else {
+        const source = await manager
+          .getRepository(BillingSubscriptionEntity)
+          .findOne({
+            where: {
+              id:
+                payload.expectedRenewalSubscriptionId ??
+                payload.expectedSubscriptionId!,
+            },
+          });
+        if (!source)
+          throw new NotFoundException('Billing subscription not found');
+        connectionId = providerConnectionId(source.metadata);
+      }
       return repository.save(
         repository.create({
           id: payload.idempotencyKey,
@@ -254,7 +302,9 @@ export class BillingPaymentAttemptsService {
           requestHash: hash,
           requestPayload: {
             ...payload,
-            provider: await this.resolveProvider(payload, actor, manager),
+            provider,
+            providerConnectionId: connectionId,
+            ...(providerPriceMappingId ? { providerPriceMappingId } : {}),
           },
           status: 'pending',
           receipt: {},
@@ -733,6 +783,12 @@ export class BillingPaymentAttemptsService {
             cancelUrl: dto.cancelUrl,
           },
           actor,
+          {
+            providerPriceMappingId: dto.providerPriceMappingId,
+            providerConnectionId: providerConnectionId({
+              providerConnectionId: dto.providerConnectionId,
+            }),
+          },
         );
         const resumed =
           dto.operation === 'resume_renewal'
@@ -754,6 +810,22 @@ export class BillingPaymentAttemptsService {
       }
     } catch (error) {
       failure = error;
+    }
+    if (
+      receipt &&
+      !confirm &&
+      claimed.requestPayload.operation === 'checkout'
+    ) {
+      try {
+        receipt.paypalApproval = await preparePaypalApproval(
+          this.dataSource.manager,
+          claimed,
+          receipt,
+          this.paypalConnections,
+        );
+      } catch {
+        // Popup configuration is optional; the existing approval URL remains usable.
+      }
     }
     return this.dataSource.transaction(async (manager) => {
       const row = await this.find(manager, initial.id, true);
@@ -787,6 +859,18 @@ export class BillingPaymentAttemptsService {
         };
       }
       await manager.getRepository(BillingPaymentAttemptEntity).save(row);
+      if (
+        receipt &&
+        row.status === 'ready' &&
+        row.requestPayload.operation === 'checkout'
+      ) {
+        // Commit the receipt before waking the existing snapshot outbox. The receiver
+        // can then read this buyer-bound attempt once, without polling or verification.
+        await manager.query(
+          'SELECT queue_billing_license($1::uuid, $2::text)',
+          [row.organizationId, row.productCode],
+        );
+      }
       return this.response(row, failure instanceof CheckoutInProgressException);
     });
   }

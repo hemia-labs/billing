@@ -14,6 +14,8 @@ import {
   MaxLength,
   Min,
   Matches,
+  MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { BILLING_CURRENCIES } from '../../billing-shared';
@@ -33,15 +35,26 @@ export class CreateProviderPriceDto {
   @IsEnum(BillingProvider)
   provider: BillingProvider;
 
+  @IsIn(['global', 'connection'])
+  connectionScope: 'global' | 'connection';
+
+  @ValidateIf(
+    (dto: CreateProviderPriceDto) =>
+      dto.connectionScope === 'connection' || dto.providerConnectionId != null,
+  )
+  @IsUUID()
+  providerConnectionId: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(150)
   providerProductId?: string | null;
 
-  @IsOptional()
   @IsString()
+  @MinLength(1)
+  @Matches(/^\S+$/)
   @MaxLength(150)
-  providerPriceId?: string | null;
+  providerPriceId: string;
 
   @IsOptional()
   @IsObject()
@@ -193,4 +206,9 @@ export class CreateBillingPlanDto {
   @ValidateNested()
   @Type(() => CreatePlanVersionDto)
   version: CreatePlanVersionDto;
+}
+
+export class UpdateProviderPriceStatusDto {
+  @IsEnum(ProviderPriceStatus)
+  status: ProviderPriceStatus;
 }

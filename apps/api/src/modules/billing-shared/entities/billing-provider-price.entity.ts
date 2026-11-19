@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -8,16 +9,15 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { BillingProvider, ProviderPriceStatus } from '../enums';
+import { BillingPaypalConnectionEntity } from './billing-paypal-connection.entity';
 import { BillingPlanPriceEntity } from './billing-plan-price.entity';
 
 @Entity('provider_prices')
 @Index('IDX_provider_prices_plan_price_id', ['planPriceId'])
-@Index(
-  'IDX_provider_prices_plan_price_provider_unique',
-  ['planPriceId', 'provider'],
-  {
-    unique: true,
-  },
+@Index('IDX_provider_prices_scope_active_unique', { synchronize: false })
+@Check(
+  'CHK_provider_prices_connection_scope',
+  `("connection_scope" IN ('unassigned','global') AND "provider_connection_id" IS NULL) OR ("connection_scope"='connection' AND "provider_connection_id" IS NOT NULL AND "provider"='paypal')`,
 )
 @Index('IDX_provider_prices_provider_price_id', ['providerPriceId'])
 export class BillingProviderPriceEntity {
@@ -35,6 +35,24 @@ export class BillingProviderPriceEntity {
 
   @Column({ type: 'enum', enum: BillingProvider })
   provider: BillingProvider;
+
+  @Column({
+    name: 'connection_scope',
+    type: 'varchar',
+    length: 10,
+    default: 'unassigned',
+  })
+  connectionScope: 'unassigned' | 'global' | 'connection';
+
+  @Column({ name: 'provider_connection_id', type: 'uuid', nullable: true })
+  providerConnectionId: string | null;
+
+  @ManyToOne(() => BillingPaypalConnectionEntity, {
+    onDelete: 'RESTRICT',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'provider_connection_id' })
+  providerConnection: BillingPaypalConnectionEntity | null;
 
   @Column({
     name: 'provider_product_id',

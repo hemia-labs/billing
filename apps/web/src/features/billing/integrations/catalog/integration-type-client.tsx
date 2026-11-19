@@ -15,15 +15,6 @@ const typeDetails = {
       ["Validación", "Antes de crear el checkout, Billing solicita a Legal comprobar que la aceptación corresponde al comprador y a los documentos vigentes."],
     ],
   },
-  payments: {
-    title: "Proveedores de pago",
-    description: "Servicios que Billing usa para crear checkouts y administrar suscripciones.",
-    sections: [
-      ["PayPal", "El flujo de checkout y administración de suscripciones está integrado con PayPal."],
-      ["Credenciales", "El client ID, el secreto y el ambiente se administran en la configuración privada del backend."],
-      ["Alcance actual", "La pantalla de integraciones informa sobre el proveedor. La conexión no se edita desde este formulario."],
-    ],
-  },
   events: {
     title: "Eventos y webhooks",
     description: "Notificaciones de proveedores que actualizan pagos y suscripciones en Billing.",

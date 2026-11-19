@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule, type TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import * as path from 'path';
 import { SecretsModule } from '../modules/secrets/secrets.module';
 import { SecretsService } from '@hemia/secrets/nestjs';
-import type { DataSourceOptions } from 'typeorm';
 import databaseConfig from '../config/database.config';
+import { DatabaseReadinessController } from './database-readiness.controller';
 import { isDatabaseSecret, type DatabaseSecret } from './types/database.types';
 
 @Module({
@@ -17,14 +16,15 @@ import { isDatabaseSecret, type DatabaseSecret } from './types/database.types';
       useFactory: resolveDatabaseOptions,
     }),
   ],
+  controllers: [DatabaseReadinessController],
 })
 export class DatabaseModule {}
 
 export async function resolveDatabaseOptions(
   config: ConfigService,
   secrets: SecretsService | null,
-): Promise<DataSourceOptions> {
-  const options: DataSourceOptions = {
+): Promise<TypeOrmModuleOptions> {
+  const options: TypeOrmModuleOptions = {
     type: 'postgres',
     host: config.get<string>('database.host'),
     port: config.get<number>('database.port'),
@@ -33,10 +33,7 @@ export async function resolveDatabaseOptions(
     database: config.get<string>('database.name'),
     logging: config.get<boolean>('database.logging'),
     extra: { options: '-c timezone=America/Mexico_City' },
-    entities: [
-      path.join(__dirname, '..', '**', '*.entity.ts'),
-      path.join(__dirname, '..', '**', '*.entity.js'),
-    ],
+    autoLoadEntities: true,
     synchronize: false,
   };
 

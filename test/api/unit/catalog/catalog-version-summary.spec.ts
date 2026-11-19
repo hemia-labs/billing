@@ -53,6 +53,7 @@ describe('catalog version summaries', () => {
       {} as never,
       {} as never,
       new BillingPlanCatalogResolver(),
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
 
     const overview = await service.getPlanOverview(plan.id);
@@ -129,6 +130,7 @@ describe('catalog version summaries', () => {
       {} as never,
       {} as never,
       new BillingPlanCatalogResolver(),
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
     const query = new ListPlanVersionSummariesQueryDto();
     query.page = 2;
@@ -180,6 +182,7 @@ describe('catalog version summaries', () => {
       {} as never,
       {} as never,
       new BillingPlanCatalogResolver(),
+      { resolveConnection: () => Promise.resolve(null) } as never,
     );
 
     expect(await service.getPlanVersion('plan-id', 'version-id')).toEqual({

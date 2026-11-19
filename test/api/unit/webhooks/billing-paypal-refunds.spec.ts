@@ -171,6 +171,7 @@ function fixture(paymentFound = true) {
   const manager = {
     query: jest.fn((sql: string, parameters?: unknown[]) => {
       queryCalls.push([sql, parameters ?? []]);
+      if (sql.startsWith('SELECT queue_billing_license')) return [];
       if (sql.startsWith('SELECT id FROM payments')) {
         return paymentFound ? [{ id: paymentId }] : [];
       }
@@ -230,7 +231,7 @@ it('records partial refunds once and keeps the paid access active', async () => 
   expect(f.jobs).toHaveLength(0);
   expect(f.queryCalls[0]).toEqual([
     expect.stringContaining('provider_capture_id=$2'),
-    [BillingProvider.Paypal, 'SALE-ORIGINAL'],
+    [BillingProvider.Paypal, 'SALE-ORIGINAL', null],
   ]);
 });
 
@@ -486,4 +487,20 @@ it('records actual late refunds against abandoned checkout without mutating any 
   expect(f.subscription.metadata.checkoutAbandonment).toMatchObject({
     refundReview: { state: 'completed' },
   });
+});
+
+it('queues a fresh snapshot after partial refund even while payment/license status do not change', async () => {
+  const f = fixture();
+  const before = structuredClone(f.license);
+  const result = await f.service.process(
+    f.manager,
+    f.input('PARTIAL-CONFIRMATION', '1.00'),
+  );
+  expect(result.processingStatus).toBe(WebhookProcessingStatus.Processed);
+  expect(f.payment.status).toBe(PaymentStatus.Paid);
+  expect(f.license).toEqual(before);
+  expect(f.queryCalls).toContainEqual([
+    'SELECT queue_billing_license($1::uuid, $2::text)',
+    [f.payment.organizationId, f.subscription.productCode],
+  ]);
 });

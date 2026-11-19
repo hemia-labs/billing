@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { Save } from "lucide-react";
 import { Badge } from "@/components/zuno/badge";
@@ -9,6 +9,8 @@ import { Card } from "@/components/zuno/card";
 import { Input } from "@/components/zuno/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/zuno/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ProviderConnectionField, useProviderConnectionOptions, type ConnectionBinding } from "../provider-connection-options";
+import { prepareProviderMapping } from "../provider-mapping-form";
 import type {
   BillingAddonPricingModel,
   BillingCurrency,
@@ -45,6 +47,12 @@ const statusOptions: Option[] = [
   { value: "archived", label: "Archivado" },
 ];
 
+type AddonProviderSelection = ConnectionBinding & { provider: BillingProvider };
+
+export function changeAddonProvider(current: AddonProviderSelection, provider: BillingProvider): AddonProviderSelection {
+  return { ...current, provider, connectionScope: "unassigned", providerConnectionId: null };
+}
+
 export function AddonForm({
   defaultProductId,
   initialAddon,
@@ -62,14 +70,18 @@ export function AddonForm({
   readOnly?: boolean;
   submitLabel: string;
 }) {
+  const submitting = useRef(false);
+  const [providerSelection, setProviderSelection] = useState<AddonProviderSelection>({ provider: initialAddon?.provider ?? "paypal", connectionScope: "unassigned", providerConnectionId: null });
+  const { provider, ...binding } = providerSelection;
+  const setBinding = (next: ConnectionBinding) => setProviderSelection((current) => ({ ...current, ...next }));
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [productId, setProductId] = useState(initialAddon?.productId ?? defaultProductId ?? "");
   const [currency, setCurrency] = useState<BillingCurrency>(initialAddon?.currency ?? "MXN");
   const [billingInterval, setBillingInterval] = useState<BillingInterval>(initialAddon?.billingInterval ?? "monthly");
   const [pricingModel, setPricingModel] = useState<BillingAddonPricingModel>(initialAddon?.pricingModel ?? "flat");
-  const [provider, setProvider] = useState<BillingProvider>(initialAddon?.provider ?? "paypal");
   const [status, setStatus] = useState<CatalogAddon["status"]>(initialAddon?.status ?? "active");
+  const connectionOptions = useProviderConnectionOptions(initialAddon || provider !== "paypal" ? "" : lockedProduct?.id ?? productId);
   const returnProductId = initialAddon?.productId ?? defaultProductId;
   const returnHref = returnProductId ? "/products/" + returnProductId + "?tab=addons" : "/products";
   const productOptions = products.map((product) => ({ value: product.id, label: product.name }));
@@ -79,7 +91,7 @@ export function AddonForm({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (readOnly) return;
+    if (readOnly || submitting.current) return;
 
     const form = new FormData(event.currentTarget);
     const selectedProductId = lockedProduct?.id ?? productId;
@@ -107,6 +119,10 @@ export function AddonForm({
       return;
     }
 
+    const remoteId = stringValue(form, "mappingProviderPriceId");
+    const mapping = !initialAddon && remoteId ? prepareProviderMapping({ ...binding, provider, providerPriceId: remoteId, providerProductId: "" }) : null;
+    if (mapping?.error) { setMessage(mapping.error); return; }
+    submitting.current = true;
     setSaving(true);
     setMessage("");
     try {
@@ -123,13 +139,14 @@ export function AddonForm({
         minQuantity,
         maxQuantity,
         provider,
-        providerPlanId: stringValue(form, "providerPlanId") ?? null,
+        ...(!initialAddon ? { providerPrices: mapping?.payload ? [mapping.payload] : [] } : {}),
         entitlementEffects: { numeric: {}, features: {} },
         status,
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "No se pudo guardar el add-on.");
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
   };
@@ -148,7 +165,7 @@ export function AddonForm({
             </dl>
           ) : (
             <div className="sm:col-span-2">
-              <FormSelect disabled={readOnly} id="addon-product" label="Producto" onChange={setProductId} options={productOptions} placeholder="Selecciona un producto" value={productId} />
+              <FormSelect disabled={readOnly} id="addon-product" label="Producto" onChange={(id) => { setProductId(id); setBinding({ connectionScope: "unassigned", providerConnectionId: null }); }} options={productOptions} placeholder="Selecciona un producto" value={productId} />
             </div>
           )}
           <label className="grid gap-2 text-sm font-medium">
@@ -199,12 +216,12 @@ export function AddonForm({
             <p className="mt-1 text-sm text-muted-foreground">Asocia el add-on con el proveedor de pagos y define su disponibilidad.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormSelect disabled={readOnly} id="addon-provider" label="Proveedor" onChange={(value) => setProvider(value as BillingProvider)} options={providerOptions} value={provider} />
+            <FormSelect disabled={readOnly} id="addon-provider" label="Proveedor" onChange={(value) => setProviderSelection((current) => changeAddonProvider(current, value as BillingProvider))} options={providerOptions} value={provider} />
             <FormSelect disabled={readOnly} id="addon-status" label="Estado" onChange={(value) => setStatus(value as CatalogAddon["status"])} options={statusOptions} value={status} />
-            <label className="grid gap-2 text-sm font-medium sm:col-span-2">
-              <span>ID del plan en el proveedor <span className="text-xs font-normal text-muted-foreground">(opcional)</span></span>
-              <Input defaultValue={initialAddon?.providerPlanId ?? ""} maxLength={150} name="providerPlanId" readOnly={readOnly} />
-            </label>
+            {!initialAddon ? <>
+              <div className="sm:col-span-2"><ProviderConnectionField binding={binding} disabled={readOnly || saving} id="addon-mapping-connection" onChange={setBinding} options={connectionOptions} provider={provider} /></div>
+              <label className="grid gap-2 text-sm font-medium sm:col-span-2"><span>ID del plan en el proveedor (opcional)</span><Input disabled={saving} maxLength={150} name="mappingProviderPriceId" readOnly={readOnly} /></label>
+            </> : initialAddon.providerPlanId ? <div className="sm:col-span-2 text-sm"><p className="text-muted-foreground">ID anterior (sólo lectura)</p><p className="break-all font-mono text-xs">{initialAddon.providerPlanId}</p></div> : null}
           </div>
         </section>
 

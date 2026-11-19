@@ -20,6 +20,7 @@ import {
 } from '../../modules/billing-shared/enums';
 import {
   BillingAddonEntity,
+  BillingAddonProviderPriceEntity,
   BillingFeatureDefinitionEntity,
   BillingPlanEntitlementEntity,
   BillingPlanEntity,
@@ -132,9 +133,6 @@ async function upsertPlan(
     BillingPlanVersionEntity,
   );
   const priceRepository = AppDataSource.getRepository(BillingPlanPriceEntity);
-  const providerPriceRepository = AppDataSource.getRepository(
-    BillingProviderPriceEntity,
-  );
   const entitlementRepository = AppDataSource.getRepository(
     BillingPlanEntitlementEntity,
   );
@@ -189,21 +187,7 @@ async function upsertPlan(
   price.status = PlanPriceStatus.Active;
   const savedPrice = await priceRepository.save(price);
 
-  const providerPrice =
-    (await providerPriceRepository.findOne({
-      where: { planPriceId: savedPrice.id, provider: BillingProvider.Paypal },
-    })) ??
-    providerPriceRepository.create({
-      planPriceId: savedPrice.id,
-      planPrice: savedPrice,
-      provider: BillingProvider.Paypal,
-    });
-
-  providerPrice.providerProductId = null;
-  providerPrice.providerPriceId = env(PAYPAL_PLAN_ID_ENV[input.code]);
-  providerPrice.providerMetadata = {};
-  providerPrice.status = ProviderPriceStatus.Active;
-  await providerPriceRepository.save(providerPrice);
+  await seedProviderPrice(savedPrice, input.code);
 
   const entitlements = PLAN_ENTITLEMENTS[input.code];
   if (!entitlements) throw new Error(`Missing entitlements for ${input.code}`);
@@ -234,6 +218,58 @@ async function upsertPlan(
     obsoleteEntitlements.filter(
       (entitlement) => !planFeatureCodes.has(entitlement.feature.code),
     ),
+  );
+}
+
+// Environment plan IDs do not establish which PayPal app owns them.
+export async function seedProviderPrice(
+  price: BillingPlanPriceEntity,
+  planCode: string,
+): Promise<void> {
+  const repository = AppDataSource.getRepository(BillingProviderPriceEntity);
+  if (
+    await repository.existsBy({
+      planPriceId: price.id,
+      provider: BillingProvider.Paypal,
+    })
+  )
+    return;
+  await repository.save(
+    repository.create({
+      planPriceId: price.id,
+      provider: BillingProvider.Paypal,
+      connectionScope: 'unassigned',
+      providerConnectionId: null,
+      providerProductId: null,
+      providerPriceId: env(PAYPAL_PLAN_ID_ENV[planCode]),
+      providerMetadata: {},
+      status: ProviderPriceStatus.Active,
+    }),
+  );
+}
+
+export async function seedAddonProviderPrice(
+  addon: BillingAddonEntity,
+): Promise<void> {
+  const repository = AppDataSource.getRepository(
+    BillingAddonProviderPriceEntity,
+  );
+  if (
+    !addon.providerPlanId ||
+    (await repository.existsBy({ addonId: addon.id, provider: addon.provider }))
+  )
+    return;
+  await repository.save(
+    repository.create({
+      addonId: addon.id,
+      provider: addon.provider,
+      connectionScope: 'unassigned',
+      providerConnectionId: null,
+      providerProductId: null,
+      providerPriceId: addon.providerPlanId,
+      providerMetadata: {},
+      status: ProviderPriceStatus.Active,
+    }),
   );
 }
 
@@ -321,7 +357,7 @@ async function upsertAddon(product: BillingProductEntity): Promise<void> {
   addon.minQuantity = 1;
   addon.maxQuantity = null;
   addon.provider = BillingProvider.Paypal;
-  addon.providerPlanId = env(PAYPAL_EXTRA_USER_PLAN_ID_ENV);
+  if (!existing) addon.providerPlanId = env(PAYPAL_EXTRA_USER_PLAN_ID_ENV);
   addon.entitlementEffects = {
     numeric: { max_users: 1 },
     features: {},
@@ -329,7 +365,7 @@ async function upsertAddon(product: BillingProductEntity): Promise<void> {
   addon.status = AddonStatus.Active;
   addon.metadata = {};
 
-  await repository.save(addon);
+  await seedAddonProviderPrice(await repository.save(addon));
 }
 
 async function seedBillingCatalog() {
@@ -363,7 +399,9 @@ async function seedBillingCatalog() {
   }
 }
 
-seedBillingCatalog().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  seedBillingCatalog().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

@@ -1,3 +1,4 @@
+import { legacyPaypalConnections } from '../../helpers/paypal-connections';
 import { ConfigService } from '@nestjs/config';
 import { PaypalClientService } from '../../../../apps/api/src/modules/paypal/paypal-client.service';
 describe('PayPal proration Orders HTTP requests', () => {
@@ -8,6 +9,7 @@ describe('PayPal proration Orders HTTP requests', () => {
   it('requests full representations and separates create/capture idempotency keys', async () => {
     const client = new PaypalClientService(
       new ConfigService({ paypal: { environment: 'sandbox' } }),
+      legacyPaypalConnections,
     );
     jest.spyOn(client, 'getAccessToken').mockResolvedValue('test-token');
     const fetcher = jest

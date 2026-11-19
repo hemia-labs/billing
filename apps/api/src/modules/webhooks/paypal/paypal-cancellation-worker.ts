@@ -1,3 +1,4 @@
+import { providerConnectionId } from '../../providers/provider-connection';
 import { Cron } from '@nestjs/schedule';
 import { BillingQueueWakeup } from '../billing-queue-wakeup';
 import {
@@ -17,6 +18,7 @@ type CancellationJob = {
   organization_id: string;
   provider_subscription_id: string;
   provider: BillingProvider;
+  provider_connection_id: string | null;
   target_type: 'subscription' | 'addon';
   target_subscription_id: string;
   target_addon_id: string | null;
@@ -70,20 +72,38 @@ export class PaypalCancellationWorker
       let completed = false;
       try {
         const subscription = await this.providers
-          .get(job.provider)
+          .get(
+            job.provider,
+            providerConnectionId({
+              providerConnectionId: job.provider_connection_id,
+            }),
+          )
           .getSubscription(job.provider_subscription_id);
         if (subscription.subscriptionStatus === SubscriptionStatus.Cancelled) {
           completed = true;
         } else {
           try {
-            await this.providers.get(job.provider).cancelSubscription({
-              providerSubscriptionId: job.provider_subscription_id,
-              reason: 'Subscription cancelled after a completed PayPal refund',
-            });
+            await this.providers
+              .get(
+                job.provider,
+                providerConnectionId({
+                  providerConnectionId: job.provider_connection_id,
+                }),
+              )
+              .cancelSubscription({
+                providerSubscriptionId: job.provider_subscription_id,
+                reason:
+                  'Subscription cancelled after a completed PayPal refund',
+              });
             completed = true;
           } catch {
             const current = await this.providers
-              .get(job.provider)
+              .get(
+                job.provider,
+                providerConnectionId({
+                  providerConnectionId: job.provider_connection_id,
+                }),
+              )
               .getSubscription(job.provider_subscription_id);
             completed =
               current.subscriptionStatus === SubscriptionStatus.Cancelled;
@@ -130,7 +150,10 @@ export class PaypalCancellationWorker
                    job.source_payment_refund_id,job.lease_token,job.attempts,
                    CASE WHEN job.target_type='addon' THEN
                      (SELECT provider::text FROM subscription_addons WHERE id=job.target_addon_id)
-                   ELSE (SELECT provider::text FROM subscriptions WHERE id=job.target_subscription_id) END AS provider
+                   ELSE (SELECT provider::text FROM subscriptions WHERE id=job.target_subscription_id) END AS provider,
+                   CASE WHEN job.target_type='addon' THEN
+                     (SELECT metadata->>'providerConnectionId' FROM subscription_addons WHERE id=job.target_addon_id)
+                   ELSE (SELECT metadata->>'providerConnectionId' FROM subscriptions WHERE id=job.target_subscription_id) END AS provider_connection_id
         `,
         [token],
       );

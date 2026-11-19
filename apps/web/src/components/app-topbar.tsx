@@ -49,6 +49,7 @@ export function AppTopbar() {
   const isNewIntegrationClient = pathname === "/integrations/clients/new";
   const isNewIntegration = pathname === "/integrations/new";
   const integrationType = /^\/integrations\/([^/]+)$/.exec(pathname)?.[1];
+  const isPaypalIntegration = pathname === "/integrations/payments/paypal";
   const isEditIntegrationClient = /^\/integrations\/clients\/[^/]+\/edit$/.test(pathname);
   const integrationClientSegment = /^\/integrations\/clients\/([^/]+)$/.exec(pathname)?.[1];
   const integrationClientId = integrationClientSegment && integrationClientSegment !== "new"
@@ -156,6 +157,21 @@ export function AppTopbar() {
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem><BreadcrumbPage>Nueva integración</BreadcrumbPage></BreadcrumbItem>
+            </>
+          ) : isPaypalIntegration ? (
+            <>
+              <BreadcrumbItem className="min-w-0">
+                <BreadcrumbLink className="block max-w-[24vw] truncate sm:max-w-none" render={<Link href="/integrations" />}>Integraciones</BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem className="min-w-0">
+                <BreadcrumbLink aria-label="Proveedores de pago" render={<Link href="/integrations/payments" />}>
+                  <span className="sm:hidden">Pagos</span>
+                  <span className="hidden sm:inline">Proveedores de pago</span>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem className="min-w-0"><BreadcrumbPage>PayPal</BreadcrumbPage></BreadcrumbItem>
             </>
           ) : integrationType && integrationTypeLabels[integrationType] ? (
             <>

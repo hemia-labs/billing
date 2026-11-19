@@ -89,7 +89,7 @@ export function AppSidebar() {
       <SidebarContent>
         {groups.map((group) => {
           const items = nav.filter((item) =>
-            group.routes.includes(item.href) && hasPermission(session, item.permission),
+            group.routes.includes(item.href) && (hasPermission(session, item.permission) || (item.href === "/integrations" && hasPermission(session, "billing.catalog.read"))),
           );
           if (!items.length) return null;
           return (

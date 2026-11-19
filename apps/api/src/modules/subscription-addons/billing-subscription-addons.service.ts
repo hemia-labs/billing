@@ -1,3 +1,5 @@
+import { resolveProviderPrice } from '../catalog/provider-price-scope';
+import { providerConnectionId } from '../providers/provider-connection';
 import {
   BadRequestException,
   ConflictException,
@@ -116,12 +118,25 @@ export class BillingSubscriptionAddonsService {
     entity.pricingModel = addon.pricingModel;
     entity.entitlementEffects = addon.entitlementEffects;
     entity.provider = addon.provider;
-    entity.providerReferenceId = addon.providerPlanId;
+    const connectionId = await this.providers.resolveConnection(
+      entity.provider,
+      subscription.productCode,
+    );
+    const mapping = resolveProviderPrice(
+      addon.providerPrices ?? [],
+      entity.provider,
+      connectionId,
+    );
+    if (!mapping.providerPriceId)
+      throw new BadRequestException('Addon provider plan id is required');
+    entity.providerReferenceId = mapping.providerPriceId;
     entity.pendingEffectiveAt =
       subscription.nextBillingTime ?? subscription.currentPeriodEnd;
     entity.currentPeriodEnd = subscription.currentPeriodEnd;
     entity.metadata = {
       ...(entity.metadata ?? {}),
+      providerConnectionId: connectionId,
+      providerPriceMappingId: mapping.id,
     };
 
     const saved = await this.subscriptionAddons.save(entity);
@@ -162,7 +177,7 @@ export class BillingSubscriptionAddonsService {
 
     if (entity.providerSubscriptionId) {
       const provider = await this.providers
-        .get(entity.provider)
+        .get(entity.provider, providerConnectionId(entity.metadata))
         .getSubscription(entity.providerSubscriptionId);
       return {
         addon: SubscriptionAddonMapper.toDto(entity),
@@ -183,7 +198,10 @@ export class BillingSubscriptionAddonsService {
       });
       if (!locked)
         throw new NotFoundException('Billing subscription add-on not found');
+      // The scalar lock query does not load relations; keep the audited owner.
+      const subscription = entity.subscription;
       Object.assign(entity, locked);
+      entity.subscription = subscription;
       if (entity.providerSubscriptionId) return;
       const attempted =
         typeof entity.metadata.providerAttemptStartedAt === 'string'
@@ -193,7 +211,10 @@ export class BillingSubscriptionAddonsService {
         !Number.isFinite(attempted) ||
         Date.now() + 60_000 >=
           attempted +
-            this.providers.get(entity.provider).subscriptionIdempotencyWindowMs
+            this.providers.get(
+              entity.provider,
+              providerConnectionId(entity.metadata),
+            ).subscriptionIdempotencyWindowMs
       )
         throw new ConflictException(
           'Provider add-on creation requires reconciliation',
@@ -204,7 +225,10 @@ export class BillingSubscriptionAddonsService {
       };
       await repository.save(entity);
     });
-    const adapter = this.providers.get(entity.provider);
+    const adapter = this.providers.get(
+      entity.provider,
+      providerConnectionId(entity.metadata),
+    );
     if (entity.providerSubscriptionId) {
       const provider = await adapter.getSubscription(
         entity.providerSubscriptionId,
@@ -442,17 +466,19 @@ export class BillingSubscriptionAddonsService {
       if (!addon.providerSubscriptionId)
         throw new BadRequestException('Provider subscription id is missing');
       const provider = await this.providers
-        .get(addon.provider)
+        .get(addon.provider, providerConnectionId(addon.metadata))
         .getSubscription(addon.providerSubscriptionId);
       if (
         ![SubscriptionStatus.Cancelled, SubscriptionStatus.Expired].includes(
           provider.subscriptionStatus,
         )
       ) {
-        await this.providers.get(addon.provider).cancelSubscription({
-          providerSubscriptionId: addon.providerSubscriptionId,
-          reason: 'Scheduled add-on cancellation',
-        });
+        await this.providers
+          .get(addon.provider, providerConnectionId(addon.metadata))
+          .cancelSubscription({
+            providerSubscriptionId: addon.providerSubscriptionId,
+            reason: 'Scheduled add-on cancellation',
+          });
       }
       addon.status = SubscriptionAddonStatus.Cancelled;
       await addons.save(addon);
@@ -579,6 +605,7 @@ export class BillingSubscriptionAddonsService {
         code: addonCode,
         status: AddonStatus.Active,
       },
+      relations: { providerPrices: true },
     });
 
     if (!addon) throw new NotFoundException('Billing addon not found');
