@@ -26,7 +26,9 @@ describe('role-based authorization configuration', () => {
         ...(mode ? { HEMIA_AUTHORIZATION_MODE: mode } : {}),
       });
       expect(result.error).toBeUndefined();
-      expect(result.value.HEMIA_AUTHORIZATION_MODE).toBe('roles');
+      expect(result.value).toEqual(
+        expect.objectContaining({ HEMIA_AUTHORIZATION_MODE: 'roles' }),
+      );
     }
   });
 
