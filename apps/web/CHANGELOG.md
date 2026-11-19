@@ -1,5 +1,11 @@
 # web
 
+## 1.6.1
+
+### Patch Changes
+
+- 55d5f12: Exige roles y permisos efectivos de Access para todas las funciones de Billing y rechaza el modo temporal basado sólo en iniciar sesión. Conserva los alcances por permiso y la lectura global independiente de los reintentos de webhooks.
+
 ## 1.6.0
 
 ## 1.5.0
