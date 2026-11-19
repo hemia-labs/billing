@@ -50,6 +50,7 @@ class ReleaseTest(unittest.TestCase):
                              release.DEFAULT_REGISTRY + '/billing/' + service + '@sha256:' + 'a' * 64)
         self.assertEqual(config['services']['backend']['env_file'],
                          [{'path': '${BILLING_API_ENV_FILE:?Set the server environment file}', 'format': 'raw'}])
+        self.assertEqual(config['services']['backend']['environment']['HEMIA_AUTHORIZATION_MODE'], 'roles')
         self.assertNotIn('/sensitive/', (self.output / 'compose.json').read_text())
         self.assertEqual(set(p.name for p in self.output.iterdir()),
                          {'release.json', 'compose.json', 'billing-deploy.py'})

@@ -428,161 +428,75 @@ describe('consumer registry and live authorization', () => {
   });
 });
 
-describe('authenticated-mode consumer policy isolation', () => {
-  const authorization = (): BillingAuthorization => ({
-    assignments: [],
-    expiresAt: Math.floor(Date.now() / 1000) + 300,
-    mode: 'authenticated',
-    organizationId,
-  });
-  it('lists only policies exclusively owned by the selected organization', async () => {
-    const f = fixture();
-    const { organizationIds: omitted, ...global } = f.dto;
-    void omitted;
-    f.clients.find.mockResolvedValue([
-      { id: 'own', clientId: 'own', policy: f.dto },
+describe('role-based consumer management', () => {
+  const authorization = (
+    role = 'billing.catalog_manager',
+  ): BillingAuthorization => ({
+    assignments: [
       {
-        id: 'foreign',
-        clientId: 'foreign',
-        policy: { ...f.dto, organizationIds: [otherOrganizationId] },
-      },
-      {
-        id: 'shared',
-        clientId: 'shared',
-        policy: {
-          ...f.dto,
-          organizationIds: [organizationId, otherOrganizationId],
+        assignment_id: organizationId,
+        assignment_version: 1,
+        role_code: role,
+        scope: {
+          type:
+            role === 'billing.catalog_manager'
+              ? 'catalog_global'
+              : 'all_customers',
         },
+        valid_from: 1,
+        expires_at: null,
       },
-      {
-        id: 'global',
-        clientId: 'global',
-        policy: { ...global, organizationScope: 'all_for_allowed_products' },
-      },
-      {
-        id: 'unbound',
-        clientId: 'unbound',
-        policy: { ...f.dto, organizationIds: [] },
-      },
-    ]);
-    expect(
-      (await f.service.list(authorization())).map((policy) => policy.clientId),
-    ).toEqual(['own']);
-    expect(await f.service.list()).toHaveLength(5);
-    expect(f.clients.upsert).not.toHaveBeenCalled();
+    ],
+    expiresAt: Math.floor(Date.now() / 1000) + 300,
   });
-  it.each(['global', 'foreign', 'shared', 'empty'] as const)(
-    'rejects a new %s policy before querying Identity or writing',
-    async (scope) => {
-      const f = fixture();
-      const dto: SaveServiceClientDto =
-        scope === 'global'
-          ? {
-              ...f.dto,
-              organizationScope: 'all_for_allowed_products',
-              organizationIds: undefined,
-            }
-          : {
-              ...f.dto,
-              organizationIds:
-                scope === 'empty'
-                  ? []
-                  : scope === 'shared'
-                    ? [organizationId, otherOrganizationId]
-                    : [otherOrganizationId],
-            };
-      await expect(
-        f.service.save(
-          actor.clientId,
-          dto,
-          'member',
-          undefined,
-          authorization(),
-        ),
-      ).rejects.toThrow(ForbiddenException);
-      expect(f.identity.billingScopes).not.toHaveBeenCalled();
-      expect(f.clients.upsert).not.toHaveBeenCalled();
-    },
-  );
-  it.each(['global', 'foreign', 'shared'] as const)(
-    'cannot take over an existing %s policy by rewriting its scope to the selected organization',
-    async (scope) => {
-      const f = fixture();
-      const { organizationIds: omitted, ...global } = f.dto;
-      void omitted;
-      const previous =
-        scope === 'global'
-          ? { ...global, organizationScope: 'all_for_allowed_products' }
-          : {
-              ...f.dto,
-              organizationIds:
-                scope === 'shared'
-                  ? [organizationId, otherOrganizationId]
-                  : [otherOrganizationId],
-            };
-      f.clients.findOne.mockResolvedValue({
-        id: organizationId,
-        clientId: actor.clientId,
-        policy: previous,
-      });
-      await expect(
-        f.service.save(
-          actor.clientId,
-          f.dto,
-          'member',
-          undefined,
-          authorization(),
-        ),
-      ).rejects.toThrow(ForbiddenException);
-      expect(f.manager.query).toHaveBeenCalledWith(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        ['billing-service-client:' + actor.clientId],
-      );
-      expect(f.clients.upsert).not.toHaveBeenCalled();
-      expect(f.audit.record).not.toHaveBeenCalled();
-    },
-  );
-  it('updates its own existing policy only after acquiring the per-client transaction lock', async () => {
+  it('allows a catalog manager to inspect and manage published policies', async () => {
     const f = fixture();
-    f.clients.findOne.mockResolvedValue({
-      id: organizationId,
-      clientId: actor.clientId,
-      policy: f.dto,
-    });
+    expect(await f.service.list(authorization())).toHaveLength(1);
     await expect(
       f.service.save(
         actor.clientId,
         f.dto,
-        'member',
+        'manager',
         undefined,
         authorization(),
       ),
-    ).resolves.toMatchObject({
-      organizationScope: 'organizations',
-      organizationIds: [organizationId],
-    });
-    expect(f.manager.query.mock.invocationCallOrder[0]).toBeLessThan(
-      f.clients.findOne.mock.invocationCallOrder[0],
-    );
-    expect(f.clients.upsert).toHaveBeenCalledTimes(1);
+    ).resolves.toMatchObject({ clientId: actor.clientId });
   });
-  it('refuses expired or unbound authorization before disclosing policies', async () => {
+  it.each([
+    'billing.webhook_viewer',
+    'billing.integration_operator',
+    'billing.viewer',
+  ])(
+    'does not allow %s to disclose or modify consumer policies',
+    async (role) => {
+      const f = fixture();
+      const auth = { ...authorization(role), catalogVersion: 2 as const };
+      await expect(f.service.list(auth)).rejects.toThrow(ForbiddenException);
+      await expect(
+        f.service.save(actor.clientId, f.dto, 'member', undefined, auth),
+      ).rejects.toThrow(ForbiddenException);
+      expect(f.clients.find).not.toHaveBeenCalled();
+      expect(f.identity.billingScopes).not.toHaveBeenCalled();
+      expect(f.clients.upsert).not.toHaveBeenCalled();
+    },
+  );
+  it('refuses empty and expired authorization before disclosing policies', async () => {
     const f = fixture();
-    await expect(
-      f.service.list({ ...authorization(), expiresAt: 1 }),
-    ).rejects.toThrow(ForbiddenException);
-    await expect(
-      f.service.list({ ...authorization(), organizationId: undefined }),
-    ).rejects.toThrow(ForbiddenException);
+    for (const auth of [
+      { ...authorization(), expiresAt: 1 },
+      { ...authorization(), assignments: [] },
+    ]) {
+      await expect(f.service.list(auth)).rejects.toThrow(ForbiddenException);
+    }
     expect(f.clients.find).not.toHaveBeenCalled();
   });
-  it('forwards the verified human authorization instead of only the subject', async () => {
+  it('forwards verified authorization to the service', async () => {
     const f = fixture();
     const service = { list: jest.fn(), save: jest.fn() };
     const controller = new BillingServiceClientsController(service as never);
     const auth = authorization();
     const request = {
-      principal: { sub: 'member' },
+      principal: { sub: 'manager' },
       billingAuthorization: auth,
     };
     await controller.list(request as never);
@@ -591,7 +505,7 @@ describe('authenticated-mode consumer policy isolation', () => {
     expect(service.save).toHaveBeenCalledWith(
       actor.clientId,
       f.dto,
-      'member',
+      'manager',
       undefined,
       auth,
     );

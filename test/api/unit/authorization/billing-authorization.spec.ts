@@ -144,80 +144,51 @@ describe('Billing authorization contract and scope', () => {
       ),
     ).toThrow());
 
-  it('allows catalog actions without roles while binding customer data to the signed membership organization', () => {
+  it('requires a role for every action, even when a human session exists', () => {
+    expect(() =>
+      validateBillingContext({ ...claims(), assignments: [] }, expected),
+    ).toThrow(ForbiddenException);
+    const auth = authorization([]);
+    expect(permissionsForAuthorization(auth)).toEqual([]);
+    for (const permission of catalogV2.permissions) {
+      expect(() => permissionScope(auth, permission.code)).toThrow(
+        ForbiddenException,
+      );
+    }
+  });
+
+  it('cannot re-enable login-only permissions through the removed authorization mode', () => {
+    expect(() =>
+      validateBillingContext(claims(), expected, 'authenticated' as never),
+    ).toThrow(ForbiddenException);
+  });
+
+  it('combines explicit roles while keeping each permission within its own scope', () => {
+    const assignments = [
+      grant('billing.operator', 'organizations', [uuid(6)]),
+      grant('billing.catalog_manager', 'catalog_global'),
+      grant('billing.invoice_operator', 'organizations', [uuid(6)]),
+      grant('billing.auditor', 'organizations', [uuid(6)]),
+      grant('billing.integration_operator', 'organizations', [uuid(6)]),
+      grant('billing.webhook_viewer', 'all_customers'),
+    ].map((assignment, index) => ({
+      ...assignment,
+      assignment_id: uuid(index + 1),
+    }));
     const auth = validateBillingContext(
-      { ...claims(), assignments: [] },
+      { ...claims(), catalog_version: 2, assignments },
       expected,
-      'authenticated',
     );
-    expect(auth.assignments).toEqual([]);
+    expect(permissionsForAuthorization(auth).sort()).toEqual(
+      catalogV2.permissions.map((p) => p.code).sort(),
+    );
+    expect(permissionScope(auth, 'billing.webhooks.read')).toBeNull();
+    expect(permissionScope(auth, 'billing.webhooks.retry')).toEqual([uuid(6)]);
+    expect(permissionScope(auth, 'billing.subscriptions.read')).toEqual([
+      uuid(6),
+    ]);
+    expect(permissionScope(auth, 'billing.invoices.issue')).toEqual([uuid(6)]);
     expect(permissionScope(auth, 'billing.catalog.manage')).toBeNull();
-    expect(permissionScope(auth, 'billing.invoices.issue')).toEqual([
-      expected.organizationId,
-    ]);
-    expect(permissionsForAuthorization(auth)).toEqual(
-      expect.arrayContaining([
-        'billing.catalog.manage',
-        'billing.invoices.issue',
-      ]),
-    );
-    expect(() => permissionScope(auth, 'billing.unknown.action')).toThrow();
-  });
-  it.each([
-    { sub: 'another-user' },
-    { identity_issuer: 'https://other.test' },
-    { identity_reference_id: uuid(8) },
-    { organization_id: uuid(8) },
-    { membership_id: uuid(8) },
-    { aud: 'legal-api' },
-    { exp: 1 },
-    { assignments: null },
-  ])(
-    'keeps signed context validation in authenticated mode: %j',
-    (overrides) => {
-      expect(() =>
-        validateBillingContext(
-          { ...claims(), assignments: [], ...overrides },
-          expected,
-          'authenticated',
-        ),
-      ).toThrow();
-    },
-  );
-  it('does not turn missing organizations or expired authenticated contexts into global authority', () => {
-    const auth = validateBillingContext(
-      { ...claims(), assignments: [] },
-      expected,
-      'authenticated',
-    );
-    expect(() =>
-      permissionScope(
-        { ...auth, organizationId: undefined },
-        'billing.catalog.manage',
-      ),
-    ).toThrow();
-    expect(() =>
-      permissionScope({ ...auth, expiresAt: 1 }, 'billing.invoices.issue'),
-    ).toThrow();
-  });
-  it('keeps resource ownership checks and machine policies in authenticated mode', async () => {
-    const f = guardFixture(uuid(8));
-    f.request.billingAuthorization = validateBillingContext(
-      { ...claims(), assignments: [] },
-      expected,
-      'authenticated',
-    );
-    await expect(f.guard.canActivate(f.context as never)).rejects.toThrow(
-      'Resource outside authorized scope',
-    );
-    f.database.query.mockResolvedValue([
-      { organization_id: expected.organizationId },
-    ]);
-    await expect(f.guard.canActivate(f.context as never)).resolves.toBe(true);
-    Object.assign(f.request.principal, { isMachine: true });
-    await expect(f.guard.canActivate(f.context as never)).rejects.toThrow(
-      'Missing required permission',
-    );
   });
 
   function guardFixture(owner: string | null, resource = 'invoices') {

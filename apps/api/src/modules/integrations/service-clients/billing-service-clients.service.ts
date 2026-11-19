@@ -2,11 +2,7 @@ import {
   permissionScope,
   type BillingAuthorization,
 } from '../../auth/session/billing-console-permissions';
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -34,17 +30,15 @@ export class BillingServiceClientsService {
   ) {}
 
   async list(authorization?: BillingAuthorization) {
-    const organizationId = this.authenticatedOrganization(authorization);
-    return (await this.clients.find({ order: { clientId: 'ASC' } }))
-      .map((row) => ({
+    if (authorization)
+      permissionScope(authorization, 'billing.integrations.read');
+    return (await this.clients.find({ order: { clientId: 'ASC' } })).map(
+      (row) => ({
         clientId: row.clientId,
         ...parseBillingServicePolicy(row.policy),
         source: 'database',
-      }))
-      .filter(
-        (policy) =>
-          !organizationId || this.isOrganizationPolicy(policy, organizationId),
-      );
+      }),
+    );
   }
 
   async save(
@@ -54,6 +48,8 @@ export class BillingServiceClientsService {
     actorClientId?: string,
     authorization?: BillingAuthorization,
   ) {
+    if (authorization)
+      permissionScope(authorization, 'billing.integrations.manage');
     if (
       !clientId ||
       clientId.trim() !== clientId ||
@@ -71,11 +67,6 @@ export class BillingServiceClientsService {
         'Política inválida. Revisa productos, UUID de organizaciones y orígenes HTTPS sin rutas ni comodines.',
       );
     }
-    const organizationId = this.authenticatedOrganization(authorization);
-    if (organizationId && !this.isOrganizationPolicy(policy, organizationId))
-      throw new ForbiddenException(
-        'Service client policy must remain within the selected organization',
-      );
     const grants = policy.enabled
       ? await this.identity.billingScopes(clientId)
       : [];
@@ -150,17 +141,6 @@ export class BillingServiceClientsService {
         where: { clientId },
         lock: { mode: 'pessimistic_write' },
       });
-      if (
-        organizationId &&
-        previous &&
-        !this.isOrganizationPolicy(
-          parseBillingServicePolicy(previous.policy),
-          organizationId,
-        )
-      )
-        throw new ForbiddenException(
-          'Existing service client policy is outside the selected organization',
-        );
       if (dto.allowSharedCheckouts === undefined)
         policy.allowSharedCheckouts =
           previous?.policy.allowSharedCheckouts ?? false;
@@ -186,25 +166,5 @@ export class BillingServiceClientsService {
       });
     });
     return { clientId, ...policy, source: 'database' };
-  }
-  private authenticatedOrganization(
-    authorization?: BillingAuthorization,
-  ): string | undefined {
-    if (authorization?.mode !== 'authenticated') return undefined;
-    permissionScope(authorization, 'billing.integrations.read');
-    return authorization.organizationId!;
-  }
-
-  private isOrganizationPolicy(
-    policy: BillingServiceClientPolicy,
-    organizationId: string,
-  ): boolean {
-    return (
-      policy.organizationScope === 'organizations' &&
-      policy.organizationIds.length > 0 &&
-      policy.organizationIds.every(
-        (id) => id.toLowerCase() === organizationId.toLowerCase(),
-      )
-    );
   }
 }
