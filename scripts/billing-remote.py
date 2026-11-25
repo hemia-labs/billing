@@ -1,4 +1,4 @@
-"""Transfer a verified release and invoke its controller over pinned-host SSH."""
+"""Transfer a verified release and invoke the main-branch controller over pinned-host SSH."""
 import os
 from pathlib import Path
 import re
@@ -15,7 +15,7 @@ if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]*', host) or not re.fullmatch(r'[a
     raise ValueError('Expected a hostname/IPv4 and dedicated Unix user')
 if not re.fullmatch(r'/[a-zA-Z0-9/_-]+', root) or '..' in Path(root).parts or not 1 <= port <= 65535:
     raise ValueError('Invalid deployment root/port')
-if not re.fullmatch(r'billing-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+if not re.fullmatch(r'billing-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-g[a-f0-9]{40})?', tag):
     raise ValueError('Invalid Billing release tag')
 if operation not in ['deploy', 'rollback', 'migrate']:
     raise ValueError('Invalid operation')
@@ -32,7 +32,7 @@ if not re.fullmatch(r'/tmp/billing-release\.[a-zA-Z0-9]+', remote):
 try:
     files = [str(Path(bundle) / name) for name in ['release.json', 'compose.json', 'billing-deploy.py']]
     subprocess.run(['scp', *ssh_options, '-P', str(port), *files, target + ':' + remote + '/'], check=True)
-    args = ['python3', remote + '/billing-deploy.py', operation, '--root', root, '--bundle', remote]
+    args = ['python3', '-', operation, '--root', root, '--bundle', remote]
     if os.environ.get('ACKNOWLEDGE_SCHEMA') == 'true':
         args.append('--acknowledge-schema')
     if os.environ.get('BACKUP_CONFIRMATION') == 'I_HAVE_A_BACKUP':
@@ -111,6 +111,8 @@ if new!=old:
 print('AMQP hostname configured; credentials and port preserved')
 """
         subprocess.run(ssh + [shlex.join(['python3', '-c', configure_amqp, root, amqp_host])], check=True)
-    subprocess.run(ssh + [shlex.join(args)], check=True)
+    # Use the current controller so stable rollback can read commit deployment manifests.
+    controller = Path(__file__).with_name('billing-deploy.py').read_bytes()
+    subprocess.run(ssh + [shlex.join(args)], input=controller, check=True)
 finally:
     subprocess.run(ssh + [shlex.join(['rm', '-rf', '--', remote])], check=False)
