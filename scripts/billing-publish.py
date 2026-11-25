@@ -55,22 +55,26 @@ def publish(tag, directory):
     registry = os.environ['REGISTRY_HOST']
     if not re.fullmatch(r'[a-z0-9]+(?:[.-][a-z0-9]+)*', registry):
         raise ValueError('Invalid registry hostname')
-    repository = os.environ['GITHUB_REPOSITORY']
-    path = f'repos/{repository}'
-    existing = find_release(path, tag)
-    ref = api(f'{path}/git/ref/tags/{tag}')
-    if ref and (ref['object']['type'] != 'commit' or ref['object']['sha'] != commit):
-        raise ValueError('Existing release tag points to another commit')
-    if existing and (existing['tag_name'] != tag or existing['prerelease'] or
-                     existing['name'] != f'Billing {tag.removeprefix("billing-v")}'):
-        raise ValueError('Unexpected existing release metadata')
-    if existing and existing['draft'] and existing.get('target_commitish') != commit:
-        raise ValueError('Existing draft belongs to another commit')
-    if existing and not existing['draft']:
-        if not ref or not existing.get('immutable'):
-            raise ValueError('Expected an immutable published release at this commit')
-        print(f'{tag} is already published; no changes made')
-        return
+    commit_bundle = '-g' in tag
+    if commit_bundle and tag.split('-g', 1)[1] != commit:
+        raise ValueError('Deployment tag differs from its commit')
+    if not commit_bundle:
+        repository = os.environ['GITHUB_REPOSITORY']
+        path = f'repos/{repository}'
+        existing = find_release(path, tag)
+        ref = api(f'{path}/git/ref/tags/{tag}')
+        if ref and (ref['object']['type'] != 'commit' or ref['object']['sha'] != commit):
+            raise ValueError('Existing release tag points to another commit')
+        if existing and (existing['tag_name'] != tag or existing['prerelease'] or
+                         existing['name'] != f'Billing {tag.removeprefix("billing-v")}'):
+            raise ValueError('Unexpected existing release metadata')
+        if existing and existing['draft'] and existing.get('target_commitish') != commit:
+            raise ValueError('Existing draft belongs to another commit')
+        if existing and not existing['draft']:
+            if not ref or not existing.get('immutable'):
+                raise ValueError('Expected an immutable published release at this commit')
+            print(f'{tag} is already published; no changes made')
+            return
     images = {}
     for service in ['backend', 'frontend']:
         image = f'{registry}/billing/{service}:{tag}'
@@ -110,6 +114,8 @@ def publish(tag, directory):
     manifest = release.validate(directory, tag)
     if manifest['commit'] != commit:
         raise ValueError('Release assets belong to another commit')
+    if commit_bundle:
+        return
     if existing is None:
         notes = run(['node', 'scripts/billing-version.mjs', 'notes'])
         existing = json.loads(run([

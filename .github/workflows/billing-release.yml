@@ -119,10 +119,11 @@ jobs:
 
   publish:
     needs: [classify, checks]
-    if: ${{ !cancelled() && needs.classify.result == 'success' && needs.classify.outputs.release == 'true' }}
+    if: ${{ !cancelled() && needs.classify.result == 'success' && (needs.classify.outputs.release == 'true' || (github.event_name == 'push' && needs.checks.result == 'success' && vars.ENABLE_PRODUCTION_MERGES == 'true')) }}
     environment: prod
     outputs:
-      release_tag: ${{ needs.classify.outputs.tag }}
+      release_tag: ${{ steps.bundle.outputs.tag }}
+      commit_bundle: ${{ steps.bundle.outputs.artifact }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -140,6 +141,19 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.4.4'
+      - name: Select the stable release or commit deployment bundle
+        id: bundle
+        env:
+          STABLE_RELEASE: ${{ needs.classify.outputs.release }}
+          STABLE_TAG: ${{ needs.classify.outputs.tag }}
+        run: |
+          if [[ "$STABLE_RELEASE" == true ]]; then
+            echo "tag=$STABLE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' apps/api/package.json)
+            echo "tag=billing-v$version-g$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "artifact=prod-bundle-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          fi
       - name: Test Billing and its production images
         run: bash scripts/billing-checks.sh
       - name: Join Tailscale with GitHub OIDC
@@ -151,7 +165,7 @@ jobs:
       - name: Publish images and immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.classify.outputs.tag }}
+          RELEASE_TAG: ${{ steps.bundle.outputs.tag }}
           REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
@@ -165,6 +179,15 @@ jobs:
           python3 scripts/billing-publish.py "$RELEASE_TAG" "$RUNNER_TEMP/billing-release"
           echo "Release ready: $RELEASE_TAG. The next job checks whether automatic deployment is enabled in prod." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Store commit deployment bundle
+        if: steps.bundle.outputs.artifact != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.bundle.outputs.artifact }}
+          path: ${{ runner.temp }}/billing-release
+          if-no-files-found: error
+          retention-days: 30
+
   auto-deploy:
     needs: publish
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
@@ -176,4 +199,5 @@ jobs:
       operation: deploy
       release_tag: ${{ needs.publish.outputs.release_tag }}
       automatic: true
+      commit_bundle: ${{ needs.publish.outputs.commit_bundle }}
     secrets: inherit
