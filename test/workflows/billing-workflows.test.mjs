@@ -54,7 +54,7 @@ function releaseGates(workflow) {
   assert.equal(pr.with.base, 'main');
   assert.equal(pr.with.branch, 'changeset-release/billing');
   assert.deepEqual(needs(publish), ['checks', 'classify']);
-  assert.equal(expression(publish.if), "!cancelled()&&needs.classify.result=='success'&&needs.classify.outputs.release=='true'");
+  assert.equal(expression(publish.if), "!cancelled()&&needs.classify.result=='success'&&(needs.classify.outputs.release=='true'||(github.event_name=='push'&&needs.checks.result=='success'&&vars.ENABLE_PRODUCTION_MERGES=='true'))");
   assert.equal(publish.environment, 'prod');
   assert(publish.steps.some(step => step.run?.trim() === 'bash scripts/billing-checks.sh'));
   assert.equal(deploy.uses, './.github/workflows/billing-deploy.yml');
@@ -62,6 +62,7 @@ function releaseGates(workflow) {
   assert.equal(expression(deploy.if), "!cancelled()&&needs.publish.result=='success'");
   assert.deepEqual(deploy.with, {
     operation: 'deploy', release_tag: '${{ needs.publish.outputs.release_tag }}', automatic: true,
+    commit_bundle: '${{ needs.publish.outputs.commit_bundle }}',
   });
   assert.equal(deploy.secrets, 'inherit');
 }
