@@ -1,0 +1,24 @@
+diff --git a/apps/api/src/modules/licenses/license-webhook-delivery.service.ts b/apps/api/src/modules/licenses/license-webhook-delivery.service.ts
+index d364015..f690c26 100644
+--- a/apps/api/src/modules/licenses/license-webhook-delivery.service.ts
++++ b/apps/api/src/modules/licenses/license-webhook-delivery.service.ts
+@@ -41,13 +41,17 @@ export class LicenseWebhookDeliveryService
+     );
+   }
+ 
++  private isAutomaticDeliveryEnabled() {
++    return this.config.get<string>('BILLING_LICENSE_WEBHOOK_DELIVERY_ENABLED') !== 'false';
++  }
++
+   onApplicationBootstrap() {
+-    this.wakeup.onApplicationBootstrap();
++    if (this.isAutomaticDeliveryEnabled()) this.wakeup.onApplicationBootstrap();
+   }
+ 
+   @Cron('*/5 * * * *')
+   recover(): void {
+-    this.wakeup.recover();
++    if (this.isAutomaticDeliveryEnabled()) this.wakeup.recover();
+   }
+ 
+   async onApplicationShutdown(): Promise<void> {
